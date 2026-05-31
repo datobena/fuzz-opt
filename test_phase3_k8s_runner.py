@@ -242,3 +242,44 @@ def test_run_all_trials_k8s_invokes_stages_in_order(monkeypatch, tmp_path):
 
     assert calls == ["build", "apply", "collect", "transform", "replay", "cleanup"]
     assert results == [{"trial": "t0"}]
+
+
+def test_stage_build_context_lays_out_dockerfile_dirs(tmp_path):
+    bin_dir = tmp_path / "bin"; bin_dir.mkdir()
+    (bin_dir / "fuzz_parse").write_text("ELF")
+    (bin_dir / "llvm-symbolizer").write_text("x")
+    (bin_dir / "fuzz_parse.dict").write_text("d")
+    seed = tmp_path / "merged"; seed.mkdir(); (seed / "s0").write_text("a")
+    poc = tmp_path / "poc"; poc.mkdir(); (poc / "poc_input").write_text("p")
+    dest = tmp_path / "ctx"
+    phase3_k8s.stage_build_context(
+        bin_dir=bin_dir, seed_corpus_dir=seed, poc_dir=poc,
+        fuzz_target="fuzz_parse", dest=dest,
+    )
+    assert (dest / "out" / "fuzz_parse").is_file()
+    assert (dest / "out" / "llvm-symbolizer").is_file()
+    assert (dest / "out" / "fuzz_parse.dict").is_file()
+    assert (dest / "seed-corpus" / "s0").is_file()
+    assert (dest / "poc" / "poc_input").is_file()
+    assert (dest / "entrypoint.sh").is_file()
+
+
+def test_stage_build_context_missing_target_raises(tmp_path):
+    import pytest
+    bin_dir = tmp_path / "bin"; bin_dir.mkdir()
+    with pytest.raises(FileNotFoundError):
+        phase3_k8s.stage_build_context(
+            bin_dir=bin_dir, seed_corpus_dir=tmp_path / "x", poc_dir=tmp_path / "y",
+            fuzz_target="missing", dest=tmp_path / "ctx",
+        )
+
+
+def test_apply_and_wait_raises_on_deadline(monkeypatch):
+    jobs = [{"metadata": {"name": "j1"}, "spec": {"completions": 100}}]
+    monkeypatch.setattr(phase3_k8s, "_run",
+                        lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "0/0", "stderr": ""})())
+    ticks = iter([0, 1, 10_000, 20_000])
+    import pytest
+    with pytest.raises(TimeoutError):
+        phase3_k8s.apply_and_wait(jobs, deadline_secs=100, sleep=lambda s: None,
+                                  clock=lambda: next(ticks))

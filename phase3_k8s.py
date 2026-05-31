@@ -312,31 +312,82 @@ def write_trial_dir(unpacked_dir: Path, variant_out_dir: Path, *, trial_id: int)
     return tdir
 
 
+def stage_build_context(*, bin_dir, seed_corpus_dir, poc_dir, fuzz_target, dest):
+    """Stage a Docker build context matching k8s/phase3/Dockerfile.
+
+    Lays out out/ (fuzz target + companions), seed-corpus/, poc/, and entrypoint.sh.
+    """
+    dest = Path(dest)
+    out_d, sc_d, poc_d = dest / "out", dest / "seed-corpus", dest / "poc"
+    for d in (out_d, sc_d, poc_d):
+        d.mkdir(parents=True, exist_ok=True)
+    bin_dir = Path(bin_dir)
+    target_bin = bin_dir / fuzz_target
+    if not target_bin.is_file():
+        raise FileNotFoundError(f"fuzz target missing: {target_bin}")
+    shutil.copy2(target_bin, out_d / fuzz_target)
+    for companion in ("llvm-symbolizer", f"{fuzz_target}.dict",
+                      f"{fuzz_target}_seed_corpus.zip"):
+        src = bin_dir / companion
+        if src.is_file():
+            shutil.copy2(src, out_d / companion)
+    seed_corpus_dir = Path(seed_corpus_dir)
+    if seed_corpus_dir.is_dir():
+        for p in seed_corpus_dir.iterdir():
+            if p.is_file():
+                shutil.copy2(p, sc_d / p.name)
+    poc_dir = Path(poc_dir)
+    if poc_dir.is_dir():
+        for p in poc_dir.iterdir():
+            if p.is_file():
+                shutil.copy2(p, poc_d / p.name)
+    entrypoint = Path(__file__).resolve().parent / "k8s" / "phase3" / "entrypoint.sh"
+    shutil.copy2(entrypoint, dest / "entrypoint.sh")
+    return dest
+
+
 def build_and_push_images(manifest, experiment_id):
     """Build+push a phase3 image per (project,cve,variant) from phase-2 binaries.
 
-    Returns {(project, variant): image}. Uses k8s/phase3/Dockerfile with a build
-    context = the variant bin dir. Shells out to docker; assumes docker login.
+    Returns {(project, variant): image}. Stages a context matching
+    k8s/phase3/Dockerfile (out/, seed-corpus/, poc/, entrypoint.sh). Shells out
+    to docker; assumes docker login.
     """
     built = {}
     dockerfile = Path(__file__).resolve().parent / "k8s" / "phase3" / "Dockerfile"
     for entry in manifest:
         project, cve = entry["project"], entry["cve"]
+        fuzz_target = entry.get("fuzz_target", "")
+        base = Path(config.RESULTS_DIR) / experiment_id / cve_key(project, cve)
         for variant in ("baseline", "optimized"):
-            bin_dir = Path(config.RESULTS_DIR) / experiment_id / cve_key(project, cve) / variant / "bin"
             image = image_name(project, variant, experiment_id)
-            build = ["docker", "build", "-f", str(dockerfile),
-                     "--build-arg", f"FUZZ_TARGET={entry.get('fuzz_target','')}",
-                     "-t", image, str(bin_dir)]
-            if _run(build).returncode != 0:
-                raise RuntimeError(f"docker build failed for {image}")
+            with tempfile.TemporaryDirectory(prefix="phase3-ctx-") as ctx:
+                stage_build_context(
+                    bin_dir=base / variant / "bin",
+                    seed_corpus_dir=base / "seed_corpus" / "merged",
+                    poc_dir=base / "poc",
+                    fuzz_target=fuzz_target,
+                    dest=ctx,
+                )
+                build = [
+                    "docker", "build", "-f", str(dockerfile),
+                    "--build-arg", f"PROJECT={project}",
+                    "--build-arg", f"CVE={cve}",
+                    "--build-arg", f"VARIANT={variant}",
+                    "--build-arg", f"EXPERIMENT_ID={experiment_id}",
+                    "--build-arg", f"FUZZ_TARGET={fuzz_target}",
+                    "-t", image, ctx,
+                ]
+                if _run(build).returncode != 0:
+                    raise RuntimeError(f"docker build failed for {image}")
             if _run(["docker", "push", image]).returncode != 0:
                 raise RuntimeError(f"docker push failed for {image}")
             built[(project, variant)] = image
     return built
 
 
-def apply_and_wait(jobs, *, namespace="", poll_secs=30, sleep=time.sleep):
+def apply_and_wait(jobs, *, namespace="", poll_secs=30, deadline_secs=None,
+                   sleep=time.sleep, clock=time.monotonic):
     ns = namespace or config.PHASE3_K8S_NAMESPACE
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
         yaml.safe_dump_all(jobs, f)
@@ -344,15 +395,24 @@ def apply_and_wait(jobs, *, namespace="", poll_secs=30, sleep=time.sleep):
     if _run(kubectl_apply_cmd(path, ns)).returncode != 0:
         raise RuntimeError("kubectl apply failed")
     pending = {j["metadata"]["name"]: j["spec"]["completions"] for j in jobs}
+    start = clock()
     while pending:
         for name, completions in list(pending.items()):
-            out = _run(kubectl_job_status_cmd(name, ns)).stdout.strip()
+            res = _run(kubectl_job_status_cmd(name, ns))
+            if res.returncode != 0:
+                logger.warning("status poll failed for %s: %s",
+                               name, (res.stderr or "")[-200:])
+                continue
+            out = res.stdout.strip()
             succeeded, _, failed = out.partition("/")
             s, fl = int(succeeded or 0), int(failed or 0)
             if job_is_terminal(succeeded=s, failed=fl, completions=completions):
                 logger.info("job %s terminal: %d ok / %d failed", name, s, fl)
                 del pending[name]
         if pending:
+            if deadline_secs is not None and (clock() - start) > deadline_secs:
+                raise TimeoutError(
+                    f"phase3 jobs not terminal after {deadline_secs}s: {sorted(pending)}")
             sleep(poll_secs)
 
 
@@ -378,8 +438,12 @@ def collect_artifacts(manifest, experiment_id, *, namespace=""):
     tar_cmd = collector_tar_cmd(pod=pod_name, namespace=ns, tar_dir=exp_dir,
                                 excludes=["*/corpora", "*/corpora/*"])
     proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE)
-    subprocess.run(["tar", "x", "-C", str(dest)], stdin=proc.stdout, check=True)
-    proc.wait()
+    extract = subprocess.run(["tar", "x", "-C", str(dest)], stdin=proc.stdout)
+    proc.stdout.close()
+    rc = proc.wait()
+    if rc != 0 or extract.returncode != 0:
+        raise RuntimeError(
+            f"collector tar stream failed (exec rc={rc}, extract rc={extract.returncode})")
     return {"dir": dest, "pod": pod_name, "namespace": ns, "exp_dir": exp_dir}
 
 
@@ -465,7 +529,9 @@ def run_all_trials_k8s(manifest, experiment_id, duration=None, **_kwargs):
     images = build_and_push_images(manifest, experiment_id)
     jobs = generate_jobs(manifest, experiment_id, duration,
                          image_for=lambda p, v: images.get((p, v)))
-    apply_and_wait(jobs)
+    import math
+    waves = max(1, math.ceil(config.PHASE3_K8S_TRIALS / max(1, config.PHASE3_K8S_PARALLELISM)))
+    apply_and_wait(jobs, deadline_secs=waves * duration * 2 + 3600)
     collected = collect_artifacts(manifest, experiment_id)
     try:
         results = transform_all(collected, manifest, experiment_id)
