@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import config
+import phase3_runner
 
 logger = logging.getLogger(__name__)
 
@@ -115,3 +116,44 @@ def generate_jobs(manifest, experiment_id, duration, image_for=None, *,
                 trials=trials, parallelism=parallelism, duration=duration,
             ))
     return jobs
+
+
+def parse_metadata_env(text: str) -> dict:
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def metadata_env_to_json(env_text: str, log_text: str, num_crashes: int) -> dict:
+    env = parse_metadata_env(env_text)
+    final_stats = phase3_runner.parse_fuzzer_stats(log_text)
+
+    def _int(key, default=0):
+        try:
+            return int(env.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "trial_name": (
+            f"{env.get('project','')}-{env.get('variant','')}-"
+            f"trial_{_int('trial_id'):02d}"
+        ),
+        "variant": env.get("variant", ""),
+        "trial_id": _int("trial_id"),
+        "seed": _int("seed"),
+        "duration_s": float(_int("elapsed_seconds")),
+        "duration_seconds": _int("duration_seconds", config.TRIAL_DURATION_SECS),
+        "num_crashes": num_crashes,
+        "final_stats": final_stats,
+        "outcome": env.get("outcome", ""),
+        "fuzzer_exit_code": _int("fuzzer_exit_code"),
+        "pod_exit_code": _int("pod_exit_code"),
+        "corpus_file_count": _int("corpus_file_count"),
+        "corpus_du_bytes": _int("corpus_du_bytes"),
+    }

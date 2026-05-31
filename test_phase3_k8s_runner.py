@@ -88,3 +88,28 @@ def test_generate_jobs_emits_two_jobs_per_cve():
     assert {j["spec"]["template"]["metadata"]["labels"]["phase3-variant"] for j in jobs} == {
         "baseline", "optimized",
     }
+
+
+def test_metadata_env_to_json_maps_fields_and_parses_stats(tmp_path):
+    env_text = (
+        "project=gpac\nvariant=baseline\ntrial_id=7\nseed=8337\n"
+        "elapsed_seconds=120\nduration_seconds=21600\n"
+        "fuzzer_exit_code=1\npod_exit_code=0\noutcome=finding\n"
+        "corpus_file_count=4212\ncorpus_du_bytes=99999\n"
+    )
+    log_text = (
+        "#1000 NEW exec/s: 500\n"
+        "stat::number_of_executed_units: 60000\n"
+        "stat::average_exec_per_sec:     500\n"
+        "stat::peak_rss_mb:              321\n"
+    )
+    meta = phase3_k8s.metadata_env_to_json(env_text, log_text, num_crashes=1)
+    assert meta["variant"] == "baseline"
+    assert meta["trial_id"] == 7
+    assert meta["seed"] == 8337
+    assert meta["duration_s"] == 120.0
+    assert meta["duration_seconds"] == 21600
+    assert meta["num_crashes"] == 1
+    assert meta["final_stats"]["total_execs"] == 60000
+    assert meta["final_stats"]["final_exec_s"] == 500
+    assert meta["corpus_file_count"] == 4212
