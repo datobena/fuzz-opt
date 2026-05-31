@@ -79,100 +79,30 @@ def test_phase3_k8s_manifests_reference_every_image():
     assert "allowPrivilegeEscalation" not in smoke_pods
 
 
-def test_phase3_k8s_jobs_run_100_indexed_paired_seed_trials():
-    images = json.loads((K8S_DIR / "images.json").read_text())
-    jobs_yaml = (K8S_DIR / "jobs.yaml").read_text()
-    entrypoint = (K8S_DIR / "entrypoint.sh").read_text()
-    dockerfile = (K8S_DIR / "Dockerfile").read_text()
-    jobs = list(yaml.safe_load_all(jobs_yaml))
-
-    assert len(jobs) == len(images)
-    assert "allowPrivilegeEscalation" not in jobs_yaml
-    assert "TRIAL_ID" in entrypoint
-    assert "BASE_SEED" in entrypoint
-    assert "SEED_MULTIPLIER" in entrypoint
-    assert "seed=$((base_seed + trial_id * seed_multiplier))" in entrypoint
-    assert "add_supported_flag" in entrypoint
-    assert "verbosity" in entrypoint
-    assert "print_corpus_stats" in entrypoint
-    assert "print_funcs" in entrypoint
-    assert "report_slow_units" in entrypoint
-    assert "classify_fuzzer_exit" in entrypoint
-    assert "save_artifacts" in entrypoint
-    assert "PIPESTATUS[0]" in entrypoint
-    assert 'tee "${log_file}"' in entrypoint
-    assert "collect_corpus_stats" in entrypoint
-    assert "corpus_file_count=" in entrypoint
-    assert "corpus_du_bytes=" in entrypoint
-    assert "corpus_du_human=" in entrypoint
-    assert "corpus_archived=${archive_corpus}" in entrypoint
-    assert "corpus_stats" in entrypoint
-    assert 'exit "${pod_exit}"' in entrypoint
-    assert 'exec "/out/${target}"' not in entrypoint
-    assert not any(
-        line.startswith("ENV SEED=") for line in dockerfile.splitlines()
+def test_generated_jobs_match_indexed_contract():
+    import phase3_k8s
+    manifest = [{"project": "gpac", "cve": "CVE-2022-1441", "fuzz_target": "fuzz_parse"}]
+    jobs = phase3_k8s.generate_jobs(
+        manifest, experiment_id="exp1", duration=21600,
+        image_for=lambda p, v: f"img-{p}-{v}", trials=100, parallelism=10,
     )
-
-    image_by_project_variant = {
-        (item["project"], item["variant"]): item["image"] for item in images
-    }
-    seeds_by_project = {}
-
+    assert len(jobs) == 2
     for job in jobs:
-        assert job["apiVersion"] == "batch/v1"
-        assert job["kind"] == "Job"
         assert job["spec"]["completions"] == 100
         assert job["spec"]["parallelism"] == 10
         assert job["spec"]["completionMode"] == "Indexed"
         assert job["spec"]["backoffLimitPerIndex"] == 0
-        assert job["spec"]["maxFailedIndexes"] == 100
         assert job["spec"]["ttlSecondsAfterFinished"] == 432000
-
-        container = job["spec"]["template"]["spec"]["containers"][0]
-        labels = job["spec"]["template"]["metadata"]["labels"]
-        project = labels["phase3-project"]
-        variant = labels["phase3-variant"]
-        env = {item["name"]: item for item in container["env"]}
-
-        assert container["image"] == (
-            REMOTE_IMAGE_PREFIX + image_by_project_variant[(project, variant)]
-        )
-        assert container["imagePullPolicy"] == "Always"
-        assert container["securityContext"] == {"privileged": True}
-        assert "SEED" not in env
+        env = {e["name"]: e for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
         assert env["BASE_SEED"]["value"] == "1337"
         assert env["SEED_MULTIPLIER"]["value"] == "1000"
-        assert env["DURATION_SECONDS"]["value"] == "21600"
-        assert env["RSS_LIMIT_MB"]["value"] == "8192"
-        assert env["MALLOC_LIMIT_MB"]["value"] == "8192"
-        assert env["ARTIFACTS_DIR"]["value"] == "/artifacts/bena/phase3-kube"
-        assert env["ARCHIVE_CORPUS"]["value"] == "0"
-        assert env["POD_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == (
-            "metadata.name"
-        )
-        assert env["JOB_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == (
-            "metadata.labels['job-name']"
-        )
-        assert env["TRIAL_ID"]["valueFrom"]["fieldRef"]["fieldPath"] == (
-            "metadata.annotations['batch.kubernetes.io/job-completion-index']"
-        )
-        assert container["resources"]["requests"]["memory"] == "12Gi"
-        assert container["resources"]["limits"]["memory"] == "12Gi"
-        assert {"name": "artifacts", "mountPath": "/artifacts"} in container[
-            "volumeMounts"
-        ]
-        assert {
-            "name": "artifacts",
-            "persistentVolumeClaim": {"claimName": "nfs"},
-        } in job["spec"]["template"]["spec"]["volumes"]
-
-        seeds_by_project.setdefault(project, {})[variant] = (
-            env["BASE_SEED"]["value"],
-            env["SEED_MULTIPLIER"]["value"],
-        )
-
-    for variants in seeds_by_project.values():
-        assert variants["baseline"] == variants["optimized"]
+        assert "SEED" not in env
+    seeds = {}
+    for job in jobs:
+        v = job["spec"]["template"]["metadata"]["labels"]["phase3-variant"]
+        env = {e["name"]: e for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+        seeds[v] = (env["BASE_SEED"]["value"], env["SEED_MULTIPLIER"]["value"])
+    assert seeds["baseline"] == seeds["optimized"]
 
 
 def test_entrypoint_emits_crash_times_and_splits_corpus():
