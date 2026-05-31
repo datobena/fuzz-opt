@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 from subprocess import TimeoutExpired
@@ -132,6 +133,39 @@ def test_run_replay_speedup_freezes_snapshot_and_compares(monkeypatch, tmp_path)
     assert sorted(p.name for p in snapshot.iterdir()) == [
         "unit_00000000", "unit_00000001",
     ]
+
+
+def test_download_seed_corpus_falls_back_to_local_cache(monkeypatch, tmp_path):
+    # No GCS (403), no build corpus, no local_id -> the local corpus cache
+    # should be merged in as the seed source.
+    monkeypatch.setattr(phase2_setup.config, "LOCAL_CORPUS_CACHE_DIR",
+                        str(tmp_path / "cache"))
+    cache = tmp_path / "cache" / "demo" / "tgt"
+    cache.mkdir(parents=True)
+    (cache / "seed1").write_bytes(b"abc")
+
+    monkeypatch.setattr(phase2_setup.corpus_util, "download_corpus",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(phase2_setup.corpus_util, "collect_build_corpus",
+                        lambda *a, **k: 0)
+    monkeypatch.setattr(phase2_setup.corpus_util, "ensure_fallback_seed",
+                        lambda d: None)
+
+    captured = {}
+
+    def fake_merge(srcs, dst):
+        captured["srcs"] = list(srcs)
+        os.makedirs(dst, exist_ok=True)
+        return len(srcs)
+
+    monkeypatch.setattr(phase2_setup.corpus_util, "merge_corpus_dirs", fake_merge)
+
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    # no local_id -> ARVO branch skipped
+    phase2_setup.download_seed_corpus({"project": "demo", "fuzz_target": "tgt"}, str(exp))
+
+    assert any(str(cache) == s for s in captured.get("srcs", []))
 
 
 def test_run_replay_speedup_returns_none_without_corpus(tmp_path):

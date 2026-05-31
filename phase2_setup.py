@@ -1703,6 +1703,17 @@ def download_seed_corpus(entry: dict, experiment_dir: str) -> bool:
     if build_count > 0 and os.path.isdir(build_dir):
         source_dirs.append(build_dir)
 
+    # Local corpus-cache fallback: used when the public GCS corpus is
+    # unavailable (e.g. HTTP 403) and the build ships no seed corpus.
+    # Layout: <LOCAL_CORPUS_CACHE_DIR>/<project>/<fuzz_target>/<seed files>
+    cache_root = getattr(config, "LOCAL_CORPUS_CACHE_DIR", "")
+    cache_dir = os.path.join(cache_root, project, fuzz_target) if cache_root else ""
+    if cache_dir and os.path.isdir(cache_dir) and any(
+        os.path.isfile(os.path.join(cache_dir, f)) for f in os.listdir(cache_dir)
+    ):
+        source_dirs.append(cache_dir)
+        logger.info("Including local corpus cache: %s", cache_dir)
+
     merged_dir = os.path.join(corpus_dir, "merged")
     if source_dirs:
         total = corpus_util.merge_corpus_dirs(source_dirs, merged_dir)

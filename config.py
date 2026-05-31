@@ -114,6 +114,13 @@ CORPUS_URL_TEMPLATE = (
     "corpus/libFuzzer/{fuzz_target}/public.zip"
 )
 
+# Local seed-corpus cache, used as a fallback when the public GCS corpus is
+# unavailable (e.g. HTTP 403) and the build ships no seed corpus. Layout:
+#   <LOCAL_CORPUS_CACHE_DIR>/<project>/<fuzz_target>/<seed files>
+LOCAL_CORPUS_CACHE_DIR = os.environ.get(
+    "LOCAL_CORPUS_CACHE_DIR", os.path.join(BENCHMARK_DIR, "corpus_cache")
+)
+
 # Target number of CVEs to select
 TARGET_CVE_COUNT = 10
 MIN_CVE_COUNT = 3
