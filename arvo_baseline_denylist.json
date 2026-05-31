@@ -1,0 +1,74 @@
+[
+  {
+    "project": "libavif",
+    "cve": "CVE-2020-36407",
+    "local_id": 42486439,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2020-36407",
+    "timestamp": "2026-04-11T05:22:25.587086"
+  },
+  {
+    "project": "harfbuzz",
+    "cve": "CVE-2021-45931",
+    "local_id": 42500374,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2021-45931",
+    "timestamp": "2026-04-11T06:02:28.460202"
+  },
+  {
+    "project": "uwebsockets",
+    "cve": "CVE-2020-36406",
+    "local_id": 42487066,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2020-36406",
+    "timestamp": "2026-04-11T07:33:00.339596"
+  },
+  {
+    "project": "wolfmqtt",
+    "cve": "CVE-2021-45939",
+    "local_id": 42500940,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2021-45939",
+    "timestamp": "2026-04-13T19:16:43.799790"
+  },
+  {
+    "project": "ffmpeg",
+    "cve": "CVE-2017-9996",
+    "local_id": 42474183,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2017-9996",
+    "timestamp": "2026-04-13T19:28:20.506620"
+  },
+  {
+    "project": "htslib",
+    "cve": "CVE-2020-36403",
+    "local_id": 42485645,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2020-36403",
+    "timestamp": "2026-04-14T05:15:34.008297"
+  },
+  {
+    "project": "opensc",
+    "cve": "CVE-2019-19479",
+    "local_id": 42479504,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2019-19479",
+    "timestamp": "2026-04-14T05:15:34.013684"
+  },
+  {
+    "project": "openvswitch",
+    "cve": "CVE-2021-36980",
+    "local_id": 42489816,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2021-36980",
+    "timestamp": "2026-04-14T05:15:34.015128"
+  },
+  {
+    "project": "ffmpeg",
+    "cve": "CVE-2019-11338",
+    "local_id": 42474256,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2019-11338",
+    "timestamp": "2026-04-14T08:41:56.748394"
+  }
+]

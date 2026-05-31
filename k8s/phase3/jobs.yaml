@@ -1,0 +1,679 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-selinux-baseline-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: selinux
+    phase3-variant: baseline
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: selinux
+        phase3-variant: baseline
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-selinux-baseline:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-selinux-optimized-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: selinux
+    phase3-variant: optimized
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: selinux
+        phase3-variant: optimized
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-selinux-optimized:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-gpac-baseline-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: gpac
+    phase3-variant: baseline
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: gpac
+        phase3-variant: baseline
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-gpac-baseline:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-gpac-optimized-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: gpac
+    phase3-variant: optimized
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: gpac
+        phase3-variant: optimized
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-gpac-optimized:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-librawspeed-baseline-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: librawspeed
+    phase3-variant: baseline
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: librawspeed
+        phase3-variant: baseline
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-librawspeed-baseline:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-librawspeed-optimized-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: librawspeed
+    phase3-variant: optimized
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: librawspeed
+        phase3-variant: optimized
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-librawspeed-optimized:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-unrar-baseline-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: unrar
+    phase3-variant: baseline
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: unrar
+        phase3-variant: baseline
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-unrar-baseline:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase3-unrar-optimized-1
+  labels:
+    app: phase3-fuzzer-job
+    phase3-project: unrar
+    phase3-variant: optimized
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  backoffLimitPerIndex: 0
+  maxFailedIndexes: 1
+  ttlSecondsAfterFinished: 432000
+  template:
+    metadata:
+      labels:
+        app: phase3-fuzzer-job
+        phase3-project: unrar
+        phase3-variant: optimized
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fuzzer
+          image: dbenashv/benchmarkphase3-unrar-optimized:codex-4
+          imagePullPolicy: Always
+          env:
+            - name: TRIAL_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+            - name: BASE_SEED
+              value: "1337"
+            - name: SEED_MULTIPLIER
+              value: "1000"
+            - name: DURATION_SECONDS
+              value: "21600"
+            - name: RSS_LIMIT_MB
+              value: "8192"
+            - name: MALLOC_LIMIT_MB
+              value: "8192"
+            - name: ARTIFACTS_DIR
+              value: "/artifacts/bena/phase3-kube"
+            - name: ARCHIVE_CORPUS
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['job-name']"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 12Gi
+            limits:
+              cpu: "1"
+              memory: 12Gi
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: crashes
+              mountPath: /crashes
+            - name: artifacts
+              mountPath: /artifacts
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: corpus
+          emptyDir: {}
+        - name: crashes
+          emptyDir: {}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: nfs
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi

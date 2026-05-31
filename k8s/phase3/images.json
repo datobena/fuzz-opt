@@ -1,0 +1,90 @@
+[
+  {
+    "project": "selinux",
+    "cve": "CVE-2021-36084",
+    "variant": "baseline",
+    "experiment_id": "codex-4",
+    "fuzz_target": "secilc-fuzzer",
+    "artifact_dir": "results/codex-4/selinux-CVE-2021-36084/baseline/bin",
+    "seed_corpus_dir": "results/codex-4/selinux-CVE-2021-36084/seed_corpus/merged",
+    "poc_dir": "results/codex-4/selinux-CVE-2021-36084/poc",
+    "image": "phase3-selinux-baseline:codex-4"
+  },
+  {
+    "project": "selinux",
+    "cve": "CVE-2021-36084",
+    "variant": "optimized",
+    "experiment_id": "codex-4",
+    "fuzz_target": "secilc-fuzzer",
+    "artifact_dir": "results/codex-4/selinux-CVE-2021-36084/optimized/bin",
+    "seed_corpus_dir": "results/codex-4/selinux-CVE-2021-36084/seed_corpus/merged",
+    "poc_dir": "results/codex-4/selinux-CVE-2021-36084/poc",
+    "image": "phase3-selinux-optimized:codex-4"
+  },
+  {
+    "project": "gpac",
+    "cve": "CVE-2022-1441",
+    "variant": "baseline",
+    "experiment_id": "codex-4",
+    "fuzz_target": "fuzz_parse",
+    "artifact_dir": "results/codex-4/gpac-CVE-2022-1441/baseline/bin",
+    "seed_corpus_dir": "results/codex-4/gpac-CVE-2022-1441/seed_corpus/merged",
+    "poc_dir": "results/codex-4/gpac-CVE-2022-1441/poc",
+    "image": "phase3-gpac-baseline:codex-4"
+  },
+  {
+    "project": "gpac",
+    "cve": "CVE-2022-1441",
+    "variant": "optimized",
+    "experiment_id": "codex-4",
+    "fuzz_target": "fuzz_parse",
+    "artifact_dir": "results/codex-4/gpac-CVE-2022-1441/optimized/bin",
+    "seed_corpus_dir": "results/codex-4/gpac-CVE-2022-1441/seed_corpus/merged",
+    "poc_dir": "results/codex-4/gpac-CVE-2022-1441/poc",
+    "image": "phase3-gpac-optimized:codex-4"
+  },
+  {
+    "project": "librawspeed",
+    "cve": "CVE-2018-25017",
+    "variant": "baseline",
+    "experiment_id": "codex-4",
+    "fuzz_target": "RawParserFuzzer-GetDecoder-Decode",
+    "artifact_dir": "results/codex-4/librawspeed-CVE-2018-25017/baseline/bin",
+    "seed_corpus_dir": "results/codex-4/librawspeed-CVE-2018-25017/seed_corpus/merged",
+    "poc_dir": "results/codex-4/librawspeed-CVE-2018-25017/poc",
+    "image": "phase3-librawspeed-baseline:codex-4"
+  },
+  {
+    "project": "librawspeed",
+    "cve": "CVE-2018-25017",
+    "variant": "optimized",
+    "experiment_id": "codex-4",
+    "fuzz_target": "RawParserFuzzer-GetDecoder-Decode",
+    "artifact_dir": "results/codex-4/librawspeed-CVE-2018-25017/optimized/bin",
+    "seed_corpus_dir": "results/codex-4/librawspeed-CVE-2018-25017/seed_corpus/merged",
+    "poc_dir": "results/codex-4/librawspeed-CVE-2018-25017/poc",
+    "image": "phase3-librawspeed-optimized:codex-4"
+  },
+  {
+    "project": "unrar",
+    "cve": "CVE-2017-20006",
+    "variant": "baseline",
+    "experiment_id": "codex-4",
+    "fuzz_target": "unrar_fuzzer",
+    "artifact_dir": "results/codex-4/unrar-CVE-2017-20006/baseline/bin",
+    "seed_corpus_dir": "results/codex-4/unrar-CVE-2017-20006/seed_corpus/merged",
+    "poc_dir": "results/codex-4/unrar-CVE-2017-20006/poc",
+    "image": "phase3-unrar-baseline:codex-4"
+  },
+  {
+    "project": "unrar",
+    "cve": "CVE-2017-20006",
+    "variant": "optimized",
+    "experiment_id": "codex-4",
+    "fuzz_target": "unrar_fuzzer",
+    "artifact_dir": "results/codex-4/unrar-CVE-2017-20006/optimized/bin",
+    "seed_corpus_dir": "results/codex-4/unrar-CVE-2017-20006/seed_corpus/merged",
+    "poc_dir": "results/codex-4/unrar-CVE-2017-20006/poc",
+    "image": "phase3-unrar-optimized:codex-4"
+  }
+]

@@ -1,0 +1,72 @@
+[
+  {
+    "project": "unrar",
+    "cve": "CVE-2017-20006",
+    "local_id": 42506721,
+    "fuzz_target": "unrar_fuzzer",
+    "crash_type": "Use-of-uninitialized-value"
+  },
+  {
+    "project": "librawspeed",
+    "cve": "CVE-2018-25017",
+    "local_id": 42517260,
+    "fuzz_target": "RawParserFuzzer-GetDecoder-Decode",
+    "crash_type": "Heap-buffer-overflow WRITE 2"
+  },
+  {
+    "project": "libvips",
+    "cve": "CVE-2019-17534",
+    "local_id": 42477534,
+    "fuzz_target": "jpegsave_file_fuzzer",
+    "crash_type": "Heap-use-after-free READ 4"
+  },
+  {
+    "project": "imagemagick",
+    "cve": "CVE-2019-17547",
+    "local_id": 42477247,
+    "fuzz_target": "encoder_mvg_fuzzer",
+    "crash_type": "Heap-use-after-free READ 8"
+  },
+  {
+    "project": "file",
+    "cve": "CVE-2019-18218",
+    "local_id": 42477517,
+    "fuzz_target": "magic_fuzzer",
+    "crash_type": "Heap-buffer-overflow WRITE 4"
+  },
+  {
+    "project": "libidn2",
+    "cve": "CVE-2019-18224",
+    "local_id": 42472677,
+    "fuzz_target": "libidn2_to_ascii_8z_fuzzer",
+    "crash_type": "Heap-buffer-overflow WRITE {*}"
+  },
+  {
+    "project": "selinux",
+    "cve": "CVE-2021-36084",
+    "local_id": 42493388,
+    "fuzz_target": "secilc-fuzzer",
+    "crash_type": "Heap-use-after-free READ 8"
+  },
+  {
+    "project": "qt",
+    "cve": "CVE-2021-38593",
+    "local_id": 42498774,
+    "fuzz_target": "qtsvg_svg_qsvgrenderer_render",
+    "crash_type": "UNKNOWN WRITE"
+  },
+  {
+    "project": "gpac",
+    "cve": "CVE-2022-1441",
+    "local_id": 42507999,
+    "fuzz_target": "fuzz_parse",
+    "crash_type": "Stack-buffer-overflow WRITE 1"
+  },
+  {
+    "project": "jq",
+    "cve": "CVE-2023-50246",
+    "local_id": 42530604,
+    "fuzz_target": "jq_fuzz_parse_extended",
+    "crash_type": "Heap-buffer-overflow WRITE 1"
+  }
+]

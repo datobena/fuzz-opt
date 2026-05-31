@@ -1,0 +1,391 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-selinux-baseline
+  labels:
+    app: phase3-fuzzer
+    phase3-project: selinux
+    phase3-variant: baseline
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-selinux-baseline:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1337"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-selinux-optimized
+  labels:
+    app: phase3-fuzzer
+    phase3-project: selinux
+    phase3-variant: optimized
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-selinux-optimized:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1837"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-gpac-baseline
+  labels:
+    app: phase3-fuzzer
+    phase3-project: gpac
+    phase3-variant: baseline
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-gpac-baseline:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1337"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-gpac-optimized
+  labels:
+    app: phase3-fuzzer
+    phase3-project: gpac
+    phase3-variant: optimized
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-gpac-optimized:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1837"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-librawspeed-baseline
+  labels:
+    app: phase3-fuzzer
+    phase3-project: librawspeed
+    phase3-variant: baseline
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-librawspeed-baseline:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1337"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-librawspeed-optimized
+  labels:
+    app: phase3-fuzzer
+    phase3-project: librawspeed
+    phase3-variant: optimized
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-librawspeed-optimized:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1837"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-unrar-baseline
+  labels:
+    app: phase3-fuzzer
+    phase3-project: unrar
+    phase3-variant: baseline
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-unrar-baseline:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1337"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase3-unrar-optimized
+  labels:
+    app: phase3-fuzzer
+    phase3-project: unrar
+    phase3-variant: optimized
+spec:
+  restartPolicy: Never
+  containers:
+    - name: fuzzer
+      image: phase3-unrar-optimized:codex-4
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DURATION_SECONDS
+          value: "21600"
+        - name: RSS_LIMIT_MB
+          value: "8192"
+        - name: MALLOC_LIMIT_MB
+          value: "8192"
+        - name: SEED
+          value: "1837"
+      securityContext:
+        privileged: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+      volumeMounts:
+        - name: corpus
+          mountPath: /corpus
+        - name: crashes
+          mountPath: /crashes
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: corpus
+      emptyDir: {}
+    - name: crashes
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi

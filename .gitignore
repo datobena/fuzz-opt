@@ -1,0 +1,14 @@
+# Experiment outputs (545 GB of corpora, binaries, logs) — never commit
+results/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated report artifacts
+report_kube_figures/
+report_kube_records.json.gz
+
+# Stray local tooling marker
+.codex
