@@ -103,6 +103,28 @@ collect_corpus_stats() {
   corpus_du_human="${corpus_du_human:-0}"
 }
 
+collect_crash_times() {
+  local out_json="$1"
+  python3 - "$crashes_dir" "$start_epoch" "$out_json" <<'PY'
+import json, os, sys
+crashes_dir, start_epoch, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+events = []
+if os.path.isdir(crashes_dir):
+    for name in sorted(os.listdir(crashes_dir)):
+        p = os.path.join(crashes_dir, name)
+        if not os.path.isfile(p):
+            continue
+        ctype = ("oom" if name.startswith("oom-")
+                 else "timeout" if name.startswith("timeout-")
+                 else "crash" if name.startswith("crash-")
+                 else "unknown")
+        ts = max(0.0, round(os.path.getmtime(p) - start_epoch, 2))
+        events.append({"timestamp_s": ts, "artifact": name, "crash_type": ctype})
+with open(out, "w") as f:
+    json.dump(events, f)
+PY
+}
+
 write_metadata() {
   local outcome="$1"
   local fuzzer_exit="$2"
@@ -141,37 +163,38 @@ EOF
 
 save_artifacts() {
   local archive_path="$1"
-
   if [ -z "${artifacts_dir}" ]; then
     echo "ARTIFACTS_DIR is unset; skipping persistent artifact archive" >&2
     return 0
   fi
-
-  local archive_dir
+  local archive_dir staging_dir archive_tmp
   archive_dir="$(dirname "${archive_path}")"
-  local archive_tmp="${archive_path}.tmp"
-  local staging_dir="${work_dir}/artifact-staging"
-
+  archive_tmp="${archive_path}.tmp"
+  staging_dir="${work_dir}/artifact-staging"
   rm -rf "${staging_dir}"
   mkdir -p "${archive_dir}" "${staging_dir}/crashes"
-
   cp "${log_file}" "${staging_dir}/libfuzzer.log" 2>/dev/null || true
   cp "${metadata_file}" "${staging_dir}/metadata.env"
   cp -a "${crashes_dir}/." "${staging_dir}/crashes/" 2>/dev/null || true
-
-  if [ "${archive_corpus}" = "1" ]; then
-    mkdir -p "${staging_dir}/corpus"
-    cp -a "${corpus_dir}/." "${staging_dir}/corpus/" 2>/dev/null || true
-  fi
-
+  collect_crash_times "${staging_dir}/crash_times.json"
   rm -f "${archive_tmp}"
-  (
-    cd "${staging_dir}"
-    zip -qry "${archive_tmp}" .
-  )
+  ( cd "${staging_dir}" && zip -qry "${archive_tmp}" . )
   mv "${archive_tmp}" "${archive_path}"
   sha256sum "${archive_path}" >"${archive_path}.sha256"
-  echo "Saved phase3 artifact archive: ${archive_path}"
+  echo "Saved phase3 trial archive: ${archive_path}"
+}
+
+save_corpus_archive() {
+  local archive_path="$1"
+  local archive_dir archive_tmp
+  archive_dir="$(dirname "${archive_path}")"
+  archive_tmp="${archive_path}.tmp"
+  mkdir -p "${archive_dir}"
+  rm -f "${archive_tmp}"
+  ( cd "${corpus_dir}" && zip -qry "${archive_tmp}" . )
+  mv "${archive_tmp}" "${archive_path}"
+  sha256sum "${archive_path}" >"${archive_path}.sha256"
+  echo "Saved phase3 corpus archive: ${archive_path}"
 }
 
 fuzzer_cmd=(
@@ -207,8 +230,11 @@ case "${outcome}" in
 esac
 
 archive_path=""
+corpus_archive_path=""
 if [ -n "${artifacts_dir}" ]; then
-  archive_path="${artifacts_dir}/${project}/${variant}/${job_name}/trial-${trial_label}-${pod_name}.zip"
+  base="${artifacts_dir}/${project}/${variant}/${job_name}"
+  archive_path="${base}/trials/trial-${trial_label}-${pod_name}.zip"
+  corpus_archive_path="${base}/corpora/corpus-${trial_label}-${pod_name}.zip"
 fi
 
 write_metadata "${outcome}" "${fuzzer_exit}" "${pod_exit}" "${end_time}" "${elapsed_seconds}" "${archive_path}"
@@ -217,6 +243,9 @@ artifact_exit=0
 set +e
 save_artifacts "${archive_path}"
 artifact_exit="$?"
+if [ "${archive_corpus}" = "1" ] && [ -n "${corpus_archive_path}" ]; then
+  save_corpus_archive "${corpus_archive_path}"
+fi
 set -e
 
 if [ "${artifact_exit}" -ne 0 ]; then

@@ -173,3 +173,14 @@ def test_phase3_k8s_jobs_run_100_indexed_paired_seed_trials():
 
     for variants in seeds_by_project.values():
         assert variants["baseline"] == variants["optimized"]
+
+
+def test_entrypoint_emits_crash_times_and_splits_corpus():
+    entrypoint = (K8S_DIR / "entrypoint.sh").read_text()
+    assert "collect_crash_times" in entrypoint
+    assert "crash_times.json" in entrypoint
+    assert "start_epoch" in entrypoint
+    assert "/trials/" in entrypoint
+    assert "/corpora/" in entrypoint
+    assert "save_corpus_archive" in entrypoint
+    assert "staging_dir}/corpus" not in entrypoint
