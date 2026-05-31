@@ -113,3 +113,17 @@ def test_metadata_env_to_json_maps_fields_and_parses_stats(tmp_path):
     assert meta["final_stats"]["total_execs"] == 60000
     assert meta["final_stats"]["final_exec_s"] == 500
     assert meta["corpus_file_count"] == 4212
+
+
+def test_pick_biggest_baseline_corpus_by_file_count():
+    trials = [
+        {"trial_id": 0, "corpus_file_count": 100},
+        {"trial_id": 1, "corpus_file_count": 4212},
+        {"trial_id": 2, "corpus_file_count": 3000},
+    ]
+    winner = phase3_k8s.pick_biggest_corpus(trials)
+    assert winner["trial_id"] == 1
+
+
+def test_pick_biggest_corpus_returns_none_for_empty():
+    assert phase3_k8s.pick_biggest_corpus([]) is None

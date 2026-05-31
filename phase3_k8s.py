@@ -157,3 +157,10 @@ def metadata_env_to_json(env_text: str, log_text: str, num_crashes: int) -> dict
         "corpus_file_count": _int("corpus_file_count"),
         "corpus_du_bytes": _int("corpus_du_bytes"),
     }
+
+
+def pick_biggest_corpus(baseline_trials: list[dict]) -> dict | None:
+    """Pick the baseline trial whose corpus has the most files."""
+    if not baseline_trials:
+        return None
+    return max(baseline_trials, key=lambda t: int(t.get("corpus_file_count", 0)))
