@@ -12,3 +12,6 @@ report_kube_records.json.gz
 
 # Stray local tooling marker
 .codex
+
+# Local seed-corpus cache (data, not code)
+corpus_cache/
