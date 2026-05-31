@@ -164,3 +164,27 @@ def pick_biggest_corpus(baseline_trials: list[dict]) -> dict | None:
     if not baseline_trials:
         return None
     return max(baseline_trials, key=lambda t: int(t.get("corpus_file_count", 0)))
+
+
+def _ns_args(namespace: str) -> list[str]:
+    return ["-n", namespace] if namespace else []
+
+
+def kubectl_apply_cmd(path: str, namespace: str = "") -> list[str]:
+    return ["kubectl", *_ns_args(namespace), "apply", "-f", path]
+
+
+def kubectl_job_status_cmd(job: str, namespace: str = "") -> list[str]:
+    return [
+        "kubectl", *_ns_args(namespace), "get", "job", job,
+        "-o", "jsonpath={.status.succeeded}/{.status.failed}",
+    ]
+
+
+def job_is_terminal(*, succeeded: int, failed: int, completions: int) -> bool:
+    return (succeeded + failed) >= completions
+
+
+def _run(cmd, *, timeout=None, check=False):
+    logger.info("exec: %s", " ".join(cmd[:6]))
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)

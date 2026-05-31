@@ -127,3 +127,19 @@ def test_pick_biggest_baseline_corpus_by_file_count():
 
 def test_pick_biggest_corpus_returns_none_for_empty():
     assert phase3_k8s.pick_biggest_corpus([]) is None
+
+
+def test_kubectl_apply_and_wait_commands():
+    assert phase3_k8s.kubectl_apply_cmd("/tmp/jobs.yaml", namespace="bench") == [
+        "kubectl", "-n", "bench", "apply", "-f", "/tmp/jobs.yaml",
+    ]
+    assert phase3_k8s.kubectl_job_status_cmd("phase3-gpac-baseline", namespace="") == [
+        "kubectl", "get", "job", "phase3-gpac-baseline",
+        "-o", "jsonpath={.status.succeeded}/{.status.failed}",
+    ]
+
+
+def test_job_is_terminal_when_succeeded_plus_failed_reaches_completions():
+    assert phase3_k8s.job_is_terminal(succeeded=100, failed=0, completions=100)
+    assert phase3_k8s.job_is_terminal(succeeded=98, failed=2, completions=100)
+    assert not phase3_k8s.job_is_terminal(succeeded=50, failed=0, completions=100)
