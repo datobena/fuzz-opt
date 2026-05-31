@@ -229,6 +229,52 @@ def kubectl_cp_cmd(*, pod: str, namespace: str, remote_path: str,
     return ["kubectl", *_ns_args(namespace), "cp", src, local_path]
 
 
+def _load_replay_module():
+    import importlib.util
+    scripts_dir = getattr(config, "PHASE3_SKILL_SCRIPTS_DIR", None) or config.PHASE2_SKILL_SCRIPTS_DIR
+    script = Path(scripts_dir) / "replay_timing.py"
+    spec = importlib.util.spec_from_file_location("replay_timing", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def record_replay_metric(*, key_dir, baseline_bin_dir, optimized_bin_dir,
+                         corpus_dir, fuzz_target, profile_cpu=None,
+                         repeats=None, measure_fn=None) -> float | None:
+    """Run deterministic replay on the biggest baseline corpus; write into setup_metadata."""
+    try:
+        measure = measure_fn or _load_replay_module().measure_binary
+        if profile_cpu is None:
+            profile_cpu = max(int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
+        if repeats is None:
+            repeats = int(getattr(config, "PHASE2_REPLAY_REPEATS", 3))
+        common = dict(
+            corpus_dir=str(corpus_dir), fuzz_target=fuzz_target, cpu=profile_cpu,
+            repeats=repeats, seed=int(getattr(config, "BASE_SEED", 1337)),
+            memory=getattr(config, "MEMORY_LIMIT", "4g"),
+            shm_size=getattr(config, "DOCKER_SHM_SIZE", "2g"),
+            run_timeout=int(getattr(config, "TRIAL_DURATION_SECS", 3600)),
+        )
+        baseline = measure(out_dir=str(baseline_bin_dir), **common)
+        optimized = measure(out_dir=str(optimized_bin_dir), **common)
+        b, o = baseline.get("median_time_s"), optimized.get("median_time_s")
+        speedup = round(b / o, 4) if (b and o) else None
+
+        meta_path = Path(key_dir) / "setup_metadata.json"
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        meta["replay"] = {
+            "replay_speedup": speedup, "baseline": baseline, "optimized": optimized,
+            "corpus_source": "k8s_biggest_baseline",
+            "corpus_file_count": sum(1 for p in Path(corpus_dir).rglob("*") if p.is_file()),
+        }
+        meta_path.write_text(json.dumps(meta, indent=2))
+        return speedup
+    except Exception as exc:
+        logger.warning("k8s replay metric failed for %s: %s", key_dir, exc)
+        return None
+
+
 def write_trial_dir(unpacked_dir: Path, variant_out_dir: Path, *, trial_id: int) -> Path:
     """Materialize results/<exp>/<key>/<variant>/trial_<id>/ from an unpacked archive."""
     unpacked_dir = Path(unpacked_dir)

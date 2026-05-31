@@ -195,3 +195,26 @@ def test_write_trial_dir_produces_phase4_inputs(tmp_path):
     crash_times = json.loads((tdir / "crash_times.json").read_text())
     assert crash_times[0]["artifact"] == "crash-abc"
     assert (tdir / "crashes" / "crash-abc").exists()
+
+
+def test_record_replay_into_setup_metadata(tmp_path):
+    key_dir = tmp_path / "results" / "exp1" / "gpac-CVE-2022-1441"
+    (key_dir).mkdir(parents=True)
+    (key_dir / "setup_metadata.json").write_text(json.dumps({"entry": {"project": "gpac"}}))
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a").write_text("x")
+
+    def fake_measure(*, out_dir, **kw):
+        return {"median_time_s": 10.0 if "baseline" in str(out_dir) else 4.0}
+
+    speedup = phase3_k8s.record_replay_metric(
+        key_dir=key_dir,
+        baseline_bin_dir=tmp_path / "baseline" / "bin",
+        optimized_bin_dir=tmp_path / "optimized" / "bin",
+        corpus_dir=corpus, fuzz_target="fuzz_parse", measure_fn=fake_measure,
+    )
+    assert speedup == 2.5
+    meta = json.loads((key_dir / "setup_metadata.json").read_text())
+    assert meta["replay"]["replay_speedup"] == 2.5
+    assert meta["replay"]["corpus_source"] == "k8s_biggest_baseline"
