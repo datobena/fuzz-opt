@@ -188,3 +188,41 @@ def job_is_terminal(*, succeeded: int, failed: int, completions: int) -> bool:
 def _run(cmd, *, timeout=None, check=False):
     logger.info("exec: %s", " ".join(cmd[:6]))
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)
+
+
+def collector_pod_spec(*, name: str) -> dict:
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": name},
+        "spec": {
+            "restartPolicy": "Never",
+            "containers": [{
+                "name": "collector",
+                "image": "busybox:1.36",
+                "command": ["sh", "-c", "sleep 3600"],
+                "volumeMounts": [{"name": "artifacts", "mountPath": "/artifacts"}],
+            }],
+            "volumes": [{
+                "name": "artifacts",
+                "persistentVolumeClaim": {"claimName": config.PHASE3_K8S_PVC},
+            }],
+        },
+    }
+
+
+def collector_tar_cmd(*, pod: str, namespace: str, tar_dir: str,
+                      excludes: list[str] | None = None) -> list[str]:
+    exclude_args = [f"--exclude={pat}" for pat in (excludes or [])]
+    return [
+        "kubectl", *_ns_args(namespace), "exec", pod, "--",
+        "tar", "c", *exclude_args, "-C", tar_dir, ".",
+    ]
+
+
+def kubectl_cp_cmd(*, pod: str, namespace: str, remote_path: str,
+                   local_path: str) -> list[str]:
+    src = f"{pod}:{remote_path}"
+    if namespace:
+        src = f"{namespace}/{src}"
+    return ["kubectl", *_ns_args(namespace), "cp", src, local_path]

@@ -143,3 +143,24 @@ def test_job_is_terminal_when_succeeded_plus_failed_reaches_completions():
     assert phase3_k8s.job_is_terminal(succeeded=100, failed=0, completions=100)
     assert phase3_k8s.job_is_terminal(succeeded=98, failed=2, completions=100)
     assert not phase3_k8s.job_is_terminal(succeeded=50, failed=0, completions=100)
+
+
+def test_collector_exec_tar_cmd_excludes_corpora():
+    cmd = phase3_k8s.collector_tar_cmd(
+        pod="phase3-collector", namespace="bench",
+        tar_dir="/artifacts/bena/phase3-kube/exp1",
+        excludes=["*/corpora", "*/corpora/*"],
+    )
+    joined = " ".join(cmd)
+    assert cmd[:2] == ["kubectl", "-n"]
+    assert "exec" in cmd and "phase3-collector" in cmd
+    assert "-C /artifacts/bena/phase3-kube/exp1" in joined
+    assert "--exclude=*/corpora" in joined
+
+
+def test_collector_pod_spec_mounts_pvc():
+    spec = phase3_k8s.collector_pod_spec(name="phase3-collector")
+    c = spec["spec"]["containers"][0]
+    assert {"name": "artifacts", "mountPath": "/artifacts"} in c["volumeMounts"]
+    assert spec["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] == "nfs"
+    assert spec["spec"]["restartPolicy"] == "Never"
