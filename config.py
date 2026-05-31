@@ -45,6 +45,23 @@ PHASE2_SKILL_SCRIPTS_DIR = (
     else "/home/sefcom/.codex/skills/apply-profile-guided-folds/scripts"
 )
 
+# Phase 3 execution backend: "k8s" (Indexed Jobs on a cluster) or "local"
+# (Docker containers on this host). Overridable with the PHASE3_BACKEND env var.
+PHASE3_BACKEND = os.environ.get("PHASE3_BACKEND", "k8s").lower()
+
+# Phase 3 Kubernetes runner settings (used when PHASE3_BACKEND == "k8s").
+PHASE3_K8S_TRIALS = int(os.environ.get("PHASE3_K8S_TRIALS", "100"))
+PHASE3_K8S_PARALLELISM = int(os.environ.get("PHASE3_K8S_PARALLELISM", "10"))
+PHASE3_K8S_IMAGE_PREFIX = os.environ.get("PHASE3_K8S_IMAGE_PREFIX", "dbenashv/benchmark")
+PHASE3_K8S_PVC = os.environ.get("PHASE3_K8S_PVC", "nfs")
+PHASE3_K8S_NAMESPACE = os.environ.get("PHASE3_K8S_NAMESPACE", "")  # "" = current context default
+PHASE3_K8S_ARTIFACTS_DIR = os.environ.get(
+    "PHASE3_K8S_ARTIFACTS_DIR", "/artifacts/bena/phase3-kube"
+)
+PHASE3_K8S_MEMORY = os.environ.get("PHASE3_K8S_MEMORY", "12Gi")
+PHASE3_K8S_RSS_LIMIT_MB = int(os.environ.get("PHASE3_K8S_RSS_LIMIT_MB", "8192"))
+PHASE3_K8S_TTL_SECONDS = int(os.environ.get("PHASE3_K8S_TTL_SECONDS", "432000"))
+
 # Seed generation
 BASE_SEED = 1337
 BASELINE_SEED_OFFSET = 0
