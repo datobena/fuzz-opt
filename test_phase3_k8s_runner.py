@@ -1,4 +1,5 @@
 # test_phase3_k8s_runner.py
+import json
 import config
 
 
@@ -164,3 +165,33 @@ def test_collector_pod_spec_mounts_pvc():
     assert {"name": "artifacts", "mountPath": "/artifacts"} in c["volumeMounts"]
     assert spec["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] == "nfs"
     assert spec["spec"]["restartPolicy"] == "Never"
+
+
+def test_write_trial_dir_produces_phase4_inputs(tmp_path):
+    unpacked = tmp_path / "unpacked"
+    (unpacked / "crashes").mkdir(parents=True)
+    (unpacked / "libfuzzer.log").write_text(
+        "stat::number_of_executed_units: 60000\n"
+        "stat::average_exec_per_sec:     500\n"
+    )
+    (unpacked / "metadata.env").write_text(
+        "variant=baseline\ntrial_id=3\nseed=4337\nelapsed_seconds=120\n"
+        "duration_seconds=21600\ncorpus_file_count=10\n"
+    )
+    (unpacked / "crashes" / "crash-abc").write_text("boom")
+    (unpacked / "crash_times.json").write_text(
+        '[{"timestamp_s": 119.5, "artifact": "crash-abc", "crash_type": "crash"}]'
+    )
+
+    out = tmp_path / "results" / "exp1" / "gpac-CVE-2022-1441" / "baseline"
+    phase3_k8s.write_trial_dir(unpacked, out, trial_id=3)
+
+    tdir = out / "trial_03"
+    assert (tdir / "fuzzer.log").exists()
+    meta = json.loads((tdir / "metadata.json").read_text())
+    assert meta["seed"] == 4337
+    assert meta["final_stats"]["total_execs"] == 60000
+    assert meta["num_crashes"] == 1
+    crash_times = json.loads((tdir / "crash_times.json").read_text())
+    assert crash_times[0]["artifact"] == "crash-abc"
+    assert (tdir / "crashes" / "crash-abc").exists()

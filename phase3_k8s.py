@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -226,3 +227,37 @@ def kubectl_cp_cmd(*, pod: str, namespace: str, remote_path: str,
     if namespace:
         src = f"{namespace}/{src}"
     return ["kubectl", *_ns_args(namespace), "cp", src, local_path]
+
+
+def write_trial_dir(unpacked_dir: Path, variant_out_dir: Path, *, trial_id: int) -> Path:
+    """Materialize results/<exp>/<key>/<variant>/trial_<id>/ from an unpacked archive."""
+    unpacked_dir = Path(unpacked_dir)
+    tdir = Path(variant_out_dir) / f"trial_{trial_id:02d}"
+    crashes_src = unpacked_dir / "crashes"
+    crashes_dst = tdir / "crashes"
+    crashes_dst.mkdir(parents=True, exist_ok=True)
+
+    log_text = ""
+    log_src = unpacked_dir / "libfuzzer.log"
+    if log_src.exists():
+        log_text = log_src.read_text(errors="replace")
+        (tdir / "fuzzer.log").write_text(log_text)
+
+    crash_files = [p for p in crashes_src.glob("*") if p.is_file()] if crashes_src.is_dir() else []
+    for p in crash_files:
+        shutil.copy2(p, crashes_dst / p.name)
+
+    env_text = ""
+    env_src = unpacked_dir / "metadata.env"
+    if env_src.exists():
+        env_text = env_src.read_text(errors="replace")
+    meta = metadata_env_to_json(env_text, log_text, num_crashes=len(crash_files))
+    meta["trial_id"] = trial_id
+    (tdir / "metadata.json").write_text(json.dumps(meta, indent=2))
+
+    ct_src = unpacked_dir / "crash_times.json"
+    if ct_src.exists():
+        shutil.copy2(ct_src, tdir / "crash_times.json")
+    else:
+        (tdir / "crash_times.json").write_text("[]")
+    return tdir
