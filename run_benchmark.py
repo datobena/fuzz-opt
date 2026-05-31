@@ -34,6 +34,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _phase3_backend() -> str:
+    return os.environ.get("PHASE3_BACKEND", getattr(config, "PHASE3_BACKEND", "k8s")).lower()
+
+
 def _get_arvo_baseline_denylist_path() -> str:
     return str(
         getattr(
@@ -656,10 +660,16 @@ def run_phase_trials(
             len(setup_manifest), duration, max_parallel,
         )
 
-        results = run_all_trials_slot(
-            setup_manifest, experiment_id, duration, max_parallel,
-            resume=resume,
-        )
+        if _phase3_backend() == "k8s":
+            import phase3_k8s
+            results = phase3_k8s.run_all_trials_k8s(
+                setup_manifest, experiment_id, duration=duration,
+            )
+        else:
+            results = run_all_trials_slot(
+                setup_manifest, experiment_id, duration, max_parallel,
+                resume=resume,
+            )
 
         # Rebuild full results from disk for accuracy
         all_results = collect_all_trial_results(experiment_id)

@@ -605,3 +605,13 @@ def test_prepare_experiment_dir_for_fresh_run_archives_existing_results(
     assert len(archived_dirs) == 1
     assert (archived_dirs[0] / "artifact.txt").read_text() == "keep me"
     assert not exp_dir.exists()
+
+
+def test_run_phase_trials_dispatches_to_k8s(monkeypatch):
+    import run_benchmark
+    import config
+    monkeypatch.delenv("PHASE3_BACKEND", raising=False)
+    monkeypatch.setattr(config, "PHASE3_BACKEND", "k8s")
+    assert run_benchmark._phase3_backend() == "k8s"
+    monkeypatch.setattr(config, "PHASE3_BACKEND", "local")
+    assert run_benchmark._phase3_backend() == "local"
