@@ -12,10 +12,13 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 import config
 import phase3_runner
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -307,3 +310,167 @@ def write_trial_dir(unpacked_dir: Path, variant_out_dir: Path, *, trial_id: int)
     else:
         (tdir / "crash_times.json").write_text("[]")
     return tdir
+
+
+def build_and_push_images(manifest, experiment_id):
+    """Build+push a phase3 image per (project,cve,variant) from phase-2 binaries.
+
+    Returns {(project, variant): image}. Uses k8s/phase3/Dockerfile with a build
+    context = the variant bin dir. Shells out to docker; assumes docker login.
+    """
+    built = {}
+    dockerfile = Path(__file__).resolve().parent / "k8s" / "phase3" / "Dockerfile"
+    for entry in manifest:
+        project, cve = entry["project"], entry["cve"]
+        for variant in ("baseline", "optimized"):
+            bin_dir = Path(config.RESULTS_DIR) / experiment_id / cve_key(project, cve) / variant / "bin"
+            image = image_name(project, variant, experiment_id)
+            build = ["docker", "build", "-f", str(dockerfile),
+                     "--build-arg", f"FUZZ_TARGET={entry.get('fuzz_target','')}",
+                     "-t", image, str(bin_dir)]
+            if _run(build).returncode != 0:
+                raise RuntimeError(f"docker build failed for {image}")
+            if _run(["docker", "push", image]).returncode != 0:
+                raise RuntimeError(f"docker push failed for {image}")
+            built[(project, variant)] = image
+    return built
+
+
+def apply_and_wait(jobs, *, namespace="", poll_secs=30, sleep=time.sleep):
+    ns = namespace or config.PHASE3_K8S_NAMESPACE
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump_all(jobs, f)
+        path = f.name
+    if _run(kubectl_apply_cmd(path, ns)).returncode != 0:
+        raise RuntimeError("kubectl apply failed")
+    pending = {j["metadata"]["name"]: j["spec"]["completions"] for j in jobs}
+    while pending:
+        for name, completions in list(pending.items()):
+            out = _run(kubectl_job_status_cmd(name, ns)).stdout.strip()
+            succeeded, _, failed = out.partition("/")
+            s, fl = int(succeeded or 0), int(failed or 0)
+            if job_is_terminal(succeeded=s, failed=fl, completions=completions):
+                logger.info("job %s terminal: %d ok / %d failed", name, s, fl)
+                del pending[name]
+        if pending:
+            sleep(poll_secs)
+
+
+def collect_artifacts(manifest, experiment_id, *, namespace=""):
+    """Start a collector pod, stream back all small trial archives (NOT corpora).
+
+    Returns a handle dict {dir, pod, namespace, exp_dir} and leaves the pod
+    running so compute_replay_metrics can `kubectl cp` the one chosen corpus.
+    The orchestrator deletes the pod afterward.
+    """
+    ns = namespace or config.PHASE3_K8S_NAMESPACE
+    pod_name = f"phase3-collector-{experiment_id}".lower().replace("_", "-")
+    pod = collector_pod_spec(name=pod_name)
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump(pod, f)
+        pod_path = f.name
+    _run(kubectl_apply_cmd(pod_path, ns), check=True)
+    _run(["kubectl", *_ns_args(ns), "wait", "--for=condition=Ready",
+          f"pod/{pod_name}", "--timeout=120s"])
+
+    exp_dir = f"{config.PHASE3_K8S_ARTIFACTS_DIR}/{experiment_id}"
+    dest = Path(tempfile.mkdtemp(prefix="phase3-collect-"))
+    tar_cmd = collector_tar_cmd(pod=pod_name, namespace=ns, tar_dir=exp_dir,
+                                excludes=["*/corpora", "*/corpora/*"])
+    proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE)
+    subprocess.run(["tar", "x", "-C", str(dest)], stdin=proc.stdout, check=True)
+    proc.wait()
+    return {"dir": dest, "pod": pod_name, "namespace": ns, "exp_dir": exp_dir}
+
+
+def transform_all(collected, manifest, experiment_id):
+    """Unpack the small trial archives into trial_XX/ dirs. Returns result list."""
+    import zipfile
+    collected_dir = Path(collected["dir"])
+    results = []
+    for entry in manifest:
+        project, cve = entry["project"], entry["cve"]
+        key = cve_key(project, cve)
+        for variant in ("baseline", "optimized"):
+            jname = job_name(project, variant)
+            zips_root = collected_dir / project / variant / jname / "trials"
+            if not zips_root.is_dir():
+                continue
+            variant_out = Path(config.RESULTS_DIR) / experiment_id / key / variant
+            for zpath in sorted(zips_root.glob("trial-*.zip")):
+                trial_id = int(zpath.name.split("-")[1])  # trial-<id>-<pod>.zip
+                with tempfile.TemporaryDirectory() as ud:
+                    with zipfile.ZipFile(zpath) as zf:
+                        zf.extractall(ud)
+                    write_trial_dir(Path(ud), variant_out, trial_id=trial_id)
+                results.append({"trial": f"{key}-{variant}-trial_{trial_id:02d}"})
+    return results
+
+
+def compute_replay_metrics(collected, manifest, experiment_id):
+    """Per project: pick biggest baseline corpus from already-collected metadata,
+    kubectl cp only that one corpus zip, replay it on both binaries."""
+    import zipfile
+    collected_dir = Path(collected["dir"])
+    pod, ns, exp_dir = collected["pod"], collected["namespace"], collected["exp_dir"]
+    for entry in manifest:
+        project, cve = entry["project"], entry["cve"]
+        key = cve_key(project, cve)
+        jname = job_name(project, "baseline")
+        trials_root = collected_dir / project / "baseline" / jname / "trials"
+        if not trials_root.is_dir():
+            logger.warning("no baseline trials for %s; skipping replay", key)
+            continue
+        trials = []
+        for zpath in sorted(trials_root.glob("trial-*.zip")):
+            with zipfile.ZipFile(zpath) as zf:
+                if "metadata.env" not in zf.namelist():
+                    continue
+                env = parse_metadata_env(zf.read("metadata.env").decode("utf-8", "replace"))
+            trials.append({
+                "trial_id": int(env.get("trial_id", 0)),
+                "corpus_file_count": int(env.get("corpus_file_count", 0)),
+                "pod_suffix": zpath.name[len(f"trial-{env.get('trial_id','0')}-"):-4],
+            })
+        winner = pick_biggest_corpus(trials)
+        if not winner or winner["corpus_file_count"] == 0:
+            logger.warning("no baseline corpus for %s; skipping replay", key)
+            continue
+        remote = (f"{exp_dir}/{project}/baseline/{jname}/corpora/"
+                  f"corpus-{winner['trial_id']}-{winner['pod_suffix']}.zip")
+        with tempfile.TemporaryDirectory() as ud:
+            local_zip = os.path.join(ud, "corpus.zip")
+            if _run(kubectl_cp_cmd(pod=pod, namespace=ns, remote_path=remote,
+                                   local_path=local_zip)).returncode != 0:
+                logger.warning("kubectl cp corpus failed for %s; skipping replay", key)
+                continue
+            corpus = Path(ud) / "corpus"
+            corpus.mkdir()
+            with zipfile.ZipFile(local_zip) as zf:
+                zf.extractall(corpus)
+            if not any(corpus.rglob("*")):
+                logger.warning("empty corpus for %s; skipping replay", key)
+                continue
+            key_dir = Path(config.RESULTS_DIR) / experiment_id / key
+            record_replay_metric(
+                key_dir=key_dir,
+                baseline_bin_dir=key_dir / "baseline" / "bin",
+                optimized_bin_dir=key_dir / "optimized" / "bin",
+                corpus_dir=corpus, fuzz_target=entry.get("fuzz_target", ""),
+            )
+
+
+def run_all_trials_k8s(manifest, experiment_id, duration=None, **_kwargs):
+    duration = config.TRIAL_DURATION_SECS if duration is None else duration
+    images = build_and_push_images(manifest, experiment_id)
+    jobs = generate_jobs(manifest, experiment_id, duration,
+                         image_for=lambda p, v: images.get((p, v)))
+    apply_and_wait(jobs)
+    collected = collect_artifacts(manifest, experiment_id)
+    try:
+        results = transform_all(collected, manifest, experiment_id)
+        compute_replay_metrics(collected, manifest, experiment_id)
+    finally:
+        _run(["kubectl", *_ns_args(collected["namespace"]), "delete", "pod",
+              collected["pod"], "--wait=false"])
+    return results

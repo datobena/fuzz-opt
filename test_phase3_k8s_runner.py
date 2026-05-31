@@ -218,3 +218,27 @@ def test_record_replay_into_setup_metadata(tmp_path):
     meta = json.loads((key_dir / "setup_metadata.json").read_text())
     assert meta["replay"]["replay_speedup"] == 2.5
     assert meta["replay"]["corpus_source"] == "k8s_biggest_baseline"
+
+
+def test_run_all_trials_k8s_invokes_stages_in_order(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
+    monkeypatch.setattr(phase3_k8s, "build_and_push_images",
+                        lambda *a, **k: calls.append("build") or {})
+    monkeypatch.setattr(phase3_k8s, "apply_and_wait",
+                        lambda *a, **k: calls.append("apply"))
+    monkeypatch.setattr(phase3_k8s, "collect_artifacts",
+                        lambda *a, **k: calls.append("collect") or {
+                            "dir": tmp_path / "collected", "pod": "p",
+                            "namespace": "", "exp_dir": "/artifacts/x"})
+    monkeypatch.setattr(phase3_k8s, "transform_all",
+                        lambda *a, **k: calls.append("transform") or [{"trial": "t0"}])
+    monkeypatch.setattr(phase3_k8s, "compute_replay_metrics",
+                        lambda *a, **k: calls.append("replay"))
+    monkeypatch.setattr(phase3_k8s, "_run", lambda *a, **k: calls.append("cleanup"))
+
+    manifest = [{"project": "gpac", "cve": "CVE-2022-1441", "fuzz_target": "fuzz_parse"}]
+    results = phase3_k8s.run_all_trials_k8s(manifest, "exp1", duration=60)
+
+    assert calls == ["build", "apply", "collect", "transform", "replay", "cleanup"]
+    assert results == [{"trial": "t0"}]
