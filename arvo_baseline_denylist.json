@@ -70,5 +70,13 @@
     "stage": "baseline_build",
     "reason": "ARVO build failed for CVE-2019-11338",
     "timestamp": "2026-04-14T08:41:56.748394"
+  },
+  {
+    "project": "unrar",
+    "cve": "CVE-2017-20006",
+    "local_id": 42506721,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2017-20006",
+    "timestamp": "2026-05-30T23:47:57.457051"
   }
 ]
