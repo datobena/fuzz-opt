@@ -36,7 +36,7 @@ PHASE2_REPLAY_REPEATS = 3
 # (e.g. waiting on an inner Docker step that never returns) is killed and
 # recorded as timed-out instead of wedging the phase-2 worker indefinitely.
 PHASE2_OPTIMIZER_TIMEOUT_SECS = int(
-    os.environ.get("PHASE2_OPTIMIZER_TIMEOUT_SECS", "5400")  # 90 min
+    os.environ.get("PHASE2_OPTIMIZER_TIMEOUT_SECS", "10800")  # 3 hours
 )
 
 # Which agent CLI drives the phase-2 source optimization: "claude" or "codex".
