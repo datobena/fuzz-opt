@@ -32,6 +32,13 @@ PHASE2_REFRESH_PROFILE_DURATION_SECS = 300
 # immune to the coverage-gradient divergence that makes live exec/s misleading.
 PHASE2_REPLAY_REPEATS = 3
 
+# Wall-clock cap on a single optimizer (claude/codex) invocation. A hung agent
+# (e.g. waiting on an inner Docker step that never returns) is killed and
+# recorded as timed-out instead of wedging the phase-2 worker indefinitely.
+PHASE2_OPTIMIZER_TIMEOUT_SECS = int(
+    os.environ.get("PHASE2_OPTIMIZER_TIMEOUT_SECS", "5400")  # 90 min
+)
+
 # Which agent CLI drives the phase-2 source optimization: "claude" or "codex".
 # Overridable per-run with the BENCHMARK_OPTIMIZER env var.
 OPTIMIZER_BACKEND = os.environ.get("BENCHMARK_OPTIMIZER", "claude").lower()

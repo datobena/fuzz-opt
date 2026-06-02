@@ -565,6 +565,7 @@ def apply_fold_deterministic_calls(
     os.environ["FUZZ_TARGET"] = fuzz_target
     codex_result = _invoke_agent_capture(
         source_dir, prompt, project=project, backend=backend,
+        timeout=getattr(config, "PHASE2_OPTIMIZER_TIMEOUT_SECS", None),
     )
     if codex_result["timed_out"]:
         logger.error(
@@ -1448,6 +1449,7 @@ def optimize_and_build(
         codex_result = _invoke_agent_capture(
             source_dir, prompt, project=project, extra_env=codex_extra_env,
             backend=backend,
+            timeout=getattr(config, "PHASE2_OPTIMIZER_TIMEOUT_SECS", None),
         )
         if codex_result["timed_out"]:
             logger.error(
@@ -1814,7 +1816,7 @@ def setup_cve_arvo(
     src_has_files = (
         src_subdir.exists()
         and any(
-            d.is_dir() and d.name not in ("aflplusplus", "libfuzzer", "honggfuzz")
+            d.is_dir() and d.name not in ("afl", "aflplusplus", "libfuzzer", "honggfuzz")
             for d in src_subdir.iterdir()
         )
     )
@@ -2145,7 +2147,7 @@ def _find_project_source(source_dir: Path, project: str) -> str:
         for d in src_subdir.iterdir():
             if d.is_dir() and d.name.lower() == project.lower():
                 return str(d)
-        skip_names = {"aflplusplus", "libfuzzer", "oss-fuzz"}
+        skip_names = {"afl", "aflplusplus", "honggfuzz", "libfuzzer", "oss-fuzz"}
         for d in sorted(src_subdir.iterdir()):
             if d.is_dir() and d.name.lower() not in skip_names:
                 return str(d)
