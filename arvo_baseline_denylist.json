@@ -78,5 +78,77 @@
     "stage": "baseline_poc_verify",
     "reason": "Baseline did not reproduce PoC for CVE-2017-20006",
     "timestamp": "2026-05-30T23:47:57.457051"
+  },
+  {
+    "project": "lldpd",
+    "cve": "CVE-2023-41910",
+    "local_id": 42516647,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2023-41910",
+    "timestamp": "2026-05-31T18:21:37.769470"
+  },
+  {
+    "project": "ndpi",
+    "cve": "CVE-2020-15475",
+    "local_id": 42484479,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2020-15475",
+    "timestamp": "2026-05-31T18:27:59.784590"
+  },
+  {
+    "project": "ndpi",
+    "cve": "CVE-2021-36082",
+    "local_id": 42492641,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2021-36082",
+    "timestamp": "2026-05-31T18:28:03.541262"
+  },
+  {
+    "project": "opensc",
+    "cve": "CVE-2019-19480",
+    "local_id": 42479408,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2019-19480",
+    "timestamp": "2026-05-31T18:31:58.506488"
+  },
+  {
+    "project": "opensc",
+    "cve": "CVE-2019-15945",
+    "local_id": 42477333,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2019-15945",
+    "timestamp": "2026-05-31T18:32:01.321666"
+  },
+  {
+    "project": "opensc",
+    "cve": "CVE-2019-20792",
+    "local_id": 42480215,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2019-20792",
+    "timestamp": "2026-05-31T18:35:39.650539"
+  },
+  {
+    "project": "opensc",
+    "cve": "CVE-2020-26570",
+    "local_id": 42485889,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2020-26570",
+    "timestamp": "2026-05-31T18:35:44.930190"
+  },
+  {
+    "project": "opensc",
+    "cve": "CVE-2020-26572",
+    "local_id": 42484390,
+    "stage": "baseline_poc_verify",
+    "reason": "Baseline did not reproduce PoC for CVE-2020-26572",
+    "timestamp": "2026-05-31T18:38:25.754708"
+  },
+  {
+    "project": "ndpi",
+    "cve": "CVE-2020-15472",
+    "local_id": 42483697,
+    "stage": "baseline_build",
+    "reason": "ARVO build failed for CVE-2020-15472",
+    "timestamp": "2026-06-02T14:05:14.804977"
   }
 ]

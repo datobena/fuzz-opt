@@ -84,11 +84,23 @@ for every completed fuzzer process:
 /artifacts/bena/phase3-kube/<project>/<variant>/<job-name>/trial-<id>-<pod>.zip
 ```
 
-The archive contains `libfuzzer.log`, `metadata.env`, and `/crashes`. It does
-not include `/corpus` by default; the entrypoint records corpus file count and
-disk usage in `metadata.env` and in the final `phase3 outcome=...` log line.
-Set `ARCHIVE_CORPUS=1` if you later want to include the full corpus in each
-archive.
+The trial archive contains `libfuzzer.log`, `metadata.env`, `crash_times.json`,
+and `/crashes`. The generated `/corpus` is archived **separately** (per-file
+mtimes preserved) under `.../<job-name>/corpora/corpus-<id>-<pod>.zip`.
+
+By **default both variants archive their corpus** so the generated corpora
+survive for offline analysis without a re-run (baseline corpora feed the
+replay-timing metric; optimized corpora feed differential coverage studies —
+`run_covdiff_pertrial.py` and `run_covtime.py`, which replay each variant's
+corpus on the baseline binary and compare edge coverage / coverage-over-time).
+Set `PHASE3_ARCHIVE_BASELINE_ONLY=1` to archive baseline only and save NFS space
+(optimized corpora roughly double per-project corpus storage).
+
+Optional live diagnostic: set `COVERAGE_SNAPSHOT=1` (interval
+`COVERAGE_SNAPSHOT_INTERVAL`, default 1800s) to have the entrypoint periodically
+replay the current corpus and stage a `coverage_over_time.json`. This is measured
+on the **in-pod (generating) binary**, so it is a per-variant diagnostic, not the
+common-baseline comparison — for that, use `run_covtime.py` offline.
 The entrypoint preserves the original libFuzzer exit code in `metadata.env`, but
 normalizes sanitizer/libFuzzer findings to pod exit code `0`, so Kubernetes marks
 crash-finding trials as `Completed`. Infrastructure/setup failures and artifact

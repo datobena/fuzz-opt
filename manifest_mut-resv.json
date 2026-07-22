@@ -1,0 +1,33 @@
+[
+  {
+    "project": "libxml2",
+    "cve": "arvo-1972",
+    "local_id": 1972,
+    "image": "n132/arvo:1972-vul",
+    "fuzz_target": "libxml2_xml_read_memory_fuzzer",
+    "crash_type": "Stack-buffer-overflow WRITE {*}"
+  },
+  {
+    "project": "wolfssl",
+    "cve": "arvo-26567",
+    "local_id": 26567,
+    "image": "n132/arvo:26567-vul",
+    "fuzz_target": "fuzzer-wolfssl-rsa",
+    "crash_type": "Heap-buffer-overflow WRITE {*}"
+  },
+  {
+    "project": "libavc",
+    "cve": "arvo-16505",
+    "local_id": 16505,
+    "image": "n132/arvo:16505-vul",
+    "fuzz_target": "avc_dec_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 8"
+  },
+  {
+    "project": "selinux",
+    "cve": "CVE-2021-36085",
+    "local_id": 42493454,
+    "fuzz_target": "secilc-fuzzer",
+    "crash_type": "Heap-use-after-free READ 8"
+  }
+]

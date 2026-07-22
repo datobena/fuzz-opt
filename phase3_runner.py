@@ -26,7 +26,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
-from lib import docker_util
+from lib import crash_classify, docker_util
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,18 +142,33 @@ def get_fuzzer_binary(experiment_id: str, trial: Trial) -> str:
     )
 
 
+def _dir_has_real_seeds(d: str) -> bool:
+    """True if the dir has any non-fallback seed file (searched recursively)."""
+    if not os.path.isdir(d):
+        return False
+    for _root, _dirs, files in os.walk(d):
+        if any(not f.startswith("seed_fallback") for f in files):
+            return True
+    return False
+
+
 def get_seed_corpus_dir(experiment_id: str, trial: Trial) -> str:
-    """Get path to the seed corpus directory."""
+    """Path to the seed corpus phase-3 fuzzes from.
+
+    Prefer ``merged/`` if it has real (non-fallback) seeds; otherwise use the
+    bundled ``build/`` extraction (phase-2 unpacks the project's bundled
+    <target>_seed_corpus.zip there) so fuzzing starts from the real bundled
+    corpus, not the 1-byte fallback. Last resort: merged/ (fallback seed).
+    """
     cve_dir = f"{trial.project}-{trial.cve}"
-    merged = os.path.join(
-        config.RESULTS_DIR, experiment_id, cve_dir,
-        "seed_corpus", "merged",
-    )
-    if os.path.isdir(merged):
+    base = os.path.join(config.RESULTS_DIR, experiment_id, cve_dir, "seed_corpus")
+    merged = os.path.join(base, "merged")
+    build = os.path.join(base, "build")
+    if _dir_has_real_seeds(merged):
         return merged
-    return os.path.join(
-        config.RESULTS_DIR, experiment_id, cve_dir, "seed_corpus",
-    )
+    if _dir_has_real_seeds(build):
+        return build
+    return merged if os.path.isdir(merged) else base
 
 
 def is_trial_completed(experiment_id: str, trial: Trial) -> bool:
@@ -182,13 +197,15 @@ def start_trial(
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    # Copy seed corpus to trial corpus dir
+    # Copy seed corpus to trial corpus dir (recursively -- the bundled build/
+    # extraction is nested, e.g. secilc/test/*.cil).
     seed_dir = get_seed_corpus_dir(experiment_id, trial)
     if os.path.isdir(seed_dir):
-        for fname in os.listdir(seed_dir):
-            src = os.path.join(seed_dir, fname)
-            if os.path.isfile(src):
-                shutil.copy2(src, dirs["corpus"])
+        for root, _dirs, files in os.walk(seed_dir):
+            for fname in files:
+                src = os.path.join(root, fname)
+                if os.path.isfile(src):
+                    shutil.copy2(src, dirs["corpus"])
 
     fuzzer_binary = get_fuzzer_binary(experiment_id, trial)
     if not os.path.isfile(fuzzer_binary):
@@ -425,6 +442,10 @@ def monitor_trial(
         "wall_duration_s": observed_duration,
         "duration_seconds": duration,
         "num_crashes": len(crash_times),
+        # num_crashes counts ALL artifacts (slow-units/timeouts/OOMs too);
+        # found_bug is the canonical "did the target bug reproduce?" flag.
+        "found_bug": crash_classify.trial_found_bug(crash_times, duration),
+        "time_to_bug_s": crash_classify.trial_time_to_bug(crash_times, duration),
         "final_stats": final_stats,
         "failed_start": failed_start,
         "docker_exit_code": (
@@ -448,6 +469,7 @@ def monitor_trial(
         "trial": trial.name,
         "crash_times": crash_times,
         "final_stats": final_stats,
+        "max_total_time": duration,
     }
 
 
@@ -554,6 +576,10 @@ def collect_all_trial_results(experiment_id: str) -> list[dict]:
                     "trial": metadata.get("trial_name", trial_name),
                     "crash_times": crash_times,
                     "final_stats": metadata.get("final_stats", {}),
+                    # cutoff for the canonical bug-find classifier (excludes the
+                    # end-of-run boundary artifact); see lib/crash_classify.py
+                    "max_total_time": (metadata.get("duration_seconds")
+                                       or metadata.get("max_total_time")),
                 })
 
     return results
@@ -588,7 +614,10 @@ def log_progress(
 
     for result in completed:
         trial_name = result.get("trial", "")
-        has_crash = bool(result.get("crash_times"))
+        # Canonical bug-find definition (real sanitizer crash before the cutoff),
+        # NOT bool(crash_times) which also counts slow-units/timeouts/OOMs/boundary.
+        has_crash = crash_classify.trial_found_bug(
+            result.get("crash_times"), result.get("max_total_time"))
 
         # Parse project and variant from trial name
         # Format: project-CVE-XXXX-XXXXX-variant-trial_NN
@@ -814,10 +843,14 @@ def main():
     logger.info("All trials complete. Results saved to %s", results_path)
 
     total = len(results)
-    with_crashes = sum(1 for r in results if r.get("crash_times"))
+    # Real target-bug finds only (not slow-units/timeouts/OOMs/boundary artifacts).
+    with_crashes = sum(
+        1 for r in results
+        if crash_classify.trial_found_bug(r.get("crash_times"), r.get("max_total_time"))
+    )
     print(f"\n=== Trial Summary ===")
     print(f"  Total completed: {total}")
-    print(f"  Found crashes: {with_crashes}")
+    print(f"  Found target bug: {with_crashes}")
     print(f"  Results: {results_path}")
     print()
 

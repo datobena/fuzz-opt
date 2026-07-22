@@ -1,0 +1,66 @@
+{
+  "kube2_replay_1775": {
+    "kube2-optimized": {
+      "median_s": 0.74,
+      "all_ms": [
+        1132,
+        742,
+        733
+      ],
+      "crashed": false,
+      "units": 1776
+    },
+    "newkube1-optimized": {
+      "median_s": 2.1,
+      "all_ms": [
+        2100,
+        2105,
+        1974
+      ],
+      "crashed": false,
+      "units": 1776
+    },
+    "baseline": {
+      "median_s": 3.52,
+      "all_ms": [
+        3720,
+        3519,
+        2791
+      ],
+      "crashed": false,
+      "units": 1776
+    }
+  },
+  "newkube1_replay_13548": {
+    "newkube1-optimized": {
+      "median_s": 513.28,
+      "all_ms": [
+        533255,
+        513283,
+        504664
+      ],
+      "crashed": false,
+      "units": 13549
+    },
+    "kube2-optimized": {
+      "median_s": 728.45,
+      "all_ms": [
+        754410,
+        728454,
+        688431
+      ],
+      "crashed": false,
+      "units": 13549
+    },
+    "baseline": {
+      "median_s": 744.3,
+      "all_ms": [
+        928183,
+        744303,
+        686826
+      ],
+      "crashed": false,
+      "units": 13549
+    }
+  }
+}

@@ -1,0 +1,145 @@
+[
+  {
+    "project": "libxml2",
+    "local_id": 1972,
+    "image": "n132/arvo:1972-vul",
+    "fuzz_target": "libxml2_xml_read_memory_fuzzer",
+    "crash_type": "Stack-buffer-overflow WRITE {*}",
+    "observed_crash": "stack-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/libxml2.git"
+  },
+  {
+    "project": "c-blosc2",
+    "local_id": 24837,
+    "image": "n132/arvo:24837-vul",
+    "fuzz_target": "decompress_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/Blosc/c-blosc2.git"
+  },
+  {
+    "project": "wolfssl",
+    "local_id": 26567,
+    "image": "n132/arvo:26567-vul",
+    "fuzz_target": "fuzzer-wolfssl-rsa",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/wolfssl/wolfssl"
+  },
+  {
+    "project": "libavc",
+    "local_id": 16505,
+    "image": "n132/arvo:16505-vul",
+    "fuzz_target": "avc_dec_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://android.googlesource.com/platform/external/libavc"
+  },
+  {
+    "project": "assimp",
+    "local_id": 24463,
+    "image": "n132/arvo:24463-vul",
+    "fuzz_target": "assimp_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/assimp/assimp.git"
+  },
+  {
+    "project": "PcapPlusPlus",
+    "local_id": 22232,
+    "image": "n132/arvo:22232-vul",
+    "fuzz_target": "FuzzTarget",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/seladb/PcapPlusPlus"
+  },
+  {
+    "project": "open62541",
+    "local_id": 3609,
+    "image": "n132/arvo:3609-vul",
+    "fuzz_target": "fuzz_binary_message",
+    "crash_type": "Negative-size-param",
+    "observed_crash": "negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/open62541/open62541.git"
+  },
+  {
+    "project": "radare2",
+    "local_id": 10222,
+    "image": "n132/arvo:10222-vul",
+    "fuzz_target": "ia_fuzz",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/radare/radare2"
+  },
+  {
+    "project": "libredwg",
+    "local_id": 31419,
+    "image": "n132/arvo:31419-vul",
+    "fuzz_target": "llvmfuzz",
+    "crash_type": "Heap-buffer-overflow READ 7",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/LibreDWG/libredwg"
+  },
+  {
+    "project": "graphicsmagick",
+    "local_id": 8280,
+    "image": "n132/arvo:8280-vul",
+    "fuzz_target": "coder_PTIF_fuzzer",
+    "crash_type": "Heap-double-free",
+    "observed_crash": "attempting",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://foss.heptapod.net/graphicsmagick/graphicsmagick"
+  },
+  {
+    "project": "lcms",
+    "local_id": 756,
+    "image": "n132/arvo:756-vul",
+    "fuzz_target": "cms_transform_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/mm2/Little-CMS.git"
+  },
+  {
+    "project": "yara",
+    "local_id": 3848,
+    "image": "n132/arvo:3848-vul",
+    "fuzz_target": "pe_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "observed_crash": "heap-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/VirusTotal/yara.git"
+  },
+  {
+    "project": "freeradius-server",
+    "local_id": 38283,
+    "image": "n132/arvo:38283-vul",
+    "fuzz_target": "fuzzer_tacacs",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "observed_crash": "global-buffer-overflow",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "repo_addr": "https://github.com/FreeRADIUS/freeradius-server.git"
+  }
+]

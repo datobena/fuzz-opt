@@ -5,7 +5,7 @@ from pathlib import Path
 
 def _load_replay_module():
     path = Path(
-        "/home/sefcom/.codex/skills/apply-profile-guided-folds/scripts/"
+        "/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts/"
         "replay_timing.py"
     )
     spec = importlib.util.spec_from_file_location("replay_timing", path)
@@ -40,6 +40,11 @@ def test_replay_command_is_deterministic_non_mutating(tmp_path):
     assert "-runs=0" in joined
     assert "-seed=1337" in joined
     assert "exec /out/demo_fuzzer /corpus" in joined
+    # Leak detection OFF: a benign leak in a corpus input must not abort the
+    # replay (would truncate timing and make the two binaries replay a different
+    # number of units). We time exec speed, not leak-check.
+    assert "-detect_leaks=0" in joined
+    assert "ASAN_OPTIONS=detect_leaks=0" in joined
 
 
 def test_median_of_takes_middle_value():

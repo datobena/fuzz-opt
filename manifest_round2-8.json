@@ -1,0 +1,66 @@
+[
+  {
+    "project": "freeradius-server",
+    "cve": "arvo-38283",
+    "local_id": 38283,
+    "image": "n132/arvo:38283-vul",
+    "fuzz_target": "fuzzer_tacacs",
+    "crash_type": "Global-buffer-overflow READ 1"
+  },
+  {
+    "project": "graphicsmagick",
+    "cve": "arvo-8280",
+    "local_id": 8280,
+    "image": "n132/arvo:8280-vul",
+    "fuzz_target": "coder_PTIF_fuzzer",
+    "crash_type": "Heap-double-free"
+  },
+  {
+    "project": "hunspell",
+    "cve": "arvo-51102",
+    "local_id": 51102,
+    "image": "n132/arvo:51102-vul",
+    "fuzz_target": "affdicfuzzer",
+    "crash_type": "Heap-buffer-overflow READ 2"
+  },
+  {
+    "project": "libjxl",
+    "cve": "arvo-35172",
+    "local_id": 35172,
+    "image": "n132/arvo:35172-vul",
+    "fuzz_target": "djxl_fuzzer",
+    "crash_type": "Heap-buffer-overflow WRITE 4"
+  },
+  {
+    "project": "libredwg",
+    "cve": "arvo-31419",
+    "local_id": 31419,
+    "image": "n132/arvo:31419-vul",
+    "fuzz_target": "llvmfuzz",
+    "crash_type": "Heap-buffer-overflow READ 7"
+  },
+  {
+    "project": "radare2",
+    "cve": "arvo-10222",
+    "local_id": 10222,
+    "image": "n132/arvo:10222-vul",
+    "fuzz_target": "ia_fuzz",
+    "crash_type": "Heap-buffer-overflow READ 8"
+  },
+  {
+    "project": "sleuthkit",
+    "cve": "arvo-24893",
+    "local_id": 24893,
+    "image": "n132/arvo:24893-vul",
+    "fuzz_target": "sleuthkit_fls_ext_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  },
+  {
+    "project": "yara",
+    "cve": "arvo-3848",
+    "local_id": 3848,
+    "image": "n132/arvo:3848-vul",
+    "fuzz_target": "pe_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  }
+]

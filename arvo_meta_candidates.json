@@ -1,0 +1,4432 @@
+[
+  {
+    "project": "libredwg",
+    "local_id": 31419,
+    "image": "n132/arvo:31419-vul",
+    "crash_type": "Heap-buffer-overflow READ 7",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/LibreDWG/libredwg"
+  },
+  {
+    "project": "libredwg",
+    "local_id": 31425,
+    "image": "n132/arvo:31425-vul",
+    "crash_type": "Heap-buffer-overflow READ 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/LibreDWG/libredwg"
+  },
+  {
+    "project": "libredwg",
+    "local_id": 31454,
+    "image": "n132/arvo:31454-vul",
+    "crash_type": "Heap-buffer-overflow READ 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/LibreDWG/libredwg"
+  },
+  {
+    "project": "c-blosc2",
+    "local_id": 24837,
+    "image": "n132/arvo:24837-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Blosc/c-blosc2.git"
+  },
+  {
+    "project": "c-blosc2",
+    "local_id": 25118,
+    "image": "n132/arvo:25118-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Blosc/c-blosc2.git"
+  },
+  {
+    "project": "c-blosc2",
+    "local_id": 26171,
+    "image": "n132/arvo:26171-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Blosc/c-blosc2.git"
+  },
+  {
+    "project": "wolfssl",
+    "local_id": 26567,
+    "image": "n132/arvo:26567-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/wolfssl/wolfssl"
+  },
+  {
+    "project": "wolfssl",
+    "local_id": 27298,
+    "image": "n132/arvo:27298-vul",
+    "crash_type": "Heap-buffer-overflow READ 5",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/wolfssl/wolfssl"
+  },
+  {
+    "project": "wolfssl",
+    "local_id": 28991,
+    "image": "n132/arvo:28991-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/wolfssl/wolfssl"
+  },
+  {
+    "project": "libxml2",
+    "local_id": 1972,
+    "image": "n132/arvo:1972-vul",
+    "crash_type": "Stack-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "1",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/libxml2.git"
+  },
+  {
+    "project": "libxml2",
+    "local_id": 10304,
+    "image": "n132/arvo:10304-vul",
+    "crash_type": "Heap-use-after-free READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/libxml2.git"
+  },
+  {
+    "project": "libxml2",
+    "local_id": 10312,
+    "image": "n132/arvo:10312-vul",
+    "crash_type": "Heap-use-after-free READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/libxml2.git"
+  },
+  {
+    "project": "PcapPlusPlus",
+    "local_id": 22102,
+    "image": "n132/arvo:22102-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/seladb/PcapPlusPlus"
+  },
+  {
+    "project": "PcapPlusPlus",
+    "local_id": 22105,
+    "image": "n132/arvo:22105-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/seladb/PcapPlusPlus"
+  },
+  {
+    "project": "PcapPlusPlus",
+    "local_id": 22232,
+    "image": "n132/arvo:22232-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/seladb/PcapPlusPlus"
+  },
+  {
+    "project": "assimp",
+    "local_id": 24463,
+    "image": "n132/arvo:24463-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/assimp/assimp.git"
+  },
+  {
+    "project": "assimp",
+    "local_id": 24465,
+    "image": "n132/arvo:24465-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/assimp/assimp.git"
+  },
+  {
+    "project": "assimp",
+    "local_id": 24553,
+    "image": "n132/arvo:24553-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/assimp/assimp.git"
+  },
+  {
+    "project": "libavc",
+    "local_id": 16505,
+    "image": "n132/arvo:16505-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libavc"
+  },
+  {
+    "project": "libavc",
+    "local_id": 16514,
+    "image": "n132/arvo:16514-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libavc"
+  },
+  {
+    "project": "libavc",
+    "local_id": 16587,
+    "image": "n132/arvo:16587-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libavc"
+  },
+  {
+    "project": "graphicsmagick",
+    "local_id": 8280,
+    "image": "n132/arvo:8280-vul",
+    "crash_type": "Heap-double-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://foss.heptapod.net/graphicsmagick/graphicsmagick"
+  },
+  {
+    "project": "graphicsmagick",
+    "local_id": 8384,
+    "image": "n132/arvo:8384-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://foss.heptapod.net/graphicsmagick/graphicsmagick"
+  },
+  {
+    "project": "graphicsmagick",
+    "local_id": 8743,
+    "image": "n132/arvo:8743-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://foss.heptapod.net/graphicsmagick/graphicsmagick"
+  },
+  {
+    "project": "radare2",
+    "local_id": 10222,
+    "image": "n132/arvo:10222-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/radare/radare2"
+  },
+  {
+    "project": "radare2",
+    "local_id": 10487,
+    "image": "n132/arvo:10487-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/radare/radare2"
+  },
+  {
+    "project": "radare2",
+    "local_id": 11359,
+    "image": "n132/arvo:11359-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/radare/radare2"
+  },
+  {
+    "project": "open62541",
+    "local_id": 3609,
+    "image": "n132/arvo:3609-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/open62541/open62541.git"
+  },
+  {
+    "project": "open62541",
+    "local_id": 4097,
+    "image": "n132/arvo:4097-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/open62541/open62541.git"
+  },
+  {
+    "project": "open62541",
+    "local_id": 4296,
+    "image": "n132/arvo:4296-vul",
+    "crash_type": "Heap-double-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/open62541/open62541.git"
+  },
+  {
+    "project": "libjxl",
+    "local_id": 35172,
+    "image": "n132/arvo:35172-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libjxl/libjxl.git"
+  },
+  {
+    "project": "libjxl",
+    "local_id": 36485,
+    "image": "n132/arvo:36485-vul",
+    "crash_type": "Container-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libjxl/libjxl.git"
+  },
+  {
+    "project": "libjxl",
+    "local_id": 40396,
+    "image": "n132/arvo:40396-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libjxl/libjxl.git"
+  },
+  {
+    "project": "sleuthkit",
+    "local_id": 24893,
+    "image": "n132/arvo:24893-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/sleuthkit/sleuthkit"
+  },
+  {
+    "project": "sleuthkit",
+    "local_id": 24895,
+    "image": "n132/arvo:24895-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/sleuthkit/sleuthkit"
+  },
+  {
+    "project": "sleuthkit",
+    "local_id": 24901,
+    "image": "n132/arvo:24901-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/sleuthkit/sleuthkit"
+  },
+  {
+    "project": "freeradius-server",
+    "local_id": 38283,
+    "image": "n132/arvo:38283-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/FreeRADIUS/freeradius-server.git"
+  },
+  {
+    "project": "freeradius-server",
+    "local_id": 39657,
+    "image": "n132/arvo:39657-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/FreeRADIUS/freeradius-server.git"
+  },
+  {
+    "project": "freeradius-server",
+    "local_id": 39660,
+    "image": "n132/arvo:39660-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/FreeRADIUS/freeradius-server.git"
+  },
+  {
+    "project": "lcms",
+    "local_id": 756,
+    "image": "n132/arvo:756-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "2",
+    "repo_addr": "https://github.com/mm2/Little-CMS.git"
+  },
+  {
+    "project": "lcms",
+    "local_id": 852,
+    "image": "n132/arvo:852-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "2",
+    "repo_addr": "https://github.com/mm2/Little-CMS.git"
+  },
+  {
+    "project": "lcms",
+    "local_id": 910,
+    "image": "n132/arvo:910-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "2",
+    "repo_addr": "https://github.com/mm2/Little-CMS.git"
+  },
+  {
+    "project": "yara",
+    "local_id": 3848,
+    "image": "n132/arvo:3848-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/VirusTotal/yara.git"
+  },
+  {
+    "project": "yara",
+    "local_id": 3862,
+    "image": "n132/arvo:3862-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/VirusTotal/yara.git"
+  },
+  {
+    "project": "yara",
+    "local_id": 4112,
+    "image": "n132/arvo:4112-vul",
+    "crash_type": "Heap-double-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/VirusTotal/yara.git"
+  },
+  {
+    "project": "hunspell",
+    "local_id": 51102,
+    "image": "n132/arvo:51102-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/hunspell/hunspell.git"
+  },
+  {
+    "project": "hunspell",
+    "local_id": 51242,
+    "image": "n132/arvo:51242-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/hunspell/hunspell.git"
+  },
+  {
+    "project": "hunspell",
+    "local_id": 51437,
+    "image": "n132/arvo:51437-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/hunspell/hunspell.git"
+  },
+  {
+    "project": "arrow",
+    "local_id": 20113,
+    "image": "n132/arvo:20113-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/apache/arrow.git"
+  },
+  {
+    "project": "arrow",
+    "local_id": 20116,
+    "image": "n132/arvo:20116-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/apache/arrow.git"
+  },
+  {
+    "project": "arrow",
+    "local_id": 20186,
+    "image": "n132/arvo:20186-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/apache/arrow.git"
+  },
+  {
+    "project": "espeak-ng",
+    "local_id": 34285,
+    "image": "n132/arvo:34285-vul",
+    "crash_type": "Stack-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/espeak-ng/espeak-ng"
+  },
+  {
+    "project": "espeak-ng",
+    "local_id": 34298,
+    "image": "n132/arvo:34298-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/espeak-ng/espeak-ng"
+  },
+  {
+    "project": "espeak-ng",
+    "local_id": 34299,
+    "image": "n132/arvo:34299-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/espeak-ng/espeak-ng"
+  },
+  {
+    "project": "libhevc",
+    "local_id": 16804,
+    "image": "n132/arvo:16804-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libhevc"
+  },
+  {
+    "project": "libhevc",
+    "local_id": 16805,
+    "image": "n132/arvo:16805-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libhevc"
+  },
+  {
+    "project": "libhevc",
+    "local_id": 16817,
+    "image": "n132/arvo:16817-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libhevc"
+  },
+  {
+    "project": "pcl",
+    "local_id": 32178,
+    "image": "n132/arvo:32178-vul",
+    "crash_type": "Container-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/PointCloudLibrary/pcl"
+  },
+  {
+    "project": "pcl",
+    "local_id": 32184,
+    "image": "n132/arvo:32184-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/PointCloudLibrary/pcl"
+  },
+  {
+    "project": "pcl",
+    "local_id": 32228,
+    "image": "n132/arvo:32228-vul",
+    "crash_type": "Heap-buffer-overflow READ 10",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/PointCloudLibrary/pcl"
+  },
+  {
+    "project": "pcre2",
+    "local_id": 781,
+    "image": "n132/arvo:781-vul",
+    "crash_type": "Stack-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/PCRE2Project/pcre2"
+  },
+  {
+    "project": "pcre2",
+    "local_id": 783,
+    "image": "n132/arvo:783-vul",
+    "crash_type": "Stack-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/PCRE2Project/pcre2"
+  },
+  {
+    "project": "pcre2",
+    "local_id": 1859,
+    "image": "n132/arvo:1859-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/PCRE2Project/pcre2"
+  },
+  {
+    "project": "wasm3",
+    "local_id": 33078,
+    "image": "n132/arvo:33078-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/wasm3/wasm3"
+  },
+  {
+    "project": "wasm3",
+    "local_id": 33237,
+    "image": "n132/arvo:33237-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/wasm3/wasm3"
+  },
+  {
+    "project": "wasm3",
+    "local_id": 33318,
+    "image": "n132/arvo:33318-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/wasm3/wasm3"
+  },
+  {
+    "project": "libraw",
+    "local_id": 22978,
+    "image": "n132/arvo:22978-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libraw/libraw"
+  },
+  {
+    "project": "libraw",
+    "local_id": 23383,
+    "image": "n132/arvo:23383-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libraw/libraw"
+  },
+  {
+    "project": "libraw",
+    "local_id": 31181,
+    "image": "n132/arvo:31181-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libraw/libraw"
+  },
+  {
+    "project": "libdwarf",
+    "local_id": 56456,
+    "image": "n132/arvo:56456-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/davea42/libdwarf-code"
+  },
+  {
+    "project": "libdwarf",
+    "local_id": 56666,
+    "image": "n132/arvo:56666-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/davea42/libdwarf-code"
+  },
+  {
+    "project": "libdwarf",
+    "local_id": 56895,
+    "image": "n132/arvo:56895-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/davea42/libdwarf-code"
+  },
+  {
+    "project": "mupdf",
+    "local_id": 9325,
+    "image": "n132/arvo:9325-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/mupdf.git"
+  },
+  {
+    "project": "mupdf",
+    "local_id": 13940,
+    "image": "n132/arvo:13940-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/mupdf.git"
+  },
+  {
+    "project": "mupdf",
+    "local_id": 36463,
+    "image": "n132/arvo:36463-vul",
+    "crash_type": "Heap-use-after-free READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/mupdf.git"
+  },
+  {
+    "project": "perfetto",
+    "local_id": 13481,
+    "image": "n132/arvo:13481-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/perfetto/"
+  },
+  {
+    "project": "perfetto",
+    "local_id": 14753,
+    "image": "n132/arvo:14753-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/perfetto/"
+  },
+  {
+    "project": "perfetto",
+    "local_id": 15495,
+    "image": "n132/arvo:15495-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/perfetto/"
+  },
+  {
+    "project": "uWebSockets",
+    "local_id": 19957,
+    "image": "n132/arvo:19957-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/uNetworking/uWebSockets.git"
+  },
+  {
+    "project": "uWebSockets",
+    "local_id": 19966,
+    "image": "n132/arvo:19966-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/uNetworking/uWebSockets.git"
+  },
+  {
+    "project": "uWebSockets",
+    "local_id": 25381,
+    "image": "n132/arvo:25381-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/uNetworking/uWebSockets.git"
+  },
+  {
+    "project": "curl",
+    "local_id": 4161,
+    "image": "n132/arvo:4161-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/curl/curl.git"
+  },
+  {
+    "project": "curl",
+    "local_id": 5251,
+    "image": "n132/arvo:5251-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/curl/curl.git"
+  },
+  {
+    "project": "curl",
+    "local_id": 5421,
+    "image": "n132/arvo:5421-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/curl/curl.git"
+  },
+  {
+    "project": "icu",
+    "local_id": 15499,
+    "image": "n132/arvo:15499-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/unicode-org/icu.git"
+  },
+  {
+    "project": "icu",
+    "local_id": 44779,
+    "image": "n132/arvo:44779-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/unicode-org/icu.git"
+  },
+  {
+    "project": "icu",
+    "local_id": 62087,
+    "image": "n132/arvo:62087-vul",
+    "crash_type": "Stack-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/unicode-org/icu.git"
+  },
+  {
+    "project": "lwan",
+    "local_id": 14297,
+    "image": "n132/arvo:14297-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/lpereira/lwan.git"
+  },
+  {
+    "project": "lwan",
+    "local_id": 14455,
+    "image": "n132/arvo:14455-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/lpereira/lwan.git"
+  },
+  {
+    "project": "lwan",
+    "local_id": 14529,
+    "image": "n132/arvo:14529-vul",
+    "crash_type": "Global-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/lpereira/lwan.git"
+  },
+  {
+    "project": "aom",
+    "local_id": 10200,
+    "image": "n132/arvo:10200-vul",
+    "crash_type": "Heap-use-after-free WRITE 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://aomedia.googlesource.com/aom"
+  },
+  {
+    "project": "aom",
+    "local_id": 11523,
+    "image": "n132/arvo:11523-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://aomedia.googlesource.com/aom"
+  },
+  {
+    "project": "aom",
+    "local_id": 12549,
+    "image": "n132/arvo:12549-vul",
+    "crash_type": "Heap-buffer-overflow READ 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://aomedia.googlesource.com/aom"
+  },
+  {
+    "project": "libheif",
+    "local_id": 22094,
+    "image": "n132/arvo:22094-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/strukturag/libheif.git"
+  },
+  {
+    "project": "libheif",
+    "local_id": 24590,
+    "image": "n132/arvo:24590-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/strukturag/libheif.git"
+  },
+  {
+    "project": "libheif",
+    "local_id": 31444,
+    "image": "n132/arvo:31444-vul",
+    "crash_type": "Stack-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/strukturag/libheif.git"
+  },
+  {
+    "project": "samba",
+    "local_id": 19385,
+    "image": "n132/arvo:19385-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/samba-team/samba"
+  },
+  {
+    "project": "samba",
+    "local_id": 19405,
+    "image": "n132/arvo:19405-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/samba-team/samba"
+  },
+  {
+    "project": "samba",
+    "local_id": 19463,
+    "image": "n132/arvo:19463-vul",
+    "crash_type": "Heap-use-after-free READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/samba-team/samba"
+  },
+  {
+    "project": "duckdb",
+    "local_id": 40075,
+    "image": "n132/arvo:40075-vul",
+    "crash_type": "Stack-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/duckdb/duckdb"
+  },
+  {
+    "project": "duckdb",
+    "local_id": 48062,
+    "image": "n132/arvo:48062-vul",
+    "crash_type": "Heap-use-after-free READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/duckdb/duckdb"
+  },
+  {
+    "project": "duckdb",
+    "local_id": 56682,
+    "image": "n132/arvo:56682-vul",
+    "crash_type": "Container-overflow READ 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/duckdb/duckdb"
+  },
+  {
+    "project": "kamailio",
+    "local_id": 38048,
+    "image": "n132/arvo:38048-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/kamailio/kamailio"
+  },
+  {
+    "project": "kamailio",
+    "local_id": 38050,
+    "image": "n132/arvo:38050-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/kamailio/kamailio"
+  },
+  {
+    "project": "kamailio",
+    "local_id": 38052,
+    "image": "n132/arvo:38052-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/kamailio/kamailio"
+  },
+  {
+    "project": "libarchive",
+    "local_id": 13435,
+    "image": "n132/arvo:13435-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libarchive/libarchive.git"
+  },
+  {
+    "project": "libarchive",
+    "local_id": 15431,
+    "image": "n132/arvo:15431-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libarchive/libarchive.git"
+  },
+  {
+    "project": "libarchive",
+    "local_id": 19509,
+    "image": "n132/arvo:19509-vul",
+    "crash_type": "Heap-use-after-free READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libarchive/libarchive.git"
+  },
+  {
+    "project": "libexif",
+    "local_id": 37211,
+    "image": "n132/arvo:37211-vul",
+    "crash_type": "Heap-buffer-overflow READ 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libexif/libexif"
+  },
+  {
+    "project": "libexif",
+    "local_id": 37226,
+    "image": "n132/arvo:37226-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libexif/libexif"
+  },
+  {
+    "project": "libexif",
+    "local_id": 37570,
+    "image": "n132/arvo:37570-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libexif/libexif"
+  },
+  {
+    "project": "njs",
+    "local_id": 19844,
+    "image": "n132/arvo:19844-vul",
+    "crash_type": "Memcpy-param-overlap",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "http://hg.nginx.org/njs"
+  },
+  {
+    "project": "njs",
+    "local_id": 23561,
+    "image": "n132/arvo:23561-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "http://hg.nginx.org/njs"
+  },
+  {
+    "project": "njs",
+    "local_id": 64167,
+    "image": "n132/arvo:64167-vul",
+    "crash_type": "Stack-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "http://hg.nginx.org/njs"
+  },
+  {
+    "project": "zstd",
+    "local_id": 3522,
+    "image": "n132/arvo:3522-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/facebook/zstd"
+  },
+  {
+    "project": "zstd",
+    "local_id": 14368,
+    "image": "n132/arvo:14368-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/facebook/zstd"
+  },
+  {
+    "project": "zstd",
+    "local_id": 16445,
+    "image": "n132/arvo:16445-vul",
+    "crash_type": "Stack-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/facebook/zstd"
+  },
+  {
+    "project": "flac",
+    "local_id": 17069,
+    "image": "n132/arvo:17069-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/xiph/flac.git"
+  },
+  {
+    "project": "flac",
+    "local_id": 38347,
+    "image": "n132/arvo:38347-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/xiph/flac.git"
+  },
+  {
+    "project": "flac",
+    "local_id": 53454,
+    "image": "n132/arvo:53454-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/xiph/flac.git"
+  },
+  {
+    "project": "libgit2",
+    "local_id": 10999,
+    "image": "n132/arvo:10999-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libgit2/libgit2"
+  },
+  {
+    "project": "libgit2",
+    "local_id": 11004,
+    "image": "n132/arvo:11004-vul",
+    "crash_type": "Heap-buffer-overflow READ 13",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libgit2/libgit2"
+  },
+  {
+    "project": "libgit2",
+    "local_id": 11007,
+    "image": "n132/arvo:11007-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libgit2/libgit2"
+  },
+  {
+    "project": "libucl",
+    "local_id": 21578,
+    "image": "n132/arvo:21578-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/vstakhov/libucl"
+  },
+  {
+    "project": "libucl",
+    "local_id": 21579,
+    "image": "n132/arvo:21579-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/vstakhov/libucl"
+  },
+  {
+    "project": "libucl",
+    "local_id": 25626,
+    "image": "n132/arvo:25626-vul",
+    "crash_type": "Heap-buffer-overflow READ 7",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/vstakhov/libucl"
+  },
+  {
+    "project": "llvm-project",
+    "local_id": 20046,
+    "image": "n132/arvo:20046-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/llvm/llvm-project.git"
+  },
+  {
+    "project": "llvm-project",
+    "local_id": 20785,
+    "image": "n132/arvo:20785-vul",
+    "crash_type": "Use-after-poison READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/llvm/llvm-project.git"
+  },
+  {
+    "project": "llvm-project",
+    "local_id": 22386,
+    "image": "n132/arvo:22386-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/llvm/llvm-project.git"
+  },
+  {
+    "project": "muparser",
+    "local_id": 22927,
+    "image": "n132/arvo:22927-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/beltoforion/muparser.git"
+  },
+  {
+    "project": "muparser",
+    "local_id": 23123,
+    "image": "n132/arvo:23123-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/beltoforion/muparser.git"
+  },
+  {
+    "project": "muparser",
+    "local_id": 23330,
+    "image": "n132/arvo:23330-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/beltoforion/muparser.git"
+  },
+  {
+    "project": "rnp",
+    "local_id": 24267,
+    "image": "n132/arvo:24267-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rnpgp/rnp.git"
+  },
+  {
+    "project": "rnp",
+    "local_id": 24385,
+    "image": "n132/arvo:24385-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rnpgp/rnp.git"
+  },
+  {
+    "project": "rnp",
+    "local_id": 24528,
+    "image": "n132/arvo:24528-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rnpgp/rnp.git"
+  },
+  {
+    "project": "upx",
+    "local_id": 65518,
+    "image": "n132/arvo:65518-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/upx/upx.git"
+  },
+  {
+    "project": "upx",
+    "local_id": 65535,
+    "image": "n132/arvo:65535-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/upx/upx.git"
+  },
+  {
+    "project": "upx",
+    "local_id": 65864,
+    "image": "n132/arvo:65864-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/upx/upx.git"
+  },
+  {
+    "project": "freeimage-svn",
+    "local_id": 38233,
+    "image": "n132/arvo:38233-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://svn.code.sf.net/p/freeimage/svn"
+  },
+  {
+    "project": "freeimage-svn",
+    "local_id": 31768,
+    "image": "n132/arvo:31768-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://svn.code.sf.net/p/freeimage/svn"
+  },
+  {
+    "project": "freeimage-svn",
+    "local_id": 33197,
+    "image": "n132/arvo:33197-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://svn.code.sf.net/p/freeimage/svn"
+  },
+  {
+    "project": "igraph",
+    "local_id": 47947,
+    "image": "n132/arvo:47947-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/igraph/igraph"
+  },
+  {
+    "project": "igraph",
+    "local_id": 63590,
+    "image": "n132/arvo:63590-vul",
+    "crash_type": "Heap-use-after-free READ 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/igraph/igraph"
+  },
+  {
+    "project": "igraph",
+    "local_id": 63609,
+    "image": "n132/arvo:63609-vul",
+    "crash_type": "Heap-use-after-free READ 11",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/igraph/igraph"
+  },
+  {
+    "project": "kimageformats",
+    "local_id": 31495,
+    "image": "n132/arvo:31495-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/KDE/kimageformats.git"
+  },
+  {
+    "project": "kimageformats",
+    "local_id": 50884,
+    "image": "n132/arvo:50884-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/KDE/kimageformats.git"
+  },
+  {
+    "project": "kimageformats",
+    "local_id": 50919,
+    "image": "n132/arvo:50919-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/KDE/kimageformats.git"
+  },
+  {
+    "project": "libbpf",
+    "local_id": 40363,
+    "image": "n132/arvo:40363-vul",
+    "crash_type": "Global-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libbpf/libbpf"
+  },
+  {
+    "project": "libbpf",
+    "local_id": 43690,
+    "image": "n132/arvo:43690-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libbpf/libbpf"
+  },
+  {
+    "project": "libbpf",
+    "local_id": 46676,
+    "image": "n132/arvo:46676-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libbpf/libbpf"
+  },
+  {
+    "project": "libxaac",
+    "local_id": 61699,
+    "image": "n132/arvo:61699-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ittiam-systems/libxaac.git"
+  },
+  {
+    "project": "libxaac",
+    "local_id": 61825,
+    "image": "n132/arvo:61825-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ittiam-systems/libxaac.git"
+  },
+  {
+    "project": "libxaac",
+    "local_id": 61998,
+    "image": "n132/arvo:61998-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ittiam-systems/libxaac.git"
+  },
+  {
+    "project": "mosquitto",
+    "local_id": 55886,
+    "image": "n132/arvo:55886-vul",
+    "crash_type": "Heap-use-after-free READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/eclipse/mosquitto"
+  },
+  {
+    "project": "mosquitto",
+    "local_id": 55950,
+    "image": "n132/arvo:55950-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/eclipse/mosquitto"
+  },
+  {
+    "project": "mosquitto",
+    "local_id": 56009,
+    "image": "n132/arvo:56009-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/eclipse/mosquitto"
+  },
+  {
+    "project": "opus",
+    "local_id": 1944,
+    "image": "n132/arvo:1944-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/xiph/opus.git"
+  },
+  {
+    "project": "opus",
+    "local_id": 1947,
+    "image": "n132/arvo:1947-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/xiph/opus.git"
+  },
+  {
+    "project": "opus",
+    "local_id": 1949,
+    "image": "n132/arvo:1949-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/xiph/opus.git"
+  },
+  {
+    "project": "unicorn",
+    "local_id": 17193,
+    "image": "n132/arvo:17193-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/unicorn-engine/unicorn.git"
+  },
+  {
+    "project": "unicorn",
+    "local_id": 37291,
+    "image": "n132/arvo:37291-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/unicorn-engine/unicorn.git"
+  },
+  {
+    "project": "unicorn",
+    "local_id": 10445,
+    "image": "n132/arvo:10445-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/unicorn-engine/unicorn.git"
+  },
+  {
+    "project": "dav1d",
+    "local_id": 38369,
+    "image": "n132/arvo:38369-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://code.videolan.org/videolan/dav1d.git"
+  },
+  {
+    "project": "dav1d",
+    "local_id": 38439,
+    "image": "n132/arvo:38439-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://code.videolan.org/videolan/dav1d.git"
+  },
+  {
+    "project": "dav1d",
+    "local_id": 40661,
+    "image": "n132/arvo:40661-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://code.videolan.org/videolan/dav1d.git"
+  },
+  {
+    "project": "dnsmasq",
+    "local_id": 35858,
+    "image": "n132/arvo:35858-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://thekelleys.org.uk/dnsmasq.git"
+  },
+  {
+    "project": "dnsmasq",
+    "local_id": 35865,
+    "image": "n132/arvo:35865-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://thekelleys.org.uk/dnsmasq.git"
+  },
+  {
+    "project": "dnsmasq",
+    "local_id": 43299,
+    "image": "n132/arvo:43299-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://thekelleys.org.uk/dnsmasq.git"
+  },
+  {
+    "project": "gstreamer",
+    "local_id": 4039,
+    "image": "n132/arvo:4039-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://anongit.freedesktop.org/git/gstreamer/gstreamer"
+  },
+  {
+    "project": "gstreamer",
+    "local_id": 8159,
+    "image": "n132/arvo:8159-vul",
+    "crash_type": "Heap-buffer-overflow READ 12",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://anongit.freedesktop.org/git/gstreamer/gstreamer"
+  },
+  {
+    "project": "gstreamer",
+    "local_id": 52634,
+    "image": "n132/arvo:52634-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.freedesktop.org/gstreamer/gstreamer.git"
+  },
+  {
+    "project": "mongoose",
+    "local_id": 28474,
+    "image": "n132/arvo:28474-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/cesanta/mongoose"
+  },
+  {
+    "project": "mongoose",
+    "local_id": 53029,
+    "image": "n132/arvo:53029-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/cesanta/mongoose"
+  },
+  {
+    "project": "mongoose",
+    "local_id": 53038,
+    "image": "n132/arvo:53038-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/cesanta/mongoose"
+  },
+  {
+    "project": "ntopng",
+    "local_id": 59216,
+    "image": "n132/arvo:59216-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ntop/ntopng.git"
+  },
+  {
+    "project": "ntopng",
+    "local_id": 61894,
+    "image": "n132/arvo:61894-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ntop/ntopng.git"
+  },
+  {
+    "project": "ntopng",
+    "local_id": 65332,
+    "image": "n132/arvo:65332-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ntop/ntopng.git"
+  },
+  {
+    "project": "oniguruma",
+    "local_id": 21977,
+    "image": "n132/arvo:21977-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/kkos/oniguruma.git"
+  },
+  {
+    "project": "oniguruma",
+    "local_id": 53030,
+    "image": "n132/arvo:53030-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/kkos/oniguruma.git"
+  },
+  {
+    "project": "oniguruma",
+    "local_id": 53036,
+    "image": "n132/arvo:53036-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/kkos/oniguruma.git"
+  },
+  {
+    "project": "proj.4",
+    "local_id": 3569,
+    "image": "n132/arvo:3569-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/OSGeo/proj.4"
+  },
+  {
+    "project": "proj.4",
+    "local_id": 3630,
+    "image": "n132/arvo:3630-vul",
+    "crash_type": "Heap-use-after-free WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/OSGeo/proj.4"
+  },
+  {
+    "project": "proj.4",
+    "local_id": 5903,
+    "image": "n132/arvo:5903-vul",
+    "crash_type": "Stack-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/OSGeo/proj.4"
+  },
+  {
+    "project": "relic",
+    "local_id": 29993,
+    "image": "n132/arvo:29993-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/relic-toolkit/relic.git"
+  },
+  {
+    "project": "relic",
+    "local_id": 30328,
+    "image": "n132/arvo:30328-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/relic-toolkit/relic.git"
+  },
+  {
+    "project": "relic",
+    "local_id": 30537,
+    "image": "n132/arvo:30537-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/relic-toolkit/relic.git"
+  },
+  {
+    "project": "simdutf",
+    "local_id": 57540,
+    "image": "n132/arvo:57540-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/simdutf/simdutf"
+  },
+  {
+    "project": "simdutf",
+    "local_id": 57632,
+    "image": "n132/arvo:57632-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/simdutf/simdutf"
+  },
+  {
+    "project": "simdutf",
+    "local_id": 57670,
+    "image": "n132/arvo:57670-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/simdutf/simdutf"
+  },
+  {
+    "project": "sudo",
+    "local_id": 30236,
+    "image": "n132/arvo:30236-vul",
+    "crash_type": "Heap-double-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/sudo-project/sudo"
+  },
+  {
+    "project": "sudo",
+    "local_id": 30271,
+    "image": "n132/arvo:30271-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/sudo-project/sudo"
+  },
+  {
+    "project": "sudo",
+    "local_id": 37056,
+    "image": "n132/arvo:37056-vul",
+    "crash_type": "Heap-double-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/sudo-project/sudo"
+  },
+  {
+    "project": "zeek",
+    "local_id": 55430,
+    "image": "n132/arvo:55430-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/zeek/zeek"
+  },
+  {
+    "project": "zeek",
+    "local_id": 58540,
+    "image": "n132/arvo:58540-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/zeek/zeek"
+  },
+  {
+    "project": "zeek",
+    "local_id": 61344,
+    "image": "n132/arvo:61344-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/zeek/zeek"
+  },
+  {
+    "project": "flatbuffers",
+    "local_id": 30682,
+    "image": "n132/arvo:30682-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/flatbuffers"
+  },
+  {
+    "project": "flatbuffers",
+    "local_id": 30684,
+    "image": "n132/arvo:30684-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/flatbuffers"
+  },
+  {
+    "project": "flatbuffers",
+    "local_id": 42244,
+    "image": "n132/arvo:42244-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/flatbuffers"
+  },
+  {
+    "project": "fmt",
+    "local_id": 21763,
+    "image": "n132/arvo:21763-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/fmtlib/fmt.git"
+  },
+  {
+    "project": "fmt",
+    "local_id": 44763,
+    "image": "n132/arvo:44763-vul",
+    "crash_type": "Stack-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/fmtlib/fmt.git"
+  },
+  {
+    "project": "fmt",
+    "local_id": 44791,
+    "image": "n132/arvo:44791-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/fmtlib/fmt.git"
+  },
+  {
+    "project": "grpc",
+    "local_id": 1847,
+    "image": "n132/arvo:1847-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/grpc/grpc"
+  },
+  {
+    "project": "grpc",
+    "local_id": 1866,
+    "image": "n132/arvo:1866-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/grpc/grpc"
+  },
+  {
+    "project": "grpc",
+    "local_id": 3843,
+    "image": "n132/arvo:3843-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/grpc/grpc"
+  },
+  {
+    "project": "hostap",
+    "local_id": 15451,
+    "image": "n132/arvo:15451-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://w1.fi/srv/git/hostap.git"
+  },
+  {
+    "project": "hostap",
+    "local_id": 20363,
+    "image": "n132/arvo:20363-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://w1.fi/srv/git/hostap.git"
+  },
+  {
+    "project": "hostap",
+    "local_id": 20373,
+    "image": "n132/arvo:20373-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://w1.fi/srv/git/hostap.git"
+  },
+  {
+    "project": "json",
+    "local_id": 344,
+    "image": "n132/arvo:344-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/nlohmann/json.git"
+  },
+  {
+    "project": "json",
+    "local_id": 367,
+    "image": "n132/arvo:367-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/nlohmann/json.git"
+  },
+  {
+    "project": "json",
+    "local_id": 585,
+    "image": "n132/arvo:585-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/nlohmann/json.git"
+  },
+  {
+    "project": "libxslt",
+    "local_id": 57378,
+    "image": "n132/arvo:57378-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/libxslt.git"
+  },
+  {
+    "project": "libxslt",
+    "local_id": 57551,
+    "image": "n132/arvo:57551-vul",
+    "crash_type": "Heap-double-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/libxslt.git"
+  },
+  {
+    "project": "libxslt",
+    "local_id": 45284,
+    "image": "n132/arvo:45284-vul",
+    "crash_type": "Invalid-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/libxslt.git"
+  },
+  {
+    "project": "mdbtools",
+    "local_id": 28773,
+    "image": "n132/arvo:28773-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mdbtools/mdbtools"
+  },
+  {
+    "project": "mdbtools",
+    "local_id": 28779,
+    "image": "n132/arvo:28779-vul",
+    "crash_type": "Heap-buffer-overflow READ 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mdbtools/mdbtools"
+  },
+  {
+    "project": "mdbtools",
+    "local_id": 28780,
+    "image": "n132/arvo:28780-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mdbtools/mdbtools"
+  },
+  {
+    "project": "moddable",
+    "local_id": 47443,
+    "image": "n132/arvo:47443-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Moddable-OpenSource/moddable"
+  },
+  {
+    "project": "moddable",
+    "local_id": 47553,
+    "image": "n132/arvo:47553-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Moddable-OpenSource/moddable"
+  },
+  {
+    "project": "moddable",
+    "local_id": 48411,
+    "image": "n132/arvo:48411-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Moddable-OpenSource/moddable"
+  },
+  {
+    "project": "openexr",
+    "local_id": 46309,
+    "image": "n132/arvo:46309-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/AcademySoftwareFoundation/openexr"
+  },
+  {
+    "project": "openexr",
+    "local_id": 49698,
+    "image": "n132/arvo:49698-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/AcademySoftwareFoundation/openexr"
+  },
+  {
+    "project": "openexr",
+    "local_id": 52730,
+    "image": "n132/arvo:52730-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/AcademySoftwareFoundation/openexr"
+  },
+  {
+    "project": "poppler",
+    "local_id": 11244,
+    "image": "n132/arvo:11244-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://anongit.freedesktop.org/git/poppler/poppler.git"
+  },
+  {
+    "project": "poppler",
+    "local_id": 12797,
+    "image": "n132/arvo:12797-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://anongit.freedesktop.org/git/poppler/poppler.git"
+  },
+  {
+    "project": "poppler",
+    "local_id": 25221,
+    "image": "n132/arvo:25221-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://anongit.freedesktop.org/git/poppler/poppler.git"
+  },
+  {
+    "project": "qemu",
+    "local_id": 57023,
+    "image": "n132/arvo:57023-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.qemu.org/git/qemu.git"
+  },
+  {
+    "project": "qemu",
+    "local_id": 58513,
+    "image": "n132/arvo:58513-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.qemu.org/git/qemu.git"
+  },
+  {
+    "project": "qemu",
+    "local_id": 59243,
+    "image": "n132/arvo:59243-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.qemu.org/git/qemu.git"
+  },
+  {
+    "project": "rdkit",
+    "local_id": 22242,
+    "image": "n132/arvo:22242-vul",
+    "crash_type": "Container-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rdkit/rdkit.git"
+  },
+  {
+    "project": "rdkit",
+    "local_id": 23352,
+    "image": "n132/arvo:23352-vul",
+    "crash_type": "Stack-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rdkit/rdkit.git"
+  },
+  {
+    "project": "rdkit",
+    "local_id": 24537,
+    "image": "n132/arvo:24537-vul",
+    "crash_type": "Stack-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rdkit/rdkit.git"
+  },
+  {
+    "project": "readstat",
+    "local_id": 13076,
+    "image": "n132/arvo:13076-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/WizardMac/ReadStat"
+  },
+  {
+    "project": "readstat",
+    "local_id": 13262,
+    "image": "n132/arvo:13262-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/WizardMac/ReadStat"
+  },
+  {
+    "project": "readstat",
+    "local_id": 15050,
+    "image": "n132/arvo:15050-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/WizardMac/ReadStat"
+  },
+  {
+    "project": "tinygltf",
+    "local_id": 35426,
+    "image": "n132/arvo:35426-vul",
+    "crash_type": "Heap-buffer-overflow READ 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/syoyo/tinygltf.git"
+  },
+  {
+    "project": "tinygltf",
+    "local_id": 39622,
+    "image": "n132/arvo:39622-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/syoyo/tinygltf.git"
+  },
+  {
+    "project": "tinygltf",
+    "local_id": 34386,
+    "image": "n132/arvo:34386-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/syoyo/tinygltf.git"
+  },
+  {
+    "project": "wabt",
+    "local_id": 30792,
+    "image": "n132/arvo:30792-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/WebAssembly/wabt"
+  },
+  {
+    "project": "wabt",
+    "local_id": 22273,
+    "image": "n132/arvo:22273-vul",
+    "crash_type": "Segv on unknown address",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/WebAssembly/wabt"
+  },
+  {
+    "project": "wabt",
+    "local_id": 20364,
+    "image": "n132/arvo:20364-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/WebAssembly/wabt"
+  },
+  {
+    "project": "wget2",
+    "local_id": 14427,
+    "image": "n132/arvo:14427-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/gnuwget/wget2.git"
+  },
+  {
+    "project": "wget2",
+    "local_id": 14428,
+    "image": "n132/arvo:14428-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/gnuwget/wget2.git"
+  },
+  {
+    "project": "wget2",
+    "local_id": 14448,
+    "image": "n132/arvo:14448-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/gnuwget/wget2.git"
+  },
+  {
+    "project": "ClickHouse",
+    "local_id": 52748,
+    "image": "n132/arvo:52748-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ClickHouse/ClickHouse"
+  },
+  {
+    "project": "ClickHouse",
+    "local_id": 52778,
+    "image": "n132/arvo:52778-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ClickHouse/ClickHouse"
+  },
+  {
+    "project": "ClickHouse",
+    "local_id": 53024,
+    "image": "n132/arvo:53024-vul",
+    "crash_type": "Container-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/ClickHouse/ClickHouse"
+  },
+  {
+    "project": "bitcoin-core",
+    "local_id": 34657,
+    "image": "n132/arvo:34657-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/bitcoin/bitcoin.git"
+  },
+  {
+    "project": "bitcoin-core",
+    "local_id": 34073,
+    "image": "n132/arvo:34073-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/bitcoin/bitcoin.git"
+  },
+  {
+    "project": "bitcoin-core",
+    "local_id": 40841,
+    "image": "n132/arvo:40841-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/bitcoin/bitcoin.git"
+  },
+  {
+    "project": "capstonenext",
+    "local_id": 8867,
+    "image": "n132/arvo:8867-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/aquynh/capstone.git"
+  },
+  {
+    "project": "capstonenext",
+    "local_id": 12953,
+    "image": "n132/arvo:12953-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/aquynh/capstone.git"
+  },
+  {
+    "project": "capstonenext",
+    "local_id": 13429,
+    "image": "n132/arvo:13429-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/aquynh/capstone.git"
+  },
+  {
+    "project": "cyclonedds",
+    "local_id": 57614,
+    "image": "n132/arvo:57614-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/eclipse-cyclonedds/cyclonedds"
+  },
+  {
+    "project": "cyclonedds",
+    "local_id": 60514,
+    "image": "n132/arvo:60514-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/eclipse-cyclonedds/cyclonedds"
+  },
+  {
+    "project": "cyclonedds",
+    "local_id": 51292,
+    "image": "n132/arvo:51292-vul",
+    "crash_type": "Segv on unknown address",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/eclipse-cyclonedds/cyclonedds"
+  },
+  {
+    "project": "draco",
+    "local_id": 27950,
+    "image": "n132/arvo:27950-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/draco"
+  },
+  {
+    "project": "draco",
+    "local_id": 31587,
+    "image": "n132/arvo:31587-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/draco"
+  },
+  {
+    "project": "draco",
+    "local_id": 33227,
+    "image": "n132/arvo:33227-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/draco"
+  },
+  {
+    "project": "exiv2",
+    "local_id": 45302,
+    "image": "n132/arvo:45302-vul",
+    "crash_type": "Container-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Exiv2/exiv2"
+  },
+  {
+    "project": "exiv2",
+    "local_id": 45993,
+    "image": "n132/arvo:45993-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Exiv2/exiv2"
+  },
+  {
+    "project": "exiv2",
+    "local_id": 50629,
+    "image": "n132/arvo:50629-vul",
+    "crash_type": "Heap-buffer-overflow READ 5",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Exiv2/exiv2"
+  },
+  {
+    "project": "geos",
+    "local_id": 41356,
+    "image": "n132/arvo:41356-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.osgeo.org/gitea/geos/geos.git"
+  },
+  {
+    "project": "geos",
+    "local_id": 51083,
+    "image": "n132/arvo:51083-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.osgeo.org/gitea/geos/geos.git"
+  },
+  {
+    "project": "geos",
+    "local_id": 33474,
+    "image": "n132/arvo:33474-vul",
+    "crash_type": "Stack-use-after-scope READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.osgeo.org/gitea/geos/geos.git"
+  },
+  {
+    "project": "jbig2dec",
+    "local_id": 20358,
+    "image": "n132/arvo:20358-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/jbig2dec.git"
+  },
+  {
+    "project": "jbig2dec",
+    "local_id": 20440,
+    "image": "n132/arvo:20440-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/jbig2dec.git"
+  },
+  {
+    "project": "jbig2dec",
+    "local_id": 29213,
+    "image": "n132/arvo:29213-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/jbig2dec.git"
+  },
+  {
+    "project": "karchive",
+    "local_id": 14959,
+    "image": "n132/arvo:14959-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/KDE/karchive.git"
+  },
+  {
+    "project": "karchive",
+    "local_id": 14961,
+    "image": "n132/arvo:14961-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/KDE/karchive.git"
+  },
+  {
+    "project": "karchive",
+    "local_id": 14980,
+    "image": "n132/arvo:14980-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/KDE/karchive.git"
+  },
+  {
+    "project": "libmpeg2",
+    "local_id": 23199,
+    "image": "n132/arvo:23199-vul",
+    "crash_type": "Memcpy-param-overlap",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libmpeg2"
+  },
+  {
+    "project": "libmpeg2",
+    "local_id": 16813,
+    "image": "n132/arvo:16813-vul",
+    "crash_type": "UNKNOWN WRITE",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libmpeg2"
+  },
+  {
+    "project": "libmpeg2",
+    "local_id": 17084,
+    "image": "n132/arvo:17084-vul",
+    "crash_type": "UNKNOWN WRITE",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/libmpeg2"
+  },
+  {
+    "project": "libplist",
+    "local_id": 44089,
+    "image": "n132/arvo:44089-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libimobiledevice/libplist"
+  },
+  {
+    "project": "libplist",
+    "local_id": 44574,
+    "image": "n132/arvo:44574-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libimobiledevice/libplist"
+  },
+  {
+    "project": "libplist",
+    "local_id": 44695,
+    "image": "n132/arvo:44695-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libimobiledevice/libplist"
+  },
+  {
+    "project": "libspng",
+    "local_id": 16091,
+    "image": "n132/arvo:16091-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/randy408/libspng.git"
+  },
+  {
+    "project": "libspng",
+    "local_id": 16830,
+    "image": "n132/arvo:16830-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/randy408/libspng.git"
+  },
+  {
+    "project": "libspng",
+    "local_id": 14935,
+    "image": "n132/arvo:14935-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/randy408/libspng.git"
+  },
+  {
+    "project": "lxc",
+    "local_id": 32474,
+    "image": "n132/arvo:32474-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/lxc/lxc"
+  },
+  {
+    "project": "lxc",
+    "local_id": 32483,
+    "image": "n132/arvo:32483-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/lxc/lxc"
+  },
+  {
+    "project": "lxc",
+    "local_id": 33556,
+    "image": "n132/arvo:33556-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/lxc/lxc"
+  },
+  {
+    "project": "md4c",
+    "local_id": 31332,
+    "image": "n132/arvo:31332-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mity/md4c"
+  },
+  {
+    "project": "md4c",
+    "local_id": 31333,
+    "image": "n132/arvo:31333-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mity/md4c"
+  },
+  {
+    "project": "md4c",
+    "local_id": 43587,
+    "image": "n132/arvo:43587-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mity/md4c"
+  },
+  {
+    "project": "net-snmp",
+    "local_id": 36962,
+    "image": "n132/arvo:36962-vul",
+    "crash_type": "Stack-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/net-snmp/net-snmp.git"
+  },
+  {
+    "project": "net-snmp",
+    "local_id": 37564,
+    "image": "n132/arvo:37564-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/net-snmp/net-snmp"
+  },
+  {
+    "project": "net-snmp",
+    "local_id": 37759,
+    "image": "n132/arvo:37759-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/net-snmp/net-snmp"
+  },
+  {
+    "project": "qt/qtqa",
+    "local_id": 59630,
+    "image": "n132/arvo:59630-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://code.qt.io/qt/qtqa.git"
+  },
+  {
+    "project": "qt/qtqa",
+    "local_id": 64468,
+    "image": "n132/arvo:64468-vul",
+    "crash_type": "Heap-use-after-free READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://code.qt.io/qt/qtqa.git"
+  },
+  {
+    "project": "qt/qtqa",
+    "local_id": 67941,
+    "image": "n132/arvo:67941-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://code.qt.io/qt/qtqa.git"
+  },
+  {
+    "project": "quickjs",
+    "local_id": 46701,
+    "image": "n132/arvo:46701-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/bellard/quickjs"
+  },
+  {
+    "project": "quickjs",
+    "local_id": 48924,
+    "image": "n132/arvo:48924-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/bellard/quickjs"
+  },
+  {
+    "project": "quickjs",
+    "local_id": 65393,
+    "image": "n132/arvo:65393-vul",
+    "crash_type": "Heap-use-after-free WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/bellard/quickjs"
+  },
+  {
+    "project": "tarantool",
+    "local_id": 62327,
+    "image": "n132/arvo:62327-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tarantool/tarantool"
+  },
+  {
+    "project": "tarantool",
+    "local_id": 62337,
+    "image": "n132/arvo:62337-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tarantool/tarantool"
+  },
+  {
+    "project": "tarantool",
+    "local_id": 60842,
+    "image": "n132/arvo:60842-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tarantool/tarantool"
+  },
+  {
+    "project": "bloaty",
+    "local_id": 5873,
+    "image": "n132/arvo:5873-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/bloaty.git"
+  },
+  {
+    "project": "bloaty",
+    "local_id": 36948,
+    "image": "n132/arvo:36948-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/bloaty.git"
+  },
+  {
+    "project": "boringssl",
+    "local_id": 9808,
+    "image": "n132/arvo:9808-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://boringssl.googlesource.com/boringssl"
+  },
+  {
+    "project": "boringssl",
+    "local_id": 55556,
+    "image": "n132/arvo:55556-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://boringssl.googlesource.com/boringssl"
+  },
+  {
+    "project": "c-ares",
+    "local_id": 15373,
+    "image": "n132/arvo:15373-vul",
+    "crash_type": "Heap-buffer-overflow READ 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/c-ares/c-ares.git"
+  },
+  {
+    "project": "c-ares",
+    "local_id": 15459,
+    "image": "n132/arvo:15459-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/c-ares/c-ares.git"
+  },
+  {
+    "project": "c-blosc",
+    "local_id": 23794,
+    "image": "n132/arvo:23794-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Blosc/c-blosc.git"
+  },
+  {
+    "project": "c-blosc",
+    "local_id": 38313,
+    "image": "n132/arvo:38313-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Blosc/c-blosc.git"
+  },
+  {
+    "project": "clamav-devel",
+    "local_id": 21960,
+    "image": "n132/arvo:21960-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Cisco-Talos/clamav-devel.git"
+  },
+  {
+    "project": "clamav-devel",
+    "local_id": 23499,
+    "image": "n132/arvo:23499-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Cisco-Talos/clamav-devel.git"
+  },
+  {
+    "project": "croaring",
+    "local_id": 56710,
+    "image": "n132/arvo:56710-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/RoaringBitmap/CRoaring"
+  },
+  {
+    "project": "croaring",
+    "local_id": 56893,
+    "image": "n132/arvo:56893-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/RoaringBitmap/CRoaring"
+  },
+  {
+    "project": "elfutils",
+    "local_id": 42264,
+    "image": "n132/arvo:42264-vul",
+    "crash_type": "Stack-use-after-return READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://sourceware.org/git/elfutils.git"
+  },
+  {
+    "project": "elfutils",
+    "local_id": 43307,
+    "image": "n132/arvo:43307-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://sourceware.org/git/elfutils.git"
+  },
+  {
+    "project": "glib",
+    "local_id": 23818,
+    "image": "n132/arvo:23818-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/glib"
+  },
+  {
+    "project": "glib",
+    "local_id": 42538,
+    "image": "n132/arvo:42538-vul",
+    "crash_type": "Heap-buffer-overflow READ 12",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.gnome.org/GNOME/glib"
+  },
+  {
+    "project": "glog",
+    "local_id": 58779,
+    "image": "n132/arvo:58779-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/glog"
+  },
+  {
+    "project": "glog",
+    "local_id": 63034,
+    "image": "n132/arvo:63034-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/glog"
+  },
+  {
+    "project": "gnutls",
+    "local_id": 1304,
+    "image": "n132/arvo:1304-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/gnutls/gnutls.git"
+  },
+  {
+    "project": "gnutls",
+    "local_id": 20406,
+    "image": "n132/arvo:20406-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/gnutls/gnutls.git"
+  },
+  {
+    "project": "h2o",
+    "local_id": 2623,
+    "image": "n132/arvo:2623-vul",
+    "crash_type": "Null-dereference READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/h2o/h2o"
+  },
+  {
+    "project": "h2o",
+    "local_id": 35675,
+    "image": "n132/arvo:35675-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/h2o/h2o"
+  },
+  {
+    "project": "hermes",
+    "local_id": 23725,
+    "image": "n132/arvo:23725-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/facebook/hermes.git"
+  },
+  {
+    "project": "hermes",
+    "local_id": 25815,
+    "image": "n132/arvo:25815-vul",
+    "crash_type": "Stack-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/facebook/hermes.git"
+  },
+  {
+    "project": "httpd",
+    "local_id": 37642,
+    "image": "n132/arvo:37642-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/apache/httpd"
+  },
+  {
+    "project": "httpd",
+    "local_id": 40985,
+    "image": "n132/arvo:40985-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/apache/httpd"
+  },
+  {
+    "project": "immer",
+    "local_id": 24173,
+    "image": "n132/arvo:24173-vul",
+    "crash_type": "Segv on unknown address",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/arximboldi/immer.git"
+  },
+  {
+    "project": "immer",
+    "local_id": 24287,
+    "image": "n132/arvo:24287-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/arximboldi/immer.git"
+  },
+  {
+    "project": "irssi",
+    "local_id": 31443,
+    "image": "n132/arvo:31443-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/irssi/irssi"
+  },
+  {
+    "project": "irssi",
+    "local_id": 33444,
+    "image": "n132/arvo:33444-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/irssi/irssi"
+  },
+  {
+    "project": "jasper",
+    "local_id": 33353,
+    "image": "n132/arvo:33353-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/jasper-software/jasper"
+  },
+  {
+    "project": "jasper",
+    "local_id": 49191,
+    "image": "n132/arvo:49191-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/jasper-software/jasper"
+  },
+  {
+    "project": "jsoncons",
+    "local_id": 33781,
+    "image": "n132/arvo:33781-vul",
+    "crash_type": "Container-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/danielaparker/jsoncons"
+  },
+  {
+    "project": "jsoncons",
+    "local_id": 34816,
+    "image": "n132/arvo:34816-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 6",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/danielaparker/jsoncons"
+  },
+  {
+    "project": "krb5",
+    "local_id": 51720,
+    "image": "n132/arvo:51720-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/krb5/krb5"
+  },
+  {
+    "project": "krb5",
+    "local_id": 51761,
+    "image": "n132/arvo:51761-vul",
+    "crash_type": "Memcpy-param-overlap",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/krb5/krb5"
+  },
+  {
+    "project": "libcoap",
+    "local_id": 26371,
+    "image": "n132/arvo:26371-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/obgm/libcoap.git"
+  },
+  {
+    "project": "libcoap",
+    "local_id": 31479,
+    "image": "n132/arvo:31479-vul",
+    "crash_type": "Global-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/obgm/libcoap.git"
+  },
+  {
+    "project": "libiec61850",
+    "local_id": 31339,
+    "image": "n132/arvo:31339-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mz-automation/libiec61850"
+  },
+  {
+    "project": "libiec61850",
+    "local_id": 31340,
+    "image": "n132/arvo:31340-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mz-automation/libiec61850"
+  },
+  {
+    "project": "libpsl",
+    "local_id": 38985,
+    "image": "n132/arvo:38985-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rockdaboot/libpsl.git"
+  },
+  {
+    "project": "libpsl",
+    "local_id": 39424,
+    "image": "n132/arvo:39424-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/rockdaboot/libpsl.git"
+  },
+  {
+    "project": "libsndfile",
+    "local_id": 25357,
+    "image": "n132/arvo:25357-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/erikd/libsndfile.git"
+  },
+  {
+    "project": "libsndfile",
+    "local_id": 26026,
+    "image": "n132/arvo:26026-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/erikd/libsndfile.git"
+  },
+  {
+    "project": "libspdm",
+    "local_id": 67585,
+    "image": "n132/arvo:67585-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/DMTF/libspdm.git"
+  },
+  {
+    "project": "libspdm",
+    "local_id": 67759,
+    "image": "n132/arvo:67759-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/DMTF/libspdm.git"
+  },
+  {
+    "project": "libssh2",
+    "local_id": 29769,
+    "image": "n132/arvo:29769-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libssh2/libssh2.git"
+  },
+  {
+    "project": "libssh2",
+    "local_id": 58291,
+    "image": "n132/arvo:58291-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libssh2/libssh2.git"
+  },
+  {
+    "project": "mbedtls",
+    "local_id": 63031,
+    "image": "n132/arvo:63031-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Mbed-TLS/mbedtls.git"
+  },
+  {
+    "project": "mbedtls",
+    "local_id": 62897,
+    "image": "n132/arvo:62897-vul",
+    "crash_type": "Segv on unknown address",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/Mbed-TLS/mbedtls.git"
+  },
+  {
+    "project": "openjpeg",
+    "local_id": 3305,
+    "image": "n132/arvo:3305-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/uclouvain/openjpeg"
+  },
+  {
+    "project": "openjpeg",
+    "local_id": 3331,
+    "image": "n132/arvo:3331-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/uclouvain/openjpeg"
+  },
+  {
+    "project": "ots",
+    "local_id": 919,
+    "image": "n132/arvo:919-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "2",
+    "repo_addr": "https://github.com/khaledhosny/ots.git"
+  },
+  {
+    "project": "ots",
+    "local_id": 7262,
+    "image": "n132/arvo:7262-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/khaledhosny/ots.git"
+  },
+  {
+    "project": "python-library-fuzzers",
+    "local_id": 58201,
+    "image": "n132/arvo:58201-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/guidovranken/python-library-fuzzers.git"
+  },
+  {
+    "project": "python-library-fuzzers",
+    "local_id": 58225,
+    "image": "n132/arvo:58225-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/guidovranken/python-library-fuzzers.git"
+  },
+  {
+    "project": "qpid-proton",
+    "local_id": 40723,
+    "image": "n132/arvo:40723-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/apache/qpid-proton.git"
+  },
+  {
+    "project": "qpid-proton",
+    "local_id": 40748,
+    "image": "n132/arvo:40748-vul",
+    "crash_type": "Heap-buffer-overflow READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/apache/qpid-proton.git"
+  },
+  {
+    "project": "qtqa",
+    "local_id": 29311,
+    "image": "n132/arvo:29311-vul",
+    "crash_type": "Global-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://code.qt.io/qt/qtqa.git"
+  },
+  {
+    "project": "qtqa",
+    "local_id": 43778,
+    "image": "n132/arvo:43778-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://code.qt.io/qt/qtqa.git"
+  },
+  {
+    "project": "simdjson",
+    "local_id": 26773,
+    "image": "n132/arvo:26773-vul",
+    "crash_type": "Stack-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/simdjson/simdjson.git"
+  },
+  {
+    "project": "simdjson",
+    "local_id": 26858,
+    "image": "n132/arvo:26858-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/simdjson/simdjson.git"
+  },
+  {
+    "project": "tesseract",
+    "local_id": 30771,
+    "image": "n132/arvo:30771-vul",
+    "crash_type": "Heap-use-after-free READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tesseract-ocr/tesseract"
+  },
+  {
+    "project": "tesseract",
+    "local_id": 32142,
+    "image": "n132/arvo:32142-vul",
+    "crash_type": "Container-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tesseract-ocr/tesseract"
+  },
+  {
+    "project": "tmux",
+    "local_id": 31106,
+    "image": "n132/arvo:31106-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tmux/tmux.git"
+  },
+  {
+    "project": "tmux",
+    "local_id": 47964,
+    "image": "n132/arvo:47964-vul",
+    "crash_type": "Stack-buffer-overflow READ 9",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tmux/tmux.git"
+  },
+  {
+    "project": "usrsctp",
+    "local_id": 18004,
+    "image": "n132/arvo:18004-vul",
+    "crash_type": "Heap-use-after-free READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/weinrank/usrsctp"
+  },
+  {
+    "project": "usrsctp",
+    "local_id": 18080,
+    "image": "n132/arvo:18080-vul",
+    "crash_type": "Heap-use-after-free WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/weinrank/usrsctp"
+  },
+  {
+    "project": "valijson",
+    "local_id": 29512,
+    "image": "n132/arvo:29512-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tristanpenman/valijson"
+  },
+  {
+    "project": "valijson",
+    "local_id": 29603,
+    "image": "n132/arvo:29603-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/tristanpenman/valijson"
+  },
+  {
+    "project": "FreeRDP",
+    "local_id": 59682,
+    "image": "n132/arvo:59682-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/FreeRDP/FreeRDP.git"
+  },
+  {
+    "project": "LibRaw",
+    "local_id": 67753,
+    "image": "n132/arvo:67753-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/LibRaw/LibRaw"
+  },
+  {
+    "project": "MapServer",
+    "local_id": 52410,
+    "image": "n132/arvo:52410-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/MapServer/MapServer"
+  },
+  {
+    "project": "S2OPC",
+    "local_id": 66311,
+    "image": "n132/arvo:66311-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/systerel/S2OPC"
+  },
+  {
+    "project": "WasmEdge",
+    "local_id": 62375,
+    "image": "n132/arvo:62375-vul",
+    "crash_type": "Segv on unknown address",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/WasmEdge/WasmEdge.git"
+  },
+  {
+    "project": "aac",
+    "local_id": 23796,
+    "image": "n132/arvo:23796-vul",
+    "crash_type": "Stack-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://android.googlesource.com/platform/external/aac/"
+  },
+  {
+    "project": "alembic",
+    "local_id": 25204,
+    "image": "n132/arvo:25204-vul",
+    "crash_type": "Segv on unknown address",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/alembic/alembic"
+  },
+  {
+    "project": "binutils-preconditions",
+    "local_id": 48980,
+    "image": "n132/arvo:48980-vul",
+    "crash_type": "Heap-double-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/DavidKorczynski/binutils-preconditions"
+  },
+  {
+    "project": "botan",
+    "local_id": 6581,
+    "image": "n132/arvo:6581-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/randombit/botan.git"
+  },
+  {
+    "project": "cpython3",
+    "local_id": 34110,
+    "image": "n132/arvo:34110-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/python/cpython.git"
+  },
+  {
+    "project": "cups",
+    "local_id": 54069,
+    "image": "n132/arvo:54069-vul",
+    "crash_type": "Heap-use-after-free READ {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/OpenPrinting/cups"
+  },
+  {
+    "project": "dawn",
+    "local_id": 48627,
+    "image": "n132/arvo:48627-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://dawn.googlesource.com/dawn"
+  },
+  {
+    "project": "faad2",
+    "local_id": 58287,
+    "image": "n132/arvo:58287-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/knik0/faad2"
+  },
+  {
+    "project": "fio",
+    "local_id": 29564,
+    "image": "n132/arvo:29564-vul",
+    "crash_type": "Heap-buffer-overflow READ 5",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/axboe/fio.git"
+  },
+  {
+    "project": "firebase-ios-sdk",
+    "local_id": 30570,
+    "image": "n132/arvo:30570-vul",
+    "crash_type": "Invalid-free",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/firebase/firebase-ios-sdk.git"
+  },
+  {
+    "project": "fribidi",
+    "local_id": 34696,
+    "image": "n132/arvo:34696-vul",
+    "crash_type": "Heap-use-after-free WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/fribidi/fribidi.git"
+  },
+  {
+    "project": "fuzzing",
+    "local_id": 34993,
+    "image": "n132/arvo:34993-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/fuzzing"
+  },
+  {
+    "project": "gnupg",
+    "local_id": 13730,
+    "image": "n132/arvo:13730-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.gnupg.org/gnupg.git"
+  },
+  {
+    "project": "gpsd",
+    "local_id": 61617,
+    "image": "n132/arvo:61617-vul",
+    "crash_type": "Stack-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/gpsd/gpsd"
+  },
+  {
+    "project": "haproxy",
+    "local_id": 23653,
+    "image": "n132/arvo:23653-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/haproxy/haproxy"
+  },
+  {
+    "project": "jsoncpp",
+    "local_id": 18140,
+    "image": "n132/arvo:18140-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/open-source-parsers/jsoncpp"
+  },
+  {
+    "project": "knot-dns",
+    "local_id": 37151,
+    "image": "n132/arvo:37151-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.labs.nic.cz/knot/knot-dns"
+  },
+  {
+    "project": "libass",
+    "local_id": 31301,
+    "image": "n132/arvo:31301-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libass/libass.git"
+  },
+  {
+    "project": "libjpeg-turbo.2.0.x",
+    "local_id": 60372,
+    "image": "n132/arvo:60372-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libjpeg-turbo/libjpeg-turbo"
+  },
+  {
+    "project": "libjpeg-turbo.main",
+    "local_id": 60766,
+    "image": "n132/arvo:60766-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libjpeg-turbo/libjpeg-turbo"
+  },
+  {
+    "project": "liblouis",
+    "local_id": 60723,
+    "image": "n132/arvo:60723-vul",
+    "crash_type": "Negative-size-param",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/liblouis/liblouis"
+  },
+  {
+    "project": "libpcap",
+    "local_id": 48863,
+    "image": "n132/arvo:48863-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/the-tcpdump-group/libpcap.git"
+  },
+  {
+    "project": "libprotobuf-mutator",
+    "local_id": 12803,
+    "image": "n132/arvo:12803-vul",
+    "crash_type": "Stack-use-after-return WRITE 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/libprotobuf-mutator.git"
+  },
+  {
+    "project": "libsass",
+    "local_id": 15893,
+    "image": "n132/arvo:15893-vul",
+    "crash_type": "Heap-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/sass/libsass.git"
+  },
+  {
+    "project": "libspectre",
+    "local_id": 19780,
+    "image": "n132/arvo:19780-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.freedesktop.org/libspectre/libspectre.git"
+  },
+  {
+    "project": "libssh",
+    "local_id": 10486,
+    "image": "n132/arvo:10486-vul",
+    "crash_type": "Stack-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.libssh.org/projects/libssh.git"
+  },
+  {
+    "project": "libtiff",
+    "local_id": 33311,
+    "image": "n132/arvo:33311-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.com/libtiff/libtiff"
+  },
+  {
+    "project": "libtpms",
+    "local_id": 36476,
+    "image": "n132/arvo:36476-vul",
+    "crash_type": "Stack-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/stefanberger/libtpms"
+  },
+  {
+    "project": "libusb",
+    "local_id": 30581,
+    "image": "n132/arvo:30581-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/libusb/libusb"
+  },
+  {
+    "project": "libvpx",
+    "local_id": 48609,
+    "image": "n132/arvo:48609-vul",
+    "crash_type": "Heap-buffer-overflow WRITE {*}",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://chromium.googlesource.com/webm/libvpx"
+  },
+  {
+    "project": "libwebsockets",
+    "local_id": 48959,
+    "image": "n132/arvo:48959-vul",
+    "crash_type": "Stack-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/warmcat/libwebsockets.git"
+  },
+  {
+    "project": "msquic",
+    "local_id": 52181,
+    "image": "n132/arvo:52181-vul",
+    "crash_type": "Stack-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/microsoft/msquic"
+  },
+  {
+    "project": "nccl",
+    "local_id": 58992,
+    "image": "n132/arvo:58992-vul",
+    "crash_type": "UNKNOWN WRITE",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/NVIDIA/nccl"
+  },
+  {
+    "project": "nginx",
+    "local_id": 37403,
+    "image": "n132/arvo:37403-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "http://hg.nginx.org/nginx/"
+  },
+  {
+    "project": "opencv",
+    "local_id": 48452,
+    "image": "n132/arvo:48452-vul",
+    "crash_type": "Segv on unknown address",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/opencv/opencv.git"
+  },
+  {
+    "project": "p11-kit",
+    "local_id": 57120,
+    "image": "n132/arvo:57120-vul",
+    "crash_type": "Global-buffer-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/p11-glue/p11-kit.git"
+  },
+  {
+    "project": "picotls",
+    "local_id": 13833,
+    "image": "n132/arvo:13833-vul",
+    "crash_type": "UNKNOWN READ",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/h2o/picotls"
+  },
+  {
+    "project": "postgis",
+    "local_id": 17599,
+    "image": "n132/arvo:17599-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://git.osgeo.org/gogs/postgis/postgis.git"
+  },
+  {
+    "project": "qpdf",
+    "local_id": 65777,
+    "image": "n132/arvo:65777-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/qpdf/qpdf.git"
+  },
+  {
+    "project": "spice-usbredir",
+    "local_id": 36861,
+    "image": "n132/arvo:36861-vul",
+    "crash_type": "Heap-use-after-free WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://gitlab.freedesktop.org/spice/usbredir.git"
+  },
+  {
+    "project": "stb",
+    "local_id": 38394,
+    "image": "n132/arvo:38394-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/nothings/stb.git"
+  },
+  {
+    "project": "tcmalloc",
+    "local_id": 58786,
+    "image": "n132/arvo:58786-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/tcmalloc"
+  },
+  {
+    "project": "tint",
+    "local_id": 42275,
+    "image": "n132/arvo:42275-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://dawn.googlesource.com/tint"
+  },
+  {
+    "project": "vlc",
+    "local_id": 38749,
+    "image": "n132/arvo:38749-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/videolan/vlc"
+  },
+  {
+    "project": "wpantund",
+    "local_id": 3490,
+    "image": "n132/arvo:3490-vul",
+    "crash_type": "Heap-use-after-free READ 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/openthread/wpantund"
+  },
+  {
+    "project": "wuffs",
+    "local_id": 32451,
+    "image": "n132/arvo:32451-vul",
+    "crash_type": "UNKNOWN WRITE",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/google/wuffs.git"
+  },
+  {
+    "project": "ghostpdl",
+    "local_id": 20652,
+    "image": "n132/arvo:20652-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/ghostpdl.git"
+  },
+  {
+    "project": "ghostpdl",
+    "local_id": 30715,
+    "image": "n132/arvo:30715-vul",
+    "crash_type": "Heap-use-after-free WRITE 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/ghostpdl.git"
+  },
+  {
+    "project": "ghostpdl",
+    "local_id": 42266,
+    "image": "n132/arvo:42266-vul",
+    "crash_type": "Global-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://git.ghostscript.com/ghostpdl.git"
+  },
+  {
+    "project": "skia",
+    "local_id": 6295,
+    "image": "n132/arvo:6295-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://skia.googlesource.com/skia.git"
+  },
+  {
+    "project": "skia",
+    "local_id": 6347,
+    "image": "n132/arvo:6347-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://skia.googlesource.com/skia.git"
+  },
+  {
+    "project": "skia",
+    "local_id": 6501,
+    "image": "n132/arvo:6501-vul",
+    "crash_type": "Heap-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://skia.googlesource.com/skia.git"
+  },
+  {
+    "project": "php-src",
+    "local_id": 19044,
+    "image": "n132/arvo:19044-vul",
+    "crash_type": "Heap-buffer-overflow READ 9",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/php/php-src.git"
+  },
+  {
+    "project": "php-src",
+    "local_id": 20301,
+    "image": "n132/arvo:20301-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/php/php-src.git"
+  },
+  {
+    "project": "php-src",
+    "local_id": 20320,
+    "image": "n132/arvo:20320-vul",
+    "crash_type": "Heap-use-after-free READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/php/php-src.git"
+  },
+  {
+    "project": "binutils-gdb",
+    "local_id": 18228,
+    "image": "n132/arvo:18228-vul",
+    "crash_type": "Global-buffer-overflow READ 4",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://sourceware.org/git/binutils-gdb.git"
+  },
+  {
+    "project": "binutils-gdb",
+    "local_id": 18615,
+    "image": "n132/arvo:18615-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 15",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://sourceware.org/git/binutils-gdb.git"
+  },
+  {
+    "project": "binutils-gdb",
+    "local_id": 19414,
+    "image": "n132/arvo:19414-vul",
+    "crash_type": "Stack-buffer-overflow WRITE 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://sourceware.org/git/binutils-gdb.git"
+  },
+  {
+    "project": "serenity",
+    "local_id": 28167,
+    "image": "n132/arvo:28167-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/SerenityOS/serenity"
+  },
+  {
+    "project": "serenity",
+    "local_id": 29338,
+    "image": "n132/arvo:29338-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/SerenityOS/serenity"
+  },
+  {
+    "project": "serenity",
+    "local_id": 30906,
+    "image": "n132/arvo:30906-vul",
+    "crash_type": "Heap-buffer-overflow READ 1",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/SerenityOS/serenity"
+  },
+  {
+    "project": "envoy",
+    "local_id": 25207,
+    "image": "n132/arvo:25207-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/envoyproxy/envoy.git"
+  },
+  {
+    "project": "envoy",
+    "local_id": 25510,
+    "image": "n132/arvo:25510-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/envoyproxy/envoy.git"
+  },
+  {
+    "project": "envoy",
+    "local_id": 26834,
+    "image": "n132/arvo:26834-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/envoyproxy/envoy.git"
+  },
+  {
+    "project": "libreoffice",
+    "local_id": 888,
+    "image": "n132/arvo:888-vul",
+    "crash_type": "Heap-use-after-free READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://anongit.freedesktop.org/libreoffice/core"
+  },
+  {
+    "project": "libreoffice",
+    "local_id": 893,
+    "image": "n132/arvo:893-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://anongit.freedesktop.org/libreoffice/core"
+  },
+  {
+    "project": "libreoffice",
+    "local_id": 974,
+    "image": "n132/arvo:974-vul",
+    "crash_type": "Container-overflow READ 8",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "git://anongit.freedesktop.org/libreoffice/core"
+  },
+  {
+    "project": "mysql-server",
+    "local_id": 58985,
+    "image": "n132/arvo:58985-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mysql/mysql-server"
+  },
+  {
+    "project": "mysql-server",
+    "local_id": 59005,
+    "image": "n132/arvo:59005-vul",
+    "crash_type": "Heap-buffer-overflow READ 2",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mysql/mysql-server"
+  },
+  {
+    "project": "mysql-server",
+    "local_id": 59283,
+    "image": "n132/arvo:59283-vul",
+    "crash_type": "Heap-buffer-overflow READ 3",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/mysql/mysql-server"
+  },
+  {
+    "project": "node",
+    "local_id": 55010,
+    "image": "n132/arvo:55010-vul",
+    "crash_type": "Heap-buffer-overflow WRITE 16",
+    "sanitizer": "asan",
+    "fuzzer": "libfuzzer",
+    "verify": "0",
+    "repo_addr": "https://github.com/nodejs/node"
+  }
+]

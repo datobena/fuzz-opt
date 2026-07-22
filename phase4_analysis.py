@@ -16,7 +16,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
-from lib import stats_util
+from lib import crash_classify, stats_util
 
 logging.basicConfig(
     level=logging.INFO,
@@ -180,38 +180,18 @@ def find_time_to_target_bug(
     trial_dir: str,
     trial_duration: int = None,
 ) -> float:
-    """Find the time to the first crash matching the target bug.
+    """Time to the first genuine target-bug crash, or the censored value.
 
-    If no matching crash is found, returns the censored value (trial duration).
+    Delegates the "is this a real target-bug crash?" decision to the canonical
+    classifier (lib/crash_classify), which excludes slow-units (crash_type
+    "unknown"), timeouts, OOMs, and the empty-input / end-of-run boundary
+    artifact. `target_crash_type` is retained as documentation of the expected
+    bug signature; the reproduction-based signature match lives in
+    crash_classify.verify_crash_reproduces for when the binary is available.
     """
     censored = float(trial_duration or config.TRIAL_DURATION_SECS)
-    if not crash_times:
-        return censored
-
-    # First, try to match by crash type
-    for crash in sorted(crash_times, key=lambda c: c["timestamp_s"]):
-        ct = crash.get("crash_type", "")
-
-        # If we have the crash type, try to match
-        if target_crash_type:
-            if matches_crash_type(ct, target_crash_type):
-                return crash["timestamp_s"]
-
-            # Also check by re-analyzing the crash artifact
-            artifact = crash.get("artifact", "")
-            artifact_path = os.path.join(
-                trial_dir, "crashes", artifact
-            )
-            if os.path.exists(artifact_path):
-                analyzed_type = analyze_crash_artifact(artifact_path, trial_dir)
-                if matches_crash_type(analyzed_type, target_crash_type):
-                    return crash["timestamp_s"]
-        else:
-            # No target type specified; any crash counts
-            if ct not in ("oom", "timeout"):
-                return crash["timestamp_s"]
-
-    return censored
+    ttb = crash_classify.trial_time_to_bug(crash_times, censored)
+    return ttb if ttb is not None else censored
 
 
 def matches_crash_type(actual: str, target: str) -> bool:

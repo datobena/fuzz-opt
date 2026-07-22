@@ -15,3 +15,16 @@ report_kube_records.json.gz
 
 # Local seed-corpus cache (data, not code)
 corpus_cache/
+
+# Bulk experiment data dirs (corpora/coverage replay artifacts, GB-scale) — never commit
+local_pinned/
+hotspotdiff/
+covdiff/
+covdiff_pertrial/
+covdiff_pertrial_aggr8h/
+covdiff_pertrial_mut8h/
+.cache/
+
+# Run logs and local run-marker pointer files
+*.log
+.*_logname

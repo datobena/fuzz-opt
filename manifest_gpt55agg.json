@@ -1,0 +1,17 @@
+[
+  {
+    "project": "libavc",
+    "cve": "arvo-16505",
+    "local_id": 16505,
+    "image": "n132/arvo:16505-vul",
+    "fuzz_target": "avc_dec_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 8"
+  },
+  {
+    "project": "selinux",
+    "cve": "CVE-2021-36085",
+    "local_id": 42493454,
+    "fuzz_target": "secilc-fuzzer",
+    "crash_type": "Heap-use-after-free READ 8"
+  }
+]

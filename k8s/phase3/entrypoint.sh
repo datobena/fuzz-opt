@@ -18,6 +18,14 @@ variant="${VARIANT:-unknown-variant}"
 experiment_id="${EXPERIMENT_ID:-unknown-experiment}"
 pod_name="${POD_NAME:-local}"
 job_name="${JOB_NAME:-manual}"
+# Optional live coverage-over-time diagnostic (OFF by default). When on, a
+# background poller periodically replays the current corpus and records edge
+# coverage. NOTE: this measures coverage on THIS pod's (in-pod) binary -- for an
+# optimized trial that is the OPTIMIZED binary, a different edge map -- so it is a
+# per-variant diagnostic, NOT the common-baseline comparison. For baseline-binary
+# coverage-over-time (both variants on one yardstick) use run_covtime.py offline.
+coverage_snapshot="${COVERAGE_SNAPSHOT:-0}"
+coverage_snapshot_interval="${COVERAGE_SNAPSHOT_INTERVAL:-1800}"
 
 mkdir -p "${corpus_dir}" "${crashes_dir}" "${work_dir}"
 
@@ -174,6 +182,7 @@ save_artifacts() {
   rm -rf "${staging_dir}"
   mkdir -p "${archive_dir}" "${staging_dir}/crashes"
   cp "${log_file}" "${staging_dir}/libfuzzer.log" 2>/dev/null || true
+  cp "${coverage_json:-}" "${staging_dir}/coverage_over_time.json" 2>/dev/null || true
   cp "${metadata_file}" "${staging_dir}/metadata.env"
   cp -a "${crashes_dir}/." "${staging_dir}/crashes/" 2>/dev/null || true
   collect_crash_times "${staging_dir}/crash_times.json"
@@ -197,6 +206,54 @@ save_corpus_archive() {
   echo "Saved phase3 corpus archive: ${archive_path}"
 }
 
+# Background poller: every ${interval}s replay the current corpus on the in-pod
+# binary and append "elapsed_s edges" to a TSV. Diagnostic only (in-pod binary).
+snapshot_coverage_loop() {
+  local out_tsv="$1" interval="$2"
+  set +e   # runs in a subshell (&); never let a crashing replay abort the poller
+  while true; do
+    sleep "${interval}"
+    local now elapsed cov
+    now="$(date -u +%s)"
+    elapsed=$((now - start_epoch))
+    cov="$( { ASAN_OPTIONS=detect_leaks=0 "/out/${target}" "${corpus_dir}" \
+                -runs=0 -detect_leaks=0 -rss_limit_mb="${rss_limit}" \
+                -print_final_stats=1 2>&1 || true; } \
+            | grep -oE 'cov: [0-9]+' | tail -1 | grep -oE '[0-9]+' || true)"
+    if [ -n "${cov}" ]; then
+      echo "${elapsed} ${cov}" >>"${out_tsv}"
+    fi
+  done
+}
+
+# Convert the poller TSV into the coverage_over_time.json schema phase4 reads
+# ([{"time_s","edges"}]), clamped to running-max (coverage is monotonic).
+finalize_coverage_json() {
+  local tsv="$1" out_json="$2"
+  [ -s "${tsv}" ] || return 0
+  python3 - "$tsv" "$out_json" <<'PY'
+import json, sys
+tsv, out = sys.argv[1], sys.argv[2]
+rows = []
+for line in open(tsv):
+    parts = line.split()
+    if len(parts) == 2:
+        try:
+            rows.append({"time_s": float(parts[0]), "edges": int(parts[1])})
+        except ValueError:
+            pass
+rows.sort(key=lambda r: r["time_s"])
+m = 0
+for r in rows:
+    if r["edges"] < m:
+        r["edges"] = m
+    else:
+        m = r["edges"]
+with open(out, "w") as f:
+    json.dump(rows, f)
+PY
+}
+
 fuzzer_cmd=(
   "/out/${target}" "${corpus_dir}"
   "-seed=${seed}"
@@ -209,10 +266,26 @@ fuzzer_cmd=(
   "$@"
 )
 
+coverage_json="${work_dir}/coverage_over_time.json"
+coverage_tsv="${work_dir}/coverage.tsv"
+snapshot_pid=""
+if [ "${coverage_snapshot}" = "1" ]; then
+  : >"${coverage_tsv}"
+  snapshot_coverage_loop "${coverage_tsv}" "${coverage_snapshot_interval}" &
+  snapshot_pid=$!
+  echo "coverage snapshot poller started (pid ${snapshot_pid}, interval ${coverage_snapshot_interval}s; in-pod ${variant} binary -- diagnostic only)"
+fi
+
 set +e
 "${fuzzer_cmd[@]}" 2>&1 | tee "${log_file}"
 fuzzer_exit="${PIPESTATUS[0]}"
 set -e
+
+if [ -n "${snapshot_pid}" ]; then
+  kill "${snapshot_pid}" 2>/dev/null || true
+  wait "${snapshot_pid}" 2>/dev/null || true
+  finalize_coverage_json "${coverage_tsv}" "${coverage_json}" || true
+fi
 
 end_time="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 end_epoch="$(date -u +"%s")"

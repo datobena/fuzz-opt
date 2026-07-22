@@ -1,0 +1,10 @@
+[
+  {
+    "project": "sleuthkit",
+    "cve": "arvo-24893",
+    "local_id": 24893,
+    "image": "n132/arvo:24893-vul",
+    "fuzz_target": "sleuthkit_fls_ext_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  }
+]

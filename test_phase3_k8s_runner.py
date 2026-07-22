@@ -70,14 +70,34 @@ def test_build_job_spec_matches_indexed_contract():
     assert "SEED" not in env
 
 
-def test_optimized_job_does_not_archive_corpus():
+def test_optimized_job_archives_corpus_by_default():
+    # Both variants now archive by default so optimized corpora survive for
+    # coverage-over-time / covdiff without a re-run.
     job = phase3_k8s.build_job_spec(
         project="gpac", cve="CVE-2022-1441", variant="optimized",
         fuzz_target="fuzz_parse", experiment_id="exp1",
         image="img:opt", trials=100, parallelism=10, duration=21600,
     )
     env = {e["name"]: e for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
-    assert env["ARCHIVE_CORPUS"]["value"] == "0"
+    assert env["ARCHIVE_CORPUS"]["value"] == "1"
+
+
+def test_archive_baseline_only_opt_out(monkeypatch):
+    monkeypatch.setenv("PHASE3_ARCHIVE_BASELINE_ONLY", "1")
+    opt = phase3_k8s.build_job_spec(
+        project="gpac", cve="CVE-2022-1441", variant="optimized",
+        fuzz_target="fuzz_parse", experiment_id="exp1",
+        image="img:opt", trials=100, parallelism=10, duration=21600,
+    )
+    base = phase3_k8s.build_job_spec(
+        project="gpac", cve="CVE-2022-1441", variant="baseline",
+        fuzz_target="fuzz_parse", experiment_id="exp1",
+        image="img:base", trials=100, parallelism=10, duration=21600,
+    )
+    opt_env = {e["name"]: e for e in opt["spec"]["template"]["spec"]["containers"][0]["env"]}
+    base_env = {e["name"]: e for e in base["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert opt_env["ARCHIVE_CORPUS"]["value"] == "0"
+    assert base_env["ARCHIVE_CORPUS"]["value"] == "1"
 
 
 def test_generate_jobs_emits_two_jobs_per_cve():

@@ -1,0 +1,10 @@
+[
+  {
+    "project": "radare2",
+    "cve": "arvo-10222",
+    "local_id": 10222,
+    "image": "n132/arvo:10222-vul",
+    "fuzz_target": "ia_fuzz",
+    "crash_type": "Heap-buffer-overflow READ 8"
+  }
+]

@@ -19,6 +19,12 @@ def download_corpus(
 ) -> bool:
     """Download public seed corpus from GCS.
 
+    OSS-Fuzz keys its public ClusterFuzz corpora by the full fuzzer name
+    ``{project}_{fuzz_target}`` (e.g. ``selinux_secilc-fuzzer``), so try that
+    path first and fall back to the bare ``{fuzz_target}``. Using only the bare
+    target name returns HTTP 403 (AccessDenied) for projects whose corpus lives
+    under the prefixed name.
+
     Args:
         project: OSS-Fuzz project name.
         fuzz_target: Fuzz target name.
@@ -27,31 +33,42 @@ def download_corpus(
     Returns:
         True if corpus was downloaded successfully.
     """
-    url = config.CORPUS_URL_TEMPLATE.format(
-        project=project, fuzz_target=fuzz_target
-    )
-    logger.info("Downloading corpus from %s", url)
+    # Policy: corpus downloads are DISABLED. Phase-2/3 use ONLY the project's
+    # bundled <target>_seed_corpus.zip, never a downloaded (GCS/ClusterFuzz)
+    # corpus. This function is intentionally a no-op regardless of callers.
+    logger.info("Corpus download disabled by policy (bundled-only); skipping %s/%s",
+                project, fuzz_target)
+    return False
 
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)  # noqa: unreachable -- disabled above
 
-    try:
-        req = Request(url)
-        with urlopen(req, timeout=300) as response:
-            data = response.read()
+    candidates = [f"{project}_{fuzz_target}"]
+    if fuzz_target not in candidates:
+        candidates.append(fuzz_target)
 
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            zf.extractall(output_dir)
+    for name in candidates:
+        url = config.CORPUS_URL_TEMPLATE.format(project=project, fuzz_target=name)
+        logger.info("Downloading corpus from %s", url)
+        try:
+            req = Request(url)
+            with urlopen(req, timeout=300) as response:
+                data = response.read()
 
-        count = len(os.listdir(output_dir))
-        logger.info("Downloaded %d corpus files to %s", count, output_dir)
-        return True
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                zf.extractall(output_dir)
 
-    except HTTPError as e:
-        logger.warning("Failed to download corpus: %s (HTTP %d)", url, e.code)
-        return False
-    except Exception as e:
-        logger.error("Error downloading corpus: %s", e)
-        return False
+            count = len(os.listdir(output_dir))
+            logger.info("Downloaded %d corpus files to %s", count, output_dir)
+            return True
+
+        except HTTPError as e:
+            logger.warning("Failed to download corpus: %s (HTTP %d)", url, e.code)
+            continue
+        except Exception as e:
+            logger.error("Error downloading corpus: %s", e)
+            continue
+
+    return False
 
 
 def collect_build_corpus(project: str, fuzz_target: str, output_dir: str) -> int:

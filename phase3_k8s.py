@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 import config
@@ -31,19 +32,41 @@ def image_name(project: str, variant: str, experiment_id: str) -> str:
     # The image-name convention concatenates the prefix directly (matches the
     # existing k8s/phase3 contract); set PHASE3_K8S_IMAGE_PREFIX with any
     # needed separator.
-    return f"{config.PHASE3_K8S_IMAGE_PREFIX}phase3-{project}-{variant}:{experiment_id}"
+    # Docker repository names must be lowercase (e.g. PcapPlusPlus -> pcapplusplus).
+    return (
+        f"{config.PHASE3_K8S_IMAGE_PREFIX}phase3-{project.lower()}-{variant}"
+        f":{experiment_id}"
+    )
 
 
-def job_name(project: str, variant: str) -> str:
-    # DNS-1123: lowercase, no underscores.
-    return f"phase3-{project}-{variant}".lower().replace("_", "-")
+def job_name(project: str, variant: str, experiment_id: str = "") -> str:
+    # DNS-1123: lowercase, no underscores. Scope by experiment_id so concurrent
+    # experiments (and reruns) never collide on k8s Job names (e.g. a stale
+    # phase3-selinux-baseline from a prior run).
+    base = f"phase3-{project}-{variant}"
+    if experiment_id:
+        base = f"{base}-{experiment_id}"
+    return base.lower().replace("_", "-")
 
 
 def build_job_spec(
     *, project: str, cve: str, variant: str, fuzz_target: str,
     experiment_id: str, image: str, trials: int, parallelism: int, duration: int,
 ) -> dict:
-    archive_corpus = "1" if variant == "baseline" else "0"
+    # Corpus archiving. Both variants are archived by DEFAULT so the generated
+    # corpora survive for offline analysis without a re-run: baseline corpora feed
+    # the replay-timing metric, and optimized corpora feed differential coverage
+    # studies (covdiff / coverage-over-time — replay each variant's corpus on the
+    # baseline binary and compare edge coverage; see run_covtime.py).
+    # PHASE3_ARCHIVE_BASELINE_ONLY=1 reverts to baseline-only to save NFS space
+    # (optimized corpora roughly double per-project corpus storage).
+    # PHASE3_ARCHIVE_ALL_CORPUS=1 is still honored as an explicit force-all.
+    if os.environ.get("PHASE3_ARCHIVE_ALL_CORPUS") == "1":
+        archive_corpus = "1"
+    elif os.environ.get("PHASE3_ARCHIVE_BASELINE_ONLY") == "1":
+        archive_corpus = "1" if variant == "baseline" else "0"
+    else:
+        archive_corpus = "1"
     env = [
         {"name": "FUZZ_TARGET", "value": fuzz_target},
         {"name": "PROJECT", "value": project},
@@ -78,7 +101,7 @@ def build_job_spec(
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": {"name": job_name(project, variant)},
+        "metadata": {"name": job_name(project, variant, experiment_id)},
         "spec": {
             "completions": trials,
             "parallelism": parallelism,
@@ -91,6 +114,10 @@ def build_job_spec(
                     "phase3-project": project, "phase3-variant": variant}},
                 "spec": {
                     "restartPolicy": "Never",
+                    # Kill a trial that runs past the fuzz duration + 1h buffer so a
+                    # hung fuzzer is marked failed (the job still reaches terminal)
+                    # instead of stalling the wave until the apply_and_wait deadline.
+                    "activeDeadlineSeconds": duration + 3600,
                     "containers": [container],
                     "volumes": [{
                         "name": "artifacts",
@@ -258,16 +285,24 @@ def record_replay_metric(*, key_dir, baseline_bin_dir, optimized_bin_dir,
             memory=getattr(config, "MEMORY_LIMIT", "4g"),
             shm_size=getattr(config, "DOCKER_SHM_SIZE", "2g"),
             run_timeout=int(getattr(config, "TRIAL_DURATION_SECS", 3600)),
+            min_partial_units=int(getattr(config, "PHASE2_REPLAY_MIN_PARTIAL_UNITS", 500)),
         )
         baseline = measure(out_dir=str(baseline_bin_dir), **common)
         optimized = measure(out_dir=str(optimized_bin_dir), **common)
         b, o = baseline.get("median_time_s"), optimized.get("median_time_s")
-        speedup = round(b / o, 4) if (b and o) else None
+        # rate-normalize when a crasher truncated the pass (see measure_binary)
+        partial = bool(baseline.get("partial") or optimized.get("partial"))
+        if partial:
+            bu, ou = baseline.get("executed_units"), optimized.get("executed_units")
+            speedup = round((ou / o) / (bu / b), 4) if (b and o and bu and ou) else None
+        else:
+            speedup = round(b / o, 4) if (b and o) else None
 
         meta_path = Path(key_dir) / "setup_metadata.json"
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         meta["replay"] = {
-            "replay_speedup": speedup, "baseline": baseline, "optimized": optimized,
+            "replay_speedup": speedup, "partial": partial,
+            "baseline": baseline, "optimized": optimized,
             "corpus_source": "k8s_biggest_baseline",
             "corpus_file_count": sum(1 for p in Path(corpus_dir).rglob("*") if p.is_file()),
         }
@@ -346,12 +381,42 @@ def stage_build_context(*, bin_dir, seed_corpus_dir, poc_dir, fuzz_target, dest)
     return dest
 
 
+def extract_initial_corpus(bin_dir, fuzz_target, dest) -> int:
+    """Populate ``dest`` with the project's BUNDLED INITIAL seed corpus, i.e. the
+    files inside ``<bin_dir>/<fuzz_target>_seed_corpus.zip`` (flattened).
+
+    Policy: phase-3 fuzzing is seeded ONLY from the canonical bundled seed corpus
+    -- the curated, crash-free starting point a real campaign begins from -- NOT
+    from the accumulated public corpus (which for a vulnerable target contains the
+    crash reproducer and yields an instant, meaningless time-to-bug). Targets that
+    ship no ``_seed_corpus.zip`` start cold (return 0); a ``.dict`` companion, if
+    any, still assists libFuzzer.
+    """
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    zip_path = Path(bin_dir) / f"{fuzz_target}_seed_corpus.zip"
+    if not zip_path.is_file():
+        return 0
+    n = 0
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            out = dest / Path(info.filename).name
+            if out.exists():  # flattened name clash; keep first
+                continue
+            out.write_bytes(zf.read(info))
+            n += 1
+    return n
+
+
 def build_and_push_images(manifest, experiment_id):
     """Build+push a phase3 image per (project,cve,variant) from phase-2 binaries.
 
     Returns {(project, variant): image}. Stages a context matching
     k8s/phase3/Dockerfile (out/, seed-corpus/, poc/, entrypoint.sh). Shells out
-    to docker; assumes docker login.
+    to docker; assumes docker login. Phase-3 seeds come from the bundled INITIAL
+    seed corpus (see extract_initial_corpus), never the accumulated public corpus.
     """
     built = {}
     dockerfile = Path(__file__).resolve().parent / "k8s" / "phase3" / "Dockerfile"
@@ -361,10 +426,17 @@ def build_and_push_images(manifest, experiment_id):
         base = Path(config.RESULTS_DIR) / experiment_id / cve_key(project, cve)
         for variant in ("baseline", "optimized"):
             image = image_name(project, variant, experiment_id)
-            with tempfile.TemporaryDirectory(prefix="phase3-ctx-") as ctx:
+            with tempfile.TemporaryDirectory(prefix="phase3-ctx-") as ctx, \
+                    tempfile.TemporaryDirectory(prefix="phase3-seed-") as seeddir:
+                n_seed = extract_initial_corpus(
+                    base / variant / "bin", fuzz_target, seeddir)
+                logger.info("phase3 seeds for %s/%s: %d initial-corpus files%s",
+                            project, variant, n_seed,
+                            " (COLD START: no bundled seed corpus)" if n_seed == 0
+                            else "")
                 stage_build_context(
                     bin_dir=base / variant / "bin",
-                    seed_corpus_dir=base / "seed_corpus" / "merged",
+                    seed_corpus_dir=seeddir,
                     poc_dir=base / "poc",
                     fuzz_target=fuzz_target,
                     dest=ctx,
@@ -456,7 +528,7 @@ def transform_all(collected, manifest, experiment_id):
         project, cve = entry["project"], entry["cve"]
         key = cve_key(project, cve)
         for variant in ("baseline", "optimized"):
-            jname = job_name(project, variant)
+            jname = job_name(project, variant, experiment_id)
             zips_root = collected_dir / project / variant / jname / "trials"
             if not zips_root.is_dir():
                 continue
@@ -480,7 +552,7 @@ def compute_replay_metrics(collected, manifest, experiment_id):
     for entry in manifest:
         project, cve = entry["project"], entry["cve"]
         key = cve_key(project, cve)
-        jname = job_name(project, "baseline")
+        jname = job_name(project, "baseline", experiment_id)
         trials_root = collected_dir / project / "baseline" / jname / "trials"
         if not trials_root.is_dir():
             logger.warning("no baseline trials for %s; skipping replay", key)

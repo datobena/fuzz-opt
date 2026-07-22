@@ -1,0 +1,26 @@
+[
+  {
+    "project": "libjxl",
+    "cve": "arvo-35172",
+    "local_id": 35172,
+    "image": "n132/arvo:35172-vul",
+    "fuzz_target": "djxl_fuzzer",
+    "crash_type": "Heap-buffer-overflow WRITE 4"
+  },
+  {
+    "project": "sleuthkit",
+    "cve": "arvo-24893",
+    "local_id": 24893,
+    "image": "n132/arvo:24893-vul",
+    "fuzz_target": "sleuthkit_fls_ext_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  },
+  {
+    "project": "yara",
+    "cve": "arvo-3848",
+    "local_id": 3848,
+    "image": "n132/arvo:3848-vul",
+    "fuzz_target": "pe_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  }
+]
