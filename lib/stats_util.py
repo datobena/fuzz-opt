@@ -158,14 +158,22 @@ def plot_coverage_over_time(
     baseline_coverage: list[list[tuple[float, int]]],
     title: str,
     output_path: str,
+    aggregate: str = "mean",
 ):
-    """Plot coverage over time with median and IQR bands.
+    """Plot coverage over time, aggregated across trials.
+
+    aggregate="mean" (default) draws the mean line with a 95% confidence-interval
+    band -- the FuzzBench / Klees-et-al. convention for coverage-growth curves,
+    valid here because coverage is uncensored (unlike time-to-bug, where the 48h
+    cap makes the median the right choice). aggregate="median" draws the median
+    with a 25/75 IQR band instead.
 
     Args:
         optimized_coverage: List of trials, each a list of (time_s, edge_count) tuples.
         baseline_coverage: Same format for baseline.
     """
     fig, ax = plt.subplots(figsize=(10, 6))
+    band = "IQR" if aggregate == "median" else "95% CI"
 
     for data, label, color in [
         (baseline_coverage, "Baseline", "#4C72B0"),
@@ -191,16 +199,26 @@ def plot_coverage_over_time(
             continue
 
         matrix = np.array(interpolated)
-        median = np.median(matrix, axis=0)
-        q25 = np.percentile(matrix, 25, axis=0)
-        q75 = np.percentile(matrix, 75, axis=0)
+        n = matrix.shape[0]
+        if aggregate == "median":
+            center = np.median(matrix, axis=0)
+            lo = np.percentile(matrix, 25, axis=0)
+            hi = np.percentile(matrix, 75, axis=0)
+        else:
+            center = matrix.mean(axis=0)
+            if n > 1:
+                sem = matrix.std(axis=0, ddof=1) / np.sqrt(n)
+                half = sem * stats.t.ppf(0.975, n - 1)  # 95% CI (t, n-1 dof)
+            else:
+                half = np.zeros_like(center)
+            lo, hi = center - half, center + half
 
         hours = time_points / 3600
-        ax.plot(hours, median, label=label, color=color)
-        ax.fill_between(hours, q25, q75, alpha=0.2, color=color)
+        ax.plot(hours, center, label=f"{label} ({aggregate}, n={n})", color=color)
+        ax.fill_between(hours, lo, hi, alpha=0.2, color=color)
 
     ax.set_xlabel("Time (hours)")
-    ax.set_ylabel("Edge Coverage")
+    ax.set_ylabel(f"Edge coverage ({aggregate} ± {band})")
     ax.set_title(title)
     ax.legend()
 
