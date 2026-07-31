@@ -112,3 +112,55 @@ def test_collect_crashes_is_sorted_by_time(tmp_path):
 
 def test_collect_crashes_on_missing_dir_is_empty(tmp_path):
     assert collect_crashes(tmp_path / "nope") == []
+
+
+# --- Regression tests built from a REAL afl-fuzz v5.02c run on libxml2 --------
+#
+# Captured 2026-07-31: 120s campaign, run_time=120, max queue time:=119719.
+# That ratio is the proof that time: is milliseconds -- the single assumption
+# every TTB number in the study rests on.
+
+REAL_FUZZER_STATS = """start_time        : 1785495385
+last_update       : 1785495505
+run_time          : 120
+execs_done        : 852047
+execs_per_sec     : 7097.02
+corpus_count      : 1986
+saved_crashes     : 0
+edges_found       : 2826
+command_line      : /out/afl-fuzz -V 120 -m none -i /tmp/in -o /aflout
+"""
+
+# NOTE: 15 columns. AFL++ v5.02c appends total_crashes and servers_count beyond
+# the 13 columns older releases documented -- which is exactly why parse_plot_data
+# keys off the header instead of fixed positions.
+REAL_PLOT_DATA = """# relative_time, cycles_done, cur_item, corpus_count, pending_total, pending_favs, map_size, saved_crashes, saved_hangs, max_depth, execs_per_sec, total_execs, edges_found, total_crashes, servers_count
+10, 0, 180, 512, 400, 12, 2.10%, 0, 0, 5, 6900.10, 70000, 1200, 0, 0
+120, 0, 1956, 1986, 1634, 31, 5.30%, 0, 0, 11, 5400.95, 852047, 2826, 0, 0
+"""
+
+
+def test_time_field_is_milliseconds_against_a_real_run():
+    """119719 ms over a run_time of 120 s. If time: were seconds this would be
+    119719 s -- a thousand-fold TTB error in every reported result."""
+    stats = parse_fuzzer_stats(REAL_FUZZER_STATS)
+    max_queue_time = crash_time_secs("id:001985,src:000010,time:119719,execs:850000")
+    assert max_queue_time <= stats["run_time"] + 1
+
+
+def test_parses_the_real_fifteen_column_plot_data():
+    rows = parse_plot_data(REAL_PLOT_DATA)
+    assert len(rows) == 2
+    assert len(rows[0]) == 15
+    assert rows[-1]["edges_found"] == 2826
+    assert rows[-1]["total_execs"] == 852047
+    assert rows[-1]["total_crashes"] == 0
+    assert rows[-1]["map_size"] == pytest.approx(5.30)   # '%' stripped
+
+
+def test_parses_the_real_fuzzer_stats():
+    s = parse_fuzzer_stats(REAL_FUZZER_STATS)
+    assert s["run_time"] == 120
+    assert s["execs_done"] == 852047
+    assert s["execs_per_sec"] == pytest.approx(7097.02)
+    assert isinstance(s["command_line"], str)
