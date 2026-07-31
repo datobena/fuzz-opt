@@ -17,9 +17,10 @@ over time, uncensored coverage curves, and multiple distinct crashes per trial.
 `claude -p --dangerously-skip-permissions` (or `codex exec
 --dangerously-bypass-approvals-and-sandbox`) with **no confinement at all** — full
 filesystem, full network, full docker, and `_agent_child_env` (`phase2_setup.py:1829`)
-copies the entire orchestrator `os.environ`. That invalidates the central claim the
-benchmark wants to make: *that optimization does not remove bugs*. If the agent knows
-where the bug is, it can preserve it deliberately, and the result means nothing.
+copies the entire orchestrator `os.environ`. That invalidates the measurement the
+benchmark most wants to make: *how often does optimization remove the bug?* An agent that
+knows where the bug is can preserve it deliberately, and the measured survival rate then
+says nothing about optimization — only about the agent's ability to read a stack trace.
 
 ## Leak inventory (verified, 2026-07-30)
 
@@ -53,10 +54,10 @@ leak-audit test must cover.
 10. Host leftovers: prior `results/*/report/report.md`, `~/.claude/projects/*` transcripts.
 11. Any sanitizer trace from a smoke or validate run.
 
-**12. The bug-preservation gate is itself an oracle.** If the agent ever learns "that
-fold removed the bug", it can binary-search folds to localize the bug — a stronger leak
-than the PoC. The gate must run after the agent session, orchestrator-side, with the
-result never fed back.
+**12. A bug-preservation gate would itself be an oracle.** If the agent ever learned
+"that fold removed the bug", it could binary-search folds to localize the bug — a
+stronger leak than the PoC. **Resolved by removing the gate entirely** (see Decisions):
+bug survival is measured after the fact, never enforced, so there is no signal to leak.
 
 ## Decisions (confirmed with user)
 
@@ -67,6 +68,17 @@ result never fed back.
   identically across every target.
 - **Non-reproducing bugs: drop the target.** If the PoC no longer crashes the newly
   built baseline, the target is excluded rather than patched around.
+- **No bug-preservation gate.** The optimizer is never reverted for removing the bug.
+  Bug survival is a *measured outcome*, not an enforced constraint: the PoC replay runs
+  right after phase 2, records its verdict, and gates nothing. This also removes leak
+  vector 12. **Consequence:** the sandbox is now the sole guarantee that the agent did
+  not deliberately preserve or destroy the bug — there is no backstop behind it.
+- **The replay-speedup gate stays.** `_reject_if_no_replay_speedup` still reverts folds
+  that fail to beat the previous best replay time by `PHASE2_MIN_REPLAY_SPEEDUP`
+  (currently 1.02), so "optimized" continues to mean "measurably faster".
+- **Fold contract: aggressive** (`profile-once-fuzz-folds-aggressive`) — input-dependent
+  folds permitted; only the fuzzing-mode behavior gate stays forbidden. A higher
+  bug-removal rate is a finding, not a failure.
 - **Confinement: container + build broker.** Not CLI permission rules — a real boundary,
   uniform across the claude and codex backends.
 - **Failure feedback: compiler errors yes, sanitizer traces no.**
@@ -163,25 +175,40 @@ manifest `crash_type` — `crash_classify.verify_crash_reproduces` already does 
 **Phase 4.** TTB semantics unchanged. Coverage-over-time comes from `plot_data`,
 retiring `run_covtime.py`'s ZIP-mtime reconstruction; bug-count-over-time is added.
 
+Because there is no bug-preservation gate, phase 4 must now **separate two causes of a
+missing finding**: the optimized arm was slower or unlucky, versus the bug is no longer
+in the binary at all. The recorded PoC verdict is the discriminator, so it becomes
+required input to the analysis rather than a diagnostic. Bug-survival rate — across
+targets, and correlated with achieved speedup — is itself a headline result.
+
+`_reject_if_optimization_removed_bug` (`phase2_setup.py:3173`) is demoted from a phase-2
+gate to a post-hoc reporter; `verify_crashes.py` already does replay-and-match and is the
+natural home for it.
+
 ## Round data flow
 
 1. Broker: corpus grow → crash filter → mutation capture → one profile → hotspot list
    written to `/work/profile`.
 2. Agent container launches; edits `/work/src`; calls `fold-build` / `fold-replay-time`.
 3. Agent exits.
-4. **Orchestrator, outside the sandbox:** rebuild, PoC gate, replay-speedup gate →
-   accept or revert.
+4. **Orchestrator, outside the sandbox:** rebuild, then the replay-speedup gate →
+   accept or revert the fold.
+5. **PoC replay, recorded not enforced:** replay the PoC on the accepted optimized
+   binary and write the verdict to `setup_metadata.json`. Costs seconds, gates nothing,
+   and tells you before committing days of phase-3 compute which optimized arms are
+   still structurally capable of finding their bug.
 
-The agent is never told the PoC result (leak vector 12). `_make_retry_prompt`
-(`phase2_setup.py:1768`) currently feeds back the last 200 lines of build log and must
-route through the same scrubber.
+`_make_retry_prompt` (`phase2_setup.py:1768`) currently feeds back the last 200 lines of
+build log and must route through the same scrubber.
 
 ## Error handling
 
 - Broker request timeout → error result to the agent, incident logged orchestrator-side.
 - Agent container dies → treated as no-fold; source reverted to the round's baseline.
 - Scrubber uncertainty → fail closed to pass/fail.
-- PoC gate failure → revert to baseline, record `bug_removed`, never surfaced to the agent.
+- PoC no longer reproduces → record `bug_removed` in `setup_metadata.json` and **continue
+  unchanged**. Nothing is reverted and nothing is surfaced to the agent; the target still
+  runs in phase 3, and phase 4 uses the label to interpret the result.
 
 ## Verification
 
@@ -189,8 +216,9 @@ route through the same scrubber.
   AFL crash-filename TTB parsing, `fuzzer_stats`/`plot_data` parsing.
 - **Leak audit (key deliverable):** launch an agent container with an adversarial probe
   prompt that attempts every vector in the inventory above — env, `/proc`, network egress,
-  docker socket, walking up from `/work` — and assert nothing identifying escapes. This
-  test is what makes the "optimization does not remove bugs" claim defensible.
+  docker socket, walking up from `/work` — and assert nothing identifying escapes. With
+  the bug-preservation gate gone, this test is the *only* thing making the measured
+  bug-survival rate meaningful, so it is the highest-value test in the suite.
 - **Prework:** PoC reproduces on the newly built AFL++/ASAN baseline.
 - **End-to-end:** libxml2/arvo-1972 through prework → sandboxed phase 2 → phase 3 → report.
 
