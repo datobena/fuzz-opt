@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+# Container the phase-2 optimizer agent runs inside.
+#
+# Carries local tooling the agent legitimately needs to read and edit source
+# (editors, grep, python) and the agent CLI itself -- but deliberately NO docker
+# client. All build/smoke/replay work goes over /run/broker.sock, so a docker
+# binary here would be either useless or a hole.
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git python3 python3-pip ripgrep less vim-tiny \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node is required by the Claude Code CLI.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+
+# A non-root user: the agent has no reason to be root, and /work/src is mounted
+# writable for this uid by the launcher.
+RUN useradd -m -u 1000 agent || true
+USER agent
+
+ENV PATH="/work/bin:${PATH}"
+WORKDIR /work/src

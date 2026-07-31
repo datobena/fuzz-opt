@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Ask the broker to build the current /work/src. Output is scrubbed."""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _client import main
+raise SystemExit(main({"op": "build"}))
