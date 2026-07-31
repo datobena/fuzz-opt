@@ -19,9 +19,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 
 RUN npm install -g @anthropic-ai/claude-code
 
-# A non-root user: the agent has no reason to be root, and /work/src is mounted
-# writable for this uid by the launcher.
-RUN useradd -m -u 1000 agent || true
+# A non-root user: the agent has no reason to be root, and /work/src is
+# bind-mounted from the host, so the uid must match the host owner (1000) or the
+# agent cannot write to the source it is supposed to edit.
+#
+# ubuntu:24.04 ships its own uid-1000 user ("ubuntu"), which must be removed
+# first. Deliberately NOT `|| true`: that masked the collision, useradd failed,
+# and `USER agent` then referred to a user that did not exist -- every container
+# died at startup with "unable to find user agent".
+RUN userdel -r ubuntu 2>/dev/null || true; \
+    useradd -m -u 1000 -s /bin/bash agent && \
+    id agent
 USER agent
 
 ENV PATH="/work/bin:${PATH}"
