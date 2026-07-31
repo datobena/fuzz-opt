@@ -1151,7 +1151,13 @@ def test_run_replay_speedup_rate_normalizes_partial(monkeypatch, tmp_path):
     assert result["replay_speedup"] == expected
 
 
-def test_reject_if_optimization_removed_bug_reverts_and_records(tmp_path):
+def test_bug_removal_is_recorded_not_reverted(tmp_path):
+    """Bug survival is MEASURED, not enforced (2026-07-30 design spec).
+
+    The gate that used to revert a bug-removing fold is gone: enforcing it tells
+    you nothing about how often optimization removes bugs, and a gate the agent
+    can observe is an oracle it can bisect against to localize the bug.
+    """
     baseline = tmp_path / "baseline" / "bin"
     optimized = tmp_path / "optimized" / "bin"
     baseline.mkdir(parents=True)
@@ -1159,7 +1165,7 @@ def test_reject_if_optimization_removed_bug_reverts_and_records(tmp_path):
     (baseline / "fuzzer").write_text("BASELINE")
     (optimized / "fuzzer").write_text("BUG_REMOVED")
 
-    ready, failure = phase2_setup._reject_if_optimization_removed_bug(
+    ready, record = phase2_setup._reject_if_optimization_removed_bug(
         project="lcms",
         cve="arvo-756",
         optimization_ready=True,
@@ -1169,12 +1175,13 @@ def test_reject_if_optimization_removed_bug_reverts_and_records(tmp_path):
         optimized_bin_dir=str(optimized),
     )
 
-    assert ready is False
-    assert failure is not None
-    assert failure["stage"] == "optimized_poc_verify"
-    assert "arvo-756" in failure["reason"]
-    # The bug-removing binary is discarded; optimized now mirrors baseline.
-    assert (optimized / "fuzzer").read_text() == "BASELINE"
+    assert ready is True, "the fold must be kept, not rejected"
+    assert record is not None
+    assert record["stage"] == "optimized_poc_verify"
+    assert record["outcome"] == "bug_removed"
+    assert record["blocking"] is False
+    # The optimized binary is left exactly as the optimizer built it.
+    assert (optimized / "fuzzer").read_text() == "BUG_REMOVED"
 
 
 def test_reject_keeps_optimization_that_still_crashes(tmp_path):
@@ -1415,10 +1422,13 @@ def test_prebuild_noop_without_corpus_env(tmp_path):
     assert "FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS" not in env
 
 
-def test_setup_cve_arvo_rejects_optimization_that_removes_bug(monkeypatch, tmp_path):
-    """A built optimization that no longer reproduces the PoC must be rejected:
-    setup returns False, optimized falls back to baseline, and metadata records
-    the optimized_poc_verify failure (so no bug-removing fold reaches phase 3)."""
+def test_setup_cve_arvo_records_bug_removal_and_keeps_the_fold(monkeypatch, tmp_path):
+    """A fold that removes the bug is KEPT and recorded, not reverted.
+
+    Bug survival is measured rather than enforced, so the fold still goes to
+    phase 3 and the verdict is written to setup_metadata.json for phase 4 to
+    separate "no finding because slower" from "no finding because the bug is
+    not in the binary". The replay-speedup gate still runs -- it is unaffected."""
     source_root = tmp_path / "captured"
     harness = source_root / "src" / "libvips" / "fuzz" / "demo_fuzzer.cc"
     harness.parent.mkdir(parents=True, exist_ok=True)
@@ -1461,30 +1471,37 @@ def test_setup_cve_arvo_rejects_optimization_that_removes_bug(monkeypatch, tmp_p
     def fake_verify(bin_dir, *_args, **_kwargs):
         return "optimized" not in str(bin_dir)
 
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("replay speedup must not run for a rejected fold")
+    replay_calls = []
+
+    def fake_replay(*_args, **_kwargs):
+        replay_calls.append(1)
+        # key must match _reject_if_no_replay_speedup, which reads replay_speedup
+        return {"replay_speedup": 1.5}
 
     monkeypatch.setattr(phase2_setup, "copy_arvo_output", fake_copy_arvo_output)
     monkeypatch.setattr(phase2_setup, "optimize_and_build", fake_optimize_and_build)
     monkeypatch.setattr(phase2_setup, "verify_poc_crash", fake_verify)
     monkeypatch.setattr(phase2_setup, "download_seed_corpus", lambda *_a, **_k: True)
-    monkeypatch.setattr(phase2_setup, "run_replay_speedup", fail_if_called)
+    monkeypatch.setattr(phase2_setup, "run_replay_speedup", fake_replay)
 
     entry = {"project": "libvips", "cve": "CVE-REMOVED", "local_id": 1}
 
     ok = phase2_setup.setup_cve_arvo(entry, "exp-reject")
 
-    assert ok is False
+    assert ok is True, "a bug-removing fold is no longer a setup failure"
+    assert replay_calls, "the replay-speedup gate must still run"
     metadata_path = (
         tmp_path / "results" / "exp-reject" / "libvips-CVE-REMOVED" / "setup_metadata.json"
     )
     metadata = json.loads(metadata_path.read_text())
     assert metadata["verification"]["baseline"] is True
-    assert metadata["verification"]["optimized"] is False
-    assert metadata["failure"]["stage"] == "optimized_poc_verify"
-    # Optimized build was reverted to baseline content.
+    assert metadata["poc_verdict"] == "no_crash"
+    assert "failure" not in metadata, "bug removal is not a blocking failure"
+    # Nothing copied baseline over the optimized build. The fake build never
+    # produces a binary, so under the OLD gate this path existed only because
+    # the revert created it -- its absence is the evidence that no revert ran.
     optimized_bin = (
         tmp_path / "results" / "exp-reject" / "libvips-CVE-REMOVED"
         / "optimized" / "bin" / "demo_fuzzer"
     )
-    assert optimized_bin.read_text() == "BASELINE"
+    assert not optimized_bin.exists() or optimized_bin.read_text() != "BASELINE"

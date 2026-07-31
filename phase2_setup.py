@@ -2661,7 +2661,7 @@ def setup_cve_arvo(
     logger.info("Optimized PoC verification: %s",
                 "PASSED" if opt_crashes else "FAILED")
 
-    optimization_ready, opt_rejection = _reject_if_optimization_removed_bug(
+    optimization_ready, poc_record = _reject_if_optimization_removed_bug(
         project=project, cve=entry["cve"],
         optimization_ready=optimization_ready,
         baseline_reproduced=bool(poc_path_str),
@@ -2671,6 +2671,8 @@ def setup_cve_arvo(
     )
 
     replay = None
+
+    opt_rejection = None
     if optimization_ready:
         replay = run_replay_speedup(
             diff_output_dir=diff_dir,
@@ -2685,14 +2687,15 @@ def setup_cve_arvo(
             optimization_ready=optimization_ready, replay=replay,
             baseline_bin_dir=baseline_bin_dir, optimized_bin_dir=optimized_bin_dir,
         )
-        opt_rejection = opt_rejection or replay_rejection
+        opt_rejection = replay_rejection
 
     _save_setup_metadata(entry, experiment_dir, experiment_id,
                          opt_applied, poc_path=poc_path_str,
                          baseline_ok=True,
                          optimized_ok=bool(optimization_ready and opt_crashes),
                          failure=opt_rejection,
-                         replay=replay)
+                         replay=replay,
+                         poc_verdict=('no_crash' if poc_record else 'reproduced'))
     return optimization_ready
 
 
@@ -2826,7 +2829,7 @@ def setup_cve_arvo_image(
         logger.info("Optimized PoC verification: %s",
                     "PASSED" if opt_crashes else "FAILED")
 
-    optimization_ready, opt_rejection = _reject_if_optimization_removed_bug(
+    optimization_ready, poc_record = _reject_if_optimization_removed_bug(
         project=project, cve=entry["cve"],
         optimization_ready=optimization_ready,
         baseline_reproduced=bool(poc_path_str),
@@ -2836,6 +2839,8 @@ def setup_cve_arvo_image(
     )
 
     replay = None
+
+    opt_rejection = None
     if optimization_ready:
         replay = run_replay_speedup(
             diff_output_dir=diff_dir,
@@ -2850,14 +2855,15 @@ def setup_cve_arvo_image(
             optimization_ready=optimization_ready, replay=replay,
             baseline_bin_dir=baseline_bin_dir, optimized_bin_dir=optimized_bin_dir,
         )
-        opt_rejection = opt_rejection or replay_rejection
+        opt_rejection = replay_rejection
 
     _save_setup_metadata(entry, experiment_dir, experiment_id,
                          opt_applied, poc_path=poc_path_str,
                          baseline_ok=True,
                          optimized_ok=bool(optimization_ready and opt_crashes),
                          failure=opt_rejection,
-                         replay=replay)
+                         replay=replay,
+                         poc_verdict=('no_crash' if poc_record else 'reproduced'))
     return optimization_ready
 
 
@@ -3004,7 +3010,7 @@ def setup_cve_osv(
         verification = verify_crash_reproduction(entry, experiment_dir)
         logger.info("Verification results: %s", verification)
 
-        optimization_ready, opt_rejection = _reject_if_optimization_removed_bug(
+        optimization_ready, poc_record = _reject_if_optimization_removed_bug(
             project=project, cve=entry["cve"],
             optimization_ready=bool(opt_applied and build_ok),
             baseline_reproduced=bool(verification.get("baseline")),
@@ -3014,6 +3020,8 @@ def setup_cve_osv(
         )
 
         replay = None
+
+        opt_rejection = None
         if optimization_ready:
             replay = run_replay_speedup(
                 diff_output_dir=diff_dir,
@@ -3029,7 +3037,7 @@ def setup_cve_osv(
                 baseline_bin_dir=os.path.join(experiment_dir, "baseline", "bin"),
                 optimized_bin_dir=os.path.join(experiment_dir, "optimized", "bin"),
             )
-            opt_rejection = opt_rejection or replay_rejection
+            opt_rejection = replay_rejection
 
         _save_setup_metadata(
             entry, experiment_dir, experiment_id,
@@ -3039,6 +3047,7 @@ def setup_cve_osv(
             optimized_ok=bool(optimization_ready and verification["optimized"]),
             failure=opt_rejection,
             replay=replay,
+            poc_verdict=('no_crash' if poc_record else 'reproduced'),
         )
         return False if opt_rejection else True
 
@@ -3106,6 +3115,7 @@ def _save_setup_metadata(
     entry, experiment_dir, experiment_id, opt_applied,
     poc_path=None, baseline_ok=False, optimized_ok=False,
     failure: dict | None = None, replay: dict | None = None,
+    poc_verdict: str | None = None,
 ):
     metadata = {
         "entry": entry,
@@ -3123,6 +3133,10 @@ def _save_setup_metadata(
         metadata["failure"] = failure
     if replay:
         metadata["replay"] = replay
+    # Recorded, never enforced. Phase 4 uses this to tell "no finding because
+    # slower" apart from "no finding because the bug is not in the binary".
+    if poc_verdict:
+        metadata["poc_verdict"] = poc_verdict
     with open(os.path.join(experiment_dir, "setup_metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
 
@@ -3180,37 +3194,39 @@ def _reject_if_optimization_removed_bug(
     baseline_bin_dir: str,
     optimized_bin_dir: str,
 ) -> tuple[bool, dict | None]:
-    """Reject an optimization that removed the bug.
+    """RECORD whether the optimization removed the bug. Does not reject it.
 
-    If the baseline reproduces a crash but the built optimized binary no longer
-    does, the optimization has hidden a real bug — the single outcome the whole
-    benchmark exists to prevent. Such a fold is invalid no matter how large its
-    speedup: discard the bug-removing binary, fall back to the baseline build
-    (so no bug-removing variant and no illusory speedup ever reach phase 3), and
-    return a failure record for the metadata.
+    This used to revert any fold whose optimized binary stopped reproducing the
+    PoC. That gate is gone deliberately (see the 2026-07-30 design spec): bug
+    survival is now a MEASURED OUTCOME rather than an enforced constraint, which
+    is both the stronger result and the only way the number means anything —
+    an enforced gate tells you nothing about how often optimization removes bugs.
 
-    Returns ``(optimization_ready, failure_or_None)``. When the fold is rejected,
-    ``optimization_ready`` comes back ``False`` and the caller should treat setup
-    as unsuccessful, exactly as it already does when an optimization fails to
-    build. The ``optimized_poc_verify`` stage is intentionally NOT a denylist
-    stage: the baseline is fine, so a later run may still produce a valid fold.
+    Removing it also closes a leak: a gate the agent can observe is an oracle it
+    can bisect against to localize the bug, which would be a stronger leak than
+    handing over the PoC.
+
+    The verdict is written into setup_metadata.json for phase 4, which uses it to
+    separate "no finding because slower" from "no finding because the bug is not
+    in the binary". Nothing is reverted and nothing is failed, so this always
+    returns ``optimization_ready`` unchanged.
     """
     if not (optimization_ready and baseline_reproduced and not opt_crashes):
         return optimization_ready, None
 
-    logger.error(
-        "Optimization REMOVED the bug for %s (%s): the optimized binary no longer "
-        "reproduces the PoC. Rejecting the fold and falling back to baseline.",
+    logger.warning(
+        "Optimization removed the bug for %s (%s): the optimized binary no longer "
+        "reproduces the PoC. RECORDING this and continuing — bug survival is "
+        "measured, not enforced.",
         project, cve,
     )
-    force_remove(optimized_bin_dir)
-    os.makedirs(optimized_bin_dir, exist_ok=True)
-    shutil.copytree(baseline_bin_dir, optimized_bin_dir, dirs_exist_ok=True)
-    return False, {
+    return optimization_ready, {
         "stage": "optimized_poc_verify",
+        "outcome": "bug_removed",
+        "blocking": False,
         "reason": (
             f"Optimization removed the bug (optimized did not reproduce PoC for "
-            f"{cve}); fold rejected and reverted to baseline"
+            f"{cve}); recorded for analysis, fold kept"
         ),
     }
 
