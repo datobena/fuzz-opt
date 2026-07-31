@@ -26,7 +26,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
-from lib import crash_classify, docker_util
+from lib import afl, crash_classify, docker_util
 
 logging.basicConfig(
     level=logging.INFO,
@@ -114,6 +114,9 @@ def get_trial_dirs(experiment_id: str, trial: Trial) -> dict[str, str]:
         "base": base,
         "corpus": os.path.join(base, "corpus"),
         "crashes": os.path.join(base, "crashes"),
+        # AFL owns its output tree (queue/, crashes/, fuzzer_stats, plot_data)
+        # and needs it writable -- /out stays read-only.
+        "afl_out": os.path.join(base, "afl_out"),
         "log": os.path.join(base, "fuzzer.log"),
         "metadata": os.path.join(base, "metadata.json"),
         "crash_times": os.path.join(base, "crash_times.json"),
@@ -268,6 +271,20 @@ def _launch_container(
         capture_output=True,
     )
 
+    afl_out = dirs.get("afl_out") or os.path.join(dirs["base"], "afl_out")
+    os.makedirs(afl_out, exist_ok=True)
+
+    # AFL++ campaign. Differences from the libFuzzer command this replaces:
+    #   -V <secs>   time-limited campaign; AFL keeps fuzzing PAST a crash, which
+    #               is the whole point of the migration -- libFuzzer exited at
+    #               the first one, truncating every trial at the measured event.
+    #   -s <seed>   deterministic RNG, replacing libFuzzer's -seed
+    #   -m none     ASAN reserves a huge address space; any memory cap kills it
+    #   -t 5000+    per-exec timeout, '+' lets AFL scale it from calibration
+    #   AFL_NO_AFFINITY  the container is already pinned via --cpuset-cpus, and
+    #               AFL's own binding on top of that fails to find a free core
+    #   abort_on_error=1  AFL detects a crash by the process dying; without this
+    #               ASAN reports and exits cleanly and the crash is invisible
     cmd = [
         "docker", "run", "-d",
         "--name", container_name,
@@ -275,22 +292,25 @@ def _launch_container(
         "--cpuset-cpus", str(trial.cpu),
         "--memory", config.MEMORY_LIMIT,
         "--shm-size", config.DOCKER_SHM_SIZE,
+        "-e", "AFL_NO_AFFINITY=1",
+        "-e", "AFL_SKIP_CPUFREQ=1",
+        "-e", "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1",
+        "-e", "AFL_AUTORESUME=1",
+        "-e", "ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:symbolize=0",
         "-v", f"{bin_dir}:/out:ro",
         "-v", f"{dirs['corpus']}:/corpus",
-        "-v", f"{dirs['crashes']}:/crashes",
+        "-v", f"{afl_out}:/afl_out",
         docker_image,
         "/bin/bash", "-c",
         (
-            f"/out/{fuzz_target_name} /corpus"
-            f" -seed={seed}"
-            f" -detect_leaks=0"
-            f" -max_total_time={duration}"
-            f" -print_final_stats=1"
-            f" -rss_limit_mb={config.RSS_LIMIT_MB}"
-            f" -malloc_limit_mb={config.RSS_LIMIT_MB // 2}"
-            f" -artifact_prefix=/crashes/"
+            f"/out/afl-fuzz -i /corpus -o /afl_out"
+            f" -V {duration}"
+            f" -s {seed}"
+            f" -m none"
+            f" -t 5000+"
+            f" -- /out/{fuzz_target_name}"
             f" 2>&1 | tee /tmp/fuzzer.log;"
-            f" cp /tmp/fuzzer.log /corpus/../fuzzer.log"
+            f" cp /tmp/fuzzer.log /afl_out/fuzzer.log 2>/dev/null || true"
         ),
     ]
 
@@ -379,33 +399,38 @@ def monitor_trial(
     with the remaining time so the full budget is used.
     """
     dirs = get_trial_dirs(experiment_id, trial)
-    crashes_dir = dirs["crashes"]
+    afl_out = dirs.get("afl_out") or os.path.join(dirs["base"], "afl_out")
+    crashes_dir = os.path.join(afl_out, "default", "crashes")
     crash_times = []
     seen_crashes = set()
     overall_start = trial.start_time
 
     def scan_crashes():
-        """Scan crashes directory for new artifacts."""
-        if not os.path.isdir(crashes_dir):
-            return
-        for fname in os.listdir(crashes_dir):
+        """Collect new AFL crash artifacts.
+
+        Timing comes from the FILENAME (`time:<ms>`), not from when the poll
+        happened to notice the file. Under libFuzzer the trial ended at the
+        first crash so poll latency was bounded; AFL keeps running and can
+        produce many crashes between polls, which would otherwise all be
+        stamped with the same observation time.
+
+        Every artifact is recorded as crash_type "crash"; deciding which one is
+        the TARGET bug requires replaying it (see lib/afl_triage.py) and is
+        deliberately not guessed from the filename.
+        """
+        for entry in afl.collect_crashes(crashes_dir):
+            fname = entry["artifact"]
             if fname in seen_crashes:
                 continue
-            if not fname.startswith(("crash-", "oom-", "timeout-")):
-                continue
             seen_crashes.add(fname)
-
-            elapsed = time.time() - overall_start
-            crash_type = classify_crash(os.path.join(crashes_dir, fname))
-
             crash_times.append({
-                "timestamp_s": round(elapsed, 2),
+                "timestamp_s": entry["timestamp_s"],
                 "artifact": fname,
-                "crash_type": crash_type,
+                "crash_type": "crash",
             })
             logger.info(
-                "Trial %s: crash found at %.1fs (%s: %s)",
-                trial.name, elapsed, crash_type, fname,
+                "Trial %s: crash at %.1fs (%s)",
+                trial.name, entry["timestamp_s"], fname,
             )
 
     # Ramp the poll interval: short cadence during the first 30 seconds so
@@ -444,7 +469,7 @@ def monitor_trial(
     with open(log_path, "w") as f:
         f.write(logs)
 
-    final_stats = parse_fuzzer_stats(logs)
+    final_stats = parse_fuzzer_stats(afl_out)
 
     observed_duration = round(trial.end_time - overall_start, 2)
     if not actual_duration or actual_duration <= 0:
@@ -535,35 +560,44 @@ def classify_crash(crash_path: str) -> str:
     return "unknown"
 
 
-def parse_fuzzer_stats(log: str) -> dict:
-    """Parse libFuzzer final statistics from log output."""
-    stats = {}
+def parse_fuzzer_stats(afl_out_dir: str) -> dict:
+    """Read AFL++ campaign statistics from its output tree.
 
-    patterns = {
-        "exec_s": r"exec/s:\s*(\d+)",
-        "total_execs": r"stat::number_of_executed_units:\s*(\d+)",
-        "new_units": r"stat::new_units_added:\s*(\d+)",
-        "peak_rss": r"stat::peak_rss_mb:\s*(\d+)",
-        "corpus_size": r"stat::corpus_num_features:\s*(\d+)",
-        "stat_avg_exec_s": r"stat::average_exec_per_sec:\s*(\d+)",
-    }
+    Replaces the libFuzzer log-scraping this used to do. AFL writes structured
+    files, so nothing has to be recovered from console text:
+      fuzzer_stats  final counters (execs_done, execs_per_sec, edges_found)
+      plot_data     the whole time series, which also gives coverage-over-time
+                    for free and retires run_covtime.py's ZIP-mtime method.
 
-    for key, pattern in patterns.items():
-        match = re.search(pattern, log)
-        if match:
-            stats[key] = int(match.group(1))
+    Keys are normalized to the names phase 4 already consumes.
+    """
+    stats: dict = {}
+    default_dir = os.path.join(afl_out_dir, "default")
 
-    # Get final exec/s from the last progress line
-    exec_s_values = re.findall(r"exec/s:\s*(\d+)", log)
-    if exec_s_values:
-        stats["final_exec_s"] = int(exec_s_values[-1])
+    stats_path = os.path.join(default_dir, "fuzzer_stats")
+    if os.path.isfile(stats_path):
+        with open(stats_path, errors="replace") as f:
+            raw = afl.parse_fuzzer_stats(f.read())
+        stats.update({
+            "total_execs": raw.get("execs_done"),
+            "final_exec_s": raw.get("execs_per_sec"),
+            "edges_found": raw.get("edges_found"),
+            "corpus_size": raw.get("corpus_count"),
+            "saved_crashes": raw.get("saved_crashes"),
+            "run_time": raw.get("run_time"),
+        })
 
-    # Use stat::average_exec_per_sec as authoritative source if available,
-    # since progress lines may not appear when no new coverage is found
-    if "stat_avg_exec_s" in stats:
-        stats["final_exec_s"] = stats["stat_avg_exec_s"]
+    plot_path = os.path.join(default_dir, "plot_data")
+    if os.path.isfile(plot_path):
+        with open(plot_path, errors="replace") as f:
+            rows = afl.parse_plot_data(f.read())
+        if rows:
+            stats["coverage_series"] = [
+                {"t": r.get("relative_time"), "edges": r.get("edges_found")}
+                for r in rows
+            ]
 
-    return stats
+    return {k: v for k, v in stats.items() if v is not None}
 
 
 def save_partial_results(completed: list[dict], experiment_id: str):
