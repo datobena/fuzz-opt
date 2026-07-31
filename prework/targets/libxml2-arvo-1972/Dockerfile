@@ -7,8 +7,14 @@
 ARG BASE
 FROM ${BASE}
 
+# Deliberately NOT installing zlib1g-dev/liblzma-dev. The ARVO image ships
+# neither zlib.h nor lzma.h, and `nm -u` on its binary shows zero inflate/lzma
+# symbols -- the historical build had both disabled. Installing them makes
+# configure enable compression support, which then fails to link because the
+# historical link line carries no -lz/-llzma. build.sh passes --without-zlib
+# --without-lzma so this holds even though the base image ships zlib headers.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        autoconf automake libtool pkg-config zlib1g-dev liblzma-dev python3 \
+        autoconf automake libtool pkg-config python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin the LLVM that AFL++ is built against, rather than inheriting whatever
@@ -26,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         "clang-${LLVM_VERSION}" "llvm-${LLVM_VERSION}-dev" \
         "libclang-${LLVM_VERSION}-dev" "lld-${LLVM_VERSION}" \
         "libc++-${LLVM_VERSION}-dev" "libc++abi-${LLVM_VERSION}-dev" \
+        "libclang-rt-${LLVM_VERSION}-dev" \
     && rm -rf /var/lib/apt/lists/*
 
 # Replace the base image's bundled AFL++ with the pinned release. compile_afl
@@ -56,10 +63,16 @@ RUN rm -rf "$SRC/aflplusplus" && \
 # afl-cc exists even when every compiler mode failed to build, and then compiles
 # happily while emitting no coverage at all. __afl_area_ptr is the coverage
 # bitmap pointer, so its presence in a trivial binary is the real signal.
+#
+# Built WITH -fsanitize=address, i.e. the configuration `compile` actually uses.
+# A plain build passes even when the compiler-rt sanitizer runtimes are missing;
+# that only surfaces later as configure's opaque "C compiler cannot create
+# executables".
 RUN printf 'int main(void){return 0;}\n' > /tmp/instrtest.c && \
-    "$SRC/aflplusplus/afl-clang-fast" -o /tmp/instrtest /tmp/instrtest.c && \
+    "$SRC/aflplusplus/afl-clang-fast" -fsanitize=address \
+        -o /tmp/instrtest /tmp/instrtest.c && \
     nm /tmp/instrtest | grep -q __afl_area_ptr && \
-    echo "AFL++ instrumentation verified" && \
+    echo "AFL++ instrumentation verified (with ASAN)" && \
     rm -f /tmp/instrtest /tmp/instrtest.c
 
 # ARVO's /src IS the OSS-Fuzz $SRC layout (project dir, harness sources,
@@ -67,4 +80,12 @@ RUN printf 'int main(void){return 0;}\n' > /tmp/instrtest.c && \
 # has already pruned ARVO's bundled engine trees so they cannot shadow the
 # AFL++ pin built above.
 COPY src/ $SRC/
-WORKDIR $SRC
+
+# Curated build recipe, overriding the one ARVO shipped. Deviations from the
+# historical build are documented in build.sh and listed in meta.json.
+COPY build.sh $SRC/build.sh
+
+# OSS-Fuzz runs build.sh from the PROJECT directory, not from $SRC -- every
+# project Dockerfile ends with `WORKDIR <project>`. libxml2's build.sh opens with
+# `./autogen.sh`, which only resolves from $SRC/libxml2. This line is per-target.
+WORKDIR $SRC/libxml2

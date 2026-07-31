@@ -3,5 +3,20 @@
   "arvo_id": 1972,
   "arvo_image": "n132/arvo:1972-vul",
   "fuzz_target": "libxml2_xml_read_memory_fuzzer",
-  "crash_type": "Stack-buffer-overflow WRITE {*}"
+  "crash_type": "Stack-buffer-overflow WRITE {*}",
+  "workdir": "libxml2",
+  "deviations": [
+    {
+      "what": "build.sh: added --without-python",
+      "why": "libxml2's 2017 Python bindings do not compile against the base image's Python 3.11 headers",
+      "affects_measurement": false,
+      "rationale": "the bindings are unreachable from the fuzz target; modern OSS-Fuzz builds libxml2 the same way"
+    },
+    {
+      "what": "build.sh: added --without-zlib --without-lzma",
+      "why": "the modern base image ships zlib headers that the ARVO image lacked, so configure would enable compression the historical link line cannot satisfy",
+      "affects_measurement": false,
+      "rationale": "RESTORES the historical configuration rather than changing it: the ARVO image has no zlib.h/lzma.h and `nm -u` on its binary shows zero inflate/lzma symbols"
+    }
+  ]
 }
