@@ -1505,3 +1505,29 @@ def test_setup_cve_arvo_records_bug_removal_and_keeps_the_fold(monkeypatch, tmp_
         / "optimized" / "bin" / "demo_fuzzer"
     )
     assert not optimized_bin.exists() or optimized_bin.read_text() != "BASELINE"
+
+
+def test_retry_prompt_scrubs_sanitizer_traces_from_the_build_log():
+    """The retry prompt feeds the failed build's tail back to the agent.
+
+    A failing build can end in a sanitizer report, which names the bug's file,
+    line, and function outright -- handing the agent exactly what the sandbox
+    exists to withhold.
+    """
+    build_log = (
+        "valid.c:120:5: error: use of undeclared identifier 'foo'\n"
+        "==10==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7f\n"
+        "    #1 0x64b872 in xmlSnprintfElementContent /src/libxml2/valid.c:1279:3\n"
+        "SUMMARY: AddressSanitizer: stack-buffer-overflow /src/libxml2/valid.c:1279\n"
+    )
+    prompt = phase2_setup._make_retry_prompt("demo_fuzzer", build_log)
+    for leak in ("xmlSnprintfElementContent", "AddressSanitizer",
+                 "stack-buffer-overflow", "valid.c:1279"):
+        assert leak not in prompt, f"{leak!r} leaked into the retry prompt"
+
+
+def test_retry_prompt_keeps_plain_compiler_errors():
+    """Scrubbing must not blind the agent to its own compile break."""
+    build_log = "parser.c:88:1: error: expected ';' after expression\n"
+    prompt = phase2_setup._make_retry_prompt("demo_fuzzer", build_log)
+    assert "expected ';' after expression" in prompt

@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
+from sandbox.scrub import scrub
 from lib import corpus as corpus_util
 from lib import docker_util
 
@@ -1771,7 +1772,12 @@ def _make_retry_prompt(
     extra_prompt_directives: str | None = None,
 ) -> str:
     """Build the follow-up agent prompt after an outer phase-2 build failure."""
-    error_excerpt = "\n".join(build_log.strip().split("\n")[-200:])
+    # Scrub before the log reaches the agent. The tail of a failed build can
+    # carry a sanitizer report, which names the bug's file, line, and function
+    # outright (leak inventory items 1 and 11). sandbox.scrub keeps compiler
+    # diagnostics -- what the agent actually needs to fix its own edit -- and
+    # withholds everything when a report is present.
+    error_excerpt = "\n".join(scrub(build_log).strip().split("\n")[-200:])
     if use_wrapper_validation:
         validation_text = (
             "The wrapper-provided historical validation commands remain "

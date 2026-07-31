@@ -25,6 +25,12 @@ COMPILER_DIAG_RE = re.compile(
     r"(?:\[\d+\])?:\s"
     # link failures
     r"|undefined reference to"
+    # Generic error/fatal lines. Build systems emit plenty of real failures that
+    # match no file:line: shape ("fatal build error", "Error 1"), and dropping
+    # them leaves the agent unable to fix a break it caused. This is safe only
+    # because REPORT_RE runs FIRST on the raw log: if any sanitizer report is
+    # present, the whole log is withheld before this pattern is ever consulted.
+    r"|(?i:\berror\b|\bfatal\b|\bcannot find\b|\bno such file\b)"
 )
 
 # Structural markers of an actual sanitizer/fuzzer REPORT, checked against the

@@ -82,3 +82,23 @@ def test_make_bookkeeping_is_dropped_but_make_errors_survive():
     assert "Entering directory" not in out
     assert "Leaving directory" not in out
     assert "Error 1" in out
+
+
+def test_keeps_build_errors_that_match_no_file_line_shape():
+    """Build systems emit real failures with no file:line: prefix. Dropping them
+    leaves the agent unable to fix a break it caused."""
+    log = "line 1\nline 2\nfatal build error\n"
+    out = scrub(log)
+    assert "fatal build error" in out
+    assert "line 1" not in out, "non-diagnostic noise should still be dropped"
+
+
+def test_generic_error_matching_never_defeats_fail_closed():
+    """The broadened pattern must not let sanitizer text through: a report in the
+    raw log withholds everything before the whitelist is consulted."""
+    log = (
+        "fatal build error\n"
+        "==10==ERROR: AddressSanitizer: stack-buffer-overflow\n"
+        "    #1 0x64b872 in xmlSnprintfElementContent /src/libxml2/valid.c:1279:3\n"
+    )
+    assert scrub(log) == WITHHELD
