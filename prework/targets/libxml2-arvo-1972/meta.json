@@ -1,0 +1,7 @@
+{
+  "project": "libxml2",
+  "arvo_id": 1972,
+  "arvo_image": "n132/arvo:1972-vul",
+  "fuzz_target": "libxml2_xml_read_memory_fuzzer",
+  "crash_type": "Stack-buffer-overflow WRITE {*}"
+}

@@ -28,3 +28,6 @@ covdiff_pertrial_mut8h/
 # Run logs and local run-marker pointer files
 *.log
 .*_logname
+
+# prework: staged source is a build artifact, not source of record
+prework/targets/*/src/
