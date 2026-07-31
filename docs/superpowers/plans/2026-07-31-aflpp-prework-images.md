@@ -907,3 +907,65 @@ python3 -m prework.run_prework --target prework/targets/libxml2-arvo-1972
 ```
 
 Green tests plus `"status": "ready"` means Plan 1 is done and Plan 2 can be written.
+
+---
+
+## Execution Record (2026-07-31)
+
+**Outcome: Plan 1 complete.** libxml2/arvo-1972 verdict `reproduced` / status `ready`.
+23 tests passing. Commits `4cefa73`, `8f6e64b`, `30ba6aa` on
+`feat/aflpp-sandboxed-optimizer`.
+
+The plan above is preserved as written. Five things execution changed, and they are
+what a second target should start from:
+
+**1. LLVM must be pinned, not inherited.** `base-builder` currently ships a clang 22
+trunk build, and AFL++ v5.02c does not compile against LLVM 22 headers
+(`afl-llvm-common.o` fails on changed `StringLiteral` signatures). AFL++'s makefile
+treats LLVM-mode failure as **non-fatal**, so the result was an `afl-cc` with no
+compiler mode: it builds clean and silently emits an **uninstrumented** target. The
+Dockerfile now installs `clang-18`/`llvm-18-dev` and builds AFL++ with
+`LLVM_CONFIG=llvm-config-18`. This also removes the base image's drifting clang from
+the experiment, which is strictly better than the plan's original design.
+
+**2. Assert on instrumentation, not on artifacts.** `test -x afl-clang-fast` is
+insufficient. The image now compiles a trivial program **with `-fsanitize=address`**
+and greps for `__afl_area_ptr`. The ASAN part matters: a plain build passes even when
+compiler-rt is missing, which surfaces later only as configure's opaque "C compiler
+cannot create executables".
+
+**3. Three per-target build facts** (all belong in the hand-written Dockerfile/build.sh,
+which is exactly the curated-artifact model chosen):
+- `WORKDIR $SRC/<project>` — OSS-Fuzz runs `build.sh` from the project dir, not `$SRC`.
+- `libclang-rt-<v>-dev` — Ubuntu's `clang-N` omits the sanitizer runtimes.
+- Do **not** add dev packages the ARVO image lacked. Adding `zlib1g-dev`/`liblzma-dev`
+  made configure enable compression that the historical link line cannot satisfy.
+  Check with `nm -u` on the ARVO binary before adding any dependency.
+
+**4. Run the target in the prework image, not `base-runner`.** The target links the
+pinned LLVM's shared `libc++.so.1`, which `base-runner` does not carry. Using the
+pinned image end-to-end also keeps a second, unpinned environment out of the study.
+
+**5. Verification is four-state, not boolean** (`prework/verify.py:classify_run`):
+`reproduced` / `wrong_crash` / `no_crash` / `did_not_run`. This is measurement-critical
+rather than cosmetic — the study's headline result is a bug-**survival** rate, so an
+infrastructure failure recorded as "did not reproduce" becomes fabricated evidence that
+optimization removed a bug. This exact false negative occurred during execution (missing
+`libc++.so.1` → `status: dropped`). Only a proven clean execution — aflpp_driver's
+`Execution successful.` marker — counts as attrition.
+
+### Carry into Plan 3
+
+- `lib/crash_classify.py`'s `_SUMMARY_RE` permits spaces in the bug class, so a relative
+  path in an ASAN SUMMARY is absorbed into the signature. Fixed in `prework/verify.py`;
+  the shared copy still needs reconciling.
+- The same four-state discipline must apply to the post-hoc PoC check, for the same
+  reason.
+- `$OUT` contains `afl-fuzz`, `afl-showmap`, `afl-cmin`; the target carries AFL
+  instrumentation and aflpp_driver symbols. Phase 3 can invoke them directly.
+
+### Still unmeasured
+
+Attrition across the **other** targets. libxml2 was the most favourable case (its ARVO
+image was already Ubuntu 20.04 / clang 15). The 16.04-based targets — libavc, assimp,
+wolfssl — are untested and are what determine whether the ARVO pool is viable.
