@@ -969,3 +969,51 @@ optimization removed a bug. This exact false negative occurred during execution 
 Attrition across the **other** targets. libxml2 was the most favourable case (its ARVO
 image was already Ubuntu 20.04 / clang 15). The 16.04-based targets — libavc, assimp,
 wolfssl — are untested and are what determine whether the ARVO pool is viable.
+
+---
+
+## Execution Record — Plans 2 & 3 (2026-07-31)
+
+**9 of 10 tasks complete.** 185 tests passing. Commits `898c928` … `95272de` on
+`feat/aflpp-sandboxed-optimizer`.
+
+Complete: log scrubber, build broker, agent container + launcher, leak audit,
+AFL parsing (live-validated), phase-3 AFL runner, crash triage, phase-4 bug
+survival, signature-regex reconciliation.
+
+**Task 8 (phase-2 rewiring) is PARTIAL.** Done: the bug-preservation gate is
+removed and replaced with a recorder, `poc_verdict` is threaded into
+`setup_metadata.json`, and the retry prompt is scrubbed. Still to do:
+
+1. Point the build path at `bench-aflpp/<project>-arvo-<id>`; delete the
+   `arvo compile` path.
+2. Replace `_invoke_agent_capture` with a broker-mediated sandbox launch.
+   **The sandbox is inert until this lands** — every component exists and is
+   tested, but phase 2 still invokes the agent unconfined.
+3. Move corpus grow / crash filter / mutation capture broker-side; replace the
+   link-time libFuzzer shim with an `AFL_CUSTOM_MUTATOR_LIBRARY` `.so` and delete
+   `mutation_dump_mutator.c`.
+
+### Findings that changed the design
+
+- **AFL++ v5.02c does not build against clang 22** (what `base-builder` ships).
+  Its makefile treats LLVM-mode failure as non-fatal, producing an `afl-cc` with
+  no compiler mode: builds clean, emits an **uninstrumented** target. Fixed by
+  pinning LLVM 18, which also removes the base image's drifting clang from the
+  experiment.
+- **`time:` is milliseconds** — confirmed live: `time:119719` over `run_time: 120`.
+- **`plot_data` has 15 columns in v5.02c**, not the 13 assumed. The parser was
+  header-driven, so it absorbed this unchanged.
+- **`/proc/1/cmdline` is readable inside the container.** Anything on the agent's
+  argv — above all the phase-2 prompt — is visible regardless of filesystem
+  confinement. Now asserted.
+- **The scrubber's whitelist was too strict**, dropping real build failures that
+  match no `file:line:` shape. Broadened, safe because the fail-closed check runs
+  first on the raw log.
+- **`ubuntu:24.04` already has a uid-1000 user**, so `useradd -u 1000 agent || true`
+  silently failed and every agent container died at startup. The `|| true` hid it.
+
+### Still unmeasured
+
+Attrition on targets other than libxml2. libavc, assimp, and wolfssl are Ubuntu
+16.04-based and have no prework image yet.
