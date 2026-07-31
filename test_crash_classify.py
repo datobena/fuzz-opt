@@ -94,3 +94,28 @@ def test_normalize_signature_matches_manifest_style():
             == cc.normalize_signature("heap-use-after-free"))
     assert cc.normalize_signature("Stack-buffer-overflow WRITE {*}") == "stack-buffer-overflow"
     assert cc.normalize_signature("") == ""
+
+
+def test_summary_regex_is_not_polluted_by_a_relative_path():
+    """A relative path in SUMMARY must not be absorbed into the bug class.
+
+    Regression: the class previously allowed spaces, so
+    "stack-buffer-overflow valid.c:1279" parsed as the class
+    "stack-buffer-overflow valid" and silently failed to match the manifest --
+    scoring a genuine target-bug crash as a different bug.
+    """
+    from lib.crash_classify import _SUMMARY_RE, normalize_signature
+
+    blob = "SUMMARY: AddressSanitizer: stack-buffer-overflow valid.c:1279 in xmlS\n"
+    detected = _SUMMARY_RE.search(blob).group(1).strip()
+    assert detected == "stack-buffer-overflow"
+    assert normalize_signature(detected) == normalize_signature(
+        "Stack-buffer-overflow WRITE {*}")
+
+
+def test_summary_regex_handles_the_usual_absolute_path():
+    from lib.crash_classify import _SUMMARY_RE
+
+    blob = ("SUMMARY: AddressSanitizer: heap-use-after-free "
+            "/src/p/foo.c:12:5 in bar\n")
+    assert _SUMMARY_RE.search(blob).group(1).strip() == "heap-use-after-free"

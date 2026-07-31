@@ -130,7 +130,14 @@ def summarize_trials(
 # --------------------------------------------------------------------------- #
 # Tier 2 — gold-standard: replay the artifact and confirm it reproduces
 # --------------------------------------------------------------------------- #
-_SUMMARY_RE = re.compile(r"SUMMARY:\s*\w*Sanitizer:\s*([a-zA-Z0-9_\- ]+)")
+# Bug classes are lowercase-hyphenated single tokens ("stack-buffer-overflow").
+# The character class deliberately EXCLUDES spaces: an ASAN SUMMARY reads
+# "SUMMARY: <San>: <class> <path>:<line> in <func>", so allowing spaces swallows
+# the location whenever the path is relative -- yielding "stack-buffer-overflow
+# valid" and a silent signature MISMATCH, i.e. a real crash scored as "not the
+# target bug". READ/WRITE and size suffixes live on the manifest side and are
+# handled by normalize_signature.
+_SUMMARY_RE = re.compile(r"SUMMARY:\s*\w*Sanitizer:\s*([a-zA-Z0-9_\-]+)")
 
 
 def normalize_signature(sig: str) -> str:
