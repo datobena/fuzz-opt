@@ -25,6 +25,58 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# --------------------------------------------------------------------------- #
+# Bug survival
+#
+# The pipeline no longer reverts an optimization for removing the bug -- survival
+# is MEASURED, not enforced (see the 2026-07-30 design spec). That makes an
+# optimized arm with no finding ambiguous: it was either slower/unlucky, or the
+# bug is not in the binary at all. The recorded poc_verdict is the discriminator,
+# and pooling the two cases would make a removed bug look like a performance
+# regression.
+# --------------------------------------------------------------------------- #
+
+# Verdicts written by phase 2 (prework.verify.classify_run). "wrong_crash" means
+# the PoC now triggers a DIFFERENT bug, so the target bug is gone too.
+_VERDICT_BUG_PRESENT = ("reproduced",)
+_VERDICT_BUG_REMOVED = ("no_crash", "wrong_crash")
+
+
+def classify_trial_outcome(ttb, poc_verdict):
+    """Classify one trial: found / not_found / bug_absent / unverified.
+
+    A find always counts, even against a "bug removed" verdict -- that
+    combination is a contradiction worth surfacing rather than resolving
+    silently, because it means either the verdict or the triage is wrong.
+    """
+    if ttb is not None:
+        return "found"
+    if poc_verdict in _VERDICT_BUG_PRESENT:
+        return "not_found"
+    if poc_verdict in _VERDICT_BUG_REMOVED:
+        return "bug_absent"
+    return "unverified"
+
+
+def summarize_bug_survival(arms):
+    """Bug-survival rate over arms carrying a poc_verdict.
+
+    Unverified arms are counted but EXCLUDED from the rate: a verdict we could
+    not obtain is not evidence in either direction, and folding it in would
+    silently bias the headline number.
+    """
+    survived = sum(1 for a in arms if a.get("poc_verdict") in _VERDICT_BUG_PRESENT)
+    removed = sum(1 for a in arms if a.get("poc_verdict") in _VERDICT_BUG_REMOVED)
+    verified = survived + removed
+    return {
+        "total": len(arms),
+        "survived": survived,
+        "removed": removed,
+        "unverified": len(arms) - verified,
+        "survival_rate": (survived / verified) if verified else None,
+    }
+
+
 def extract_execs_per_second(metadata: dict, trial_dir: str) -> float:
     """Extract a trustworthy executions/sec value for one trial."""
     final_stats = metadata.get("final_stats", {})
