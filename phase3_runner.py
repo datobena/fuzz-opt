@@ -319,6 +319,56 @@ def _launch_container(
         return False
 
 
+def _resolve_trial_image(trial: Trial) -> Optional[str]:
+    """Pick the first locally-available OSS-Fuzz runtime image for this trial.
+
+    Mirrors the image-selection block in start_trial, factored out so the online
+    loop's corpus-preserving relaunch can reuse it.
+    """
+    candidate_images = []
+    if trial.variant == "optimized":
+        candidate_images.append(f"gcr.io/oss-fuzz/{trial.project}_opt")
+    candidate_images.append(f"gcr.io/oss-fuzz/{trial.project}")
+    candidate_images.append("gcr.io/oss-fuzz-base/base-runner")
+    for img in candidate_images:
+        check = subprocess.run(["docker", "image", "inspect", img], capture_output=True)
+        if check.returncode == 0:
+            return img
+    return None
+
+
+def relaunch_preserving_corpus(
+    trial: Trial, experiment_id: str, duration: int,
+) -> bool:
+    """Relaunch a trial's container WITHOUT wiping its accumulated corpus/crashes.
+
+    Unlike start_trial (which rmtree's corpus/ + crashes/ and re-copies the seed
+    corpus), this keeps the grown corpus on disk and just relaunches the fuzzer against
+    it with a new (remaining) time budget. Used by the online loop to hot-swap the
+    binary: the orchestrator overwrites the shared optimized/bin/<target>, then each
+    online trial is relaunched here against its own preserved corpus. The caller keeps
+    trial.start_time stable so crash-elapsed timestamps stay cumulative across relaunches.
+    """
+    dirs = get_trial_dirs(experiment_id, trial)
+    fuzzer_binary = get_fuzzer_binary(experiment_id, trial)
+    if not os.path.isfile(fuzzer_binary):
+        logger.error("Relaunch: fuzzer binary not found: %s", fuzzer_binary)
+        trial.status = "failed"
+        return False
+    os.chmod(fuzzer_binary, 0o755)
+    trial._bin_dir = os.path.dirname(fuzzer_binary)
+    trial._fuzz_target_name = os.path.basename(fuzzer_binary)
+    trial._dirs = dirs
+    if getattr(trial, "_docker_image", None) is None:
+        image = _resolve_trial_image(trial)
+        if image is None:
+            logger.error("Relaunch: no docker image for trial %s", trial.name)
+            trial.status = "failed"
+            return False
+        trial._docker_image = image
+    return _launch_container(trial, experiment_id, duration)
+
+
 def monitor_trial(
     trial: Trial, experiment_id: str,
     duration: int = config.TRIAL_DURATION_SECS,

@@ -1674,20 +1674,27 @@ _HEADLESS_SYNC_DIRECTIVE = (
 def _make_apply_fuzz_source_folds_prompt(
     harness_path: str, use_wrapper_validation: bool = False,
     backend: str = "codex",
+    extra_prompt_directives: str | None = None,
 ) -> str:
     """Build the initial agent prompt for phase 2 source-fold optimization."""
     return _make_apply_fuzz_source_folds_prompt_with_mode(
         harness_path=harness_path,
         use_wrapper_validation=use_wrapper_validation,
         backend=backend,
+        extra_prompt_directives=extra_prompt_directives,
     )
 
 
 def _make_apply_fuzz_source_folds_prompt_with_mode(
     harness_path: str, use_wrapper_validation: bool = False,
     backend: str = "codex",
+    extra_prompt_directives: str | None = None,
 ) -> str:
-    """Build the initial agent prompt for phase 2 source-fold optimization."""
+    """Build the initial agent prompt for phase 2 source-fold optimization.
+
+    ``extra_prompt_directives`` (optional) is appended verbatim; the online loop
+    uses it to pass the soft attempt-ledger ("already tried, avoid unless changed").
+    """
     validation_lines = [
         "The outer phase 2 wrapper performs the authoritative rebuild and "
         "smoke-run after you finish.",
@@ -1745,7 +1752,7 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
             "Use internal validation only if it is genuinely available.",
         )
 
-    return (
+    prompt = (
         f"Use {_skill_mention(backend)}.\n\n"
         "Use the current directory as source_dir and "
         f"'{harness_path}' as harness_path.\n"
@@ -1753,11 +1760,15 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
         + _HEADLESS_SYNC_DIRECTIVE + "\n"
         + "\n".join(validation_lines)
     )
+    if extra_prompt_directives:
+        prompt += "\n\n" + extra_prompt_directives
+    return prompt
 
 
 def _make_retry_prompt(
     fuzz_target: str, build_log: str, use_wrapper_validation: bool = False,
     backend: str = "codex",
+    extra_prompt_directives: str | None = None,
 ) -> str:
     """Build the follow-up agent prompt after an outer phase-2 build failure."""
     error_excerpt = "\n".join(build_log.strip().split("\n")[-200:])
@@ -1790,7 +1801,7 @@ def _make_retry_prompt(
             "re-profile. Keep each fold only if deterministic replay timing on "
             "the fixed corpus beats the previous best, else revert it."
         )
-    return (
+    prompt = (
         f"You are optimizing the fuzz target '{fuzz_target}' in the current "
         f"source tree using {_skill_mention(backend)}. The previous "
         "session ended before phase 2 completed successfully.\n\n"
@@ -1803,6 +1814,9 @@ def _make_retry_prompt(
         "build scripts, Dockerfiles, and project metadata unchanged.\n"
         + _HEADLESS_SYNC_DIRECTIVE
     )
+    if extra_prompt_directives:
+        prompt += "\n\n" + extra_prompt_directives
+    return prompt
 
 
 def _optimizer_backend() -> str:
@@ -2026,6 +2040,7 @@ def optimize_and_build(
     project: str, build_fn, max_attempts: int = 10,
     codex_extra_env: dict[str, str] | None = None,
     use_wrapper_validation: bool = False,
+    extra_prompt_directives: str | None = None,
 ) -> bool:
     """Run the full optimize→build→fix loop until the build succeeds.
 
@@ -2077,6 +2092,7 @@ def optimize_and_build(
                 harness_path,
                 use_wrapper_validation=use_wrapper_validation,
                 backend=backend,
+                extra_prompt_directives=extra_prompt_directives,
             )
             logger.info(
                 "Invoking %s via %s (attempt %d/%d)...",
@@ -2096,6 +2112,7 @@ def optimize_and_build(
                 build_log,
                 use_wrapper_validation=use_wrapper_validation,
                 backend=backend,
+                extra_prompt_directives=extra_prompt_directives,
             )
             logger.info(
                 "Re-invoking %s to fix + continue (attempt %d/%d)...",

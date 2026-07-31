@@ -11,7 +11,9 @@ RESULTS_DIR = os.path.join(BENCHMARK_DIR, "results")
 MANIFEST_PATH = os.path.join(BENCHMARK_DIR, "manifest.json")
 
 # Trial parameters
-NUM_TRIALS = 10
+# Env-overridable so parallel multi-project online runs can shrink trials-per-project
+# to fit the core budget (e.g. 4 projects x (4 baseline + 4 online) on 40 cores).
+NUM_TRIALS = int(os.environ.get("NUM_TRIALS", "10"))
 TRIAL_DURATION_SECS = 21600  # 6 hours
 MEMORY_LIMIT = "4g"
 MEMORY_LIMIT_RETRY = "8g"
@@ -167,6 +169,33 @@ PHASE3_K8S_ARTIFACTS_DIR = os.environ.get(
 PHASE3_K8S_MEMORY = os.environ.get("PHASE3_K8S_MEMORY", "12Gi")
 PHASE3_K8S_RSS_LIMIT_MB = int(os.environ.get("PHASE3_K8S_RSS_LIMIT_MB", "8192"))
 PHASE3_K8S_TTL_SECONDS = int(os.environ.get("PHASE3_K8S_TTL_SECONDS", "432000"))
+
+# Online (continuous) optimization during fuzzing (LOCAL backend only). While the
+# phase-3 fuzzer runs, periodically snapshot one live trial's accumulated corpus,
+# run the phase-2 machinery on it to produce a faster binary, then hot-swap that
+# binary into all online trials and keep fuzzing. See phase3_online.py.
+ONLINE_ENABLED = os.environ.get("ONLINE_ENABLED", "0") == "1"
+# Minimum fuzz-time between binary swaps (rounds run sequentially; the optimizer
+# itself can take up to PHASE2_OPTIMIZER_TIMEOUT_SECS, so this is a floor).
+ONLINE_SWAP_INTERVAL_SECS = int(os.environ.get("ONLINE_SWAP_INTERVAL_SECS", "3600"))
+# Stop attempting new rounds after this many consecutive rounds produce no accepted
+# fold; fuzzing continues to the end of the budget regardless.
+ONLINE_CONVERGENCE_K = int(os.environ.get("ONLINE_CONVERGENCE_K", "2"))
+# Cores pinned to the 20 fuzzing trials vs the disjoint pool reserved for the
+# optimizer's docker work, so optimization does not steal (and bias) trial cycles.
+ONLINE_TRIAL_CORES = os.environ.get("ONLINE_TRIAL_CORES", "4-23")
+ONLINE_OPTIMIZER_CORES = os.environ.get("ONLINE_OPTIMIZER_CORES", "24-39")
+# Which live trial's corpus feeds a round: "largest" live corpus (tie -> lowest id).
+ONLINE_SNAPSHOT_TRIAL_SELECTOR = os.environ.get("ONLINE_SNAPSHOT_TRIAL_SELECTOR", "largest")
+# Core the optimizer pins profiling / mutation-capture / replay-timing to. Distinct
+# per project in a parallel multi-project run so the timing gates don't collide on one
+# core. Default: the top reserved core. Empty -> RESERVED_CORES-1.
+ONLINE_PROFILE_CPU = os.environ.get("ONLINE_PROFILE_CPU", "")
+# Re-open rule for the soft attempt ledger: a tried (function, pattern) is retried
+# only if its hotspot rank moved by >= this many places, or its self-time share
+# changed by >= this relative fraction, since the attempt.
+ONLINE_LEDGER_REOPEN_RANK_DELTA = int(os.environ.get("ONLINE_LEDGER_REOPEN_RANK_DELTA", "3"))
+ONLINE_LEDGER_REOPEN_SHARE_REL = float(os.environ.get("ONLINE_LEDGER_REOPEN_SHARE_REL", "0.25"))
 
 # Seed generation
 BASE_SEED = 1337

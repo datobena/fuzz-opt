@@ -625,6 +625,30 @@ def run_phase_trials(
         if project:
             manifest = [e for e in manifest if e["project"] == project]
 
+        # Online (continuous) optimization: self-contained per-target runs on the
+        # LOCAL backend. It extracts the image, starts baseline+online arms, and
+        # optimizes/hot-swaps during the campaign, so it does NOT depend on a prior
+        # phase-2 optimized binary and bypasses the setup-verification filter below.
+        if getattr(config, "ONLINE_ENABLED", False):
+            if _phase3_backend() != "local":
+                logger.error("Online optimization requires PHASE3_BACKEND=local")
+                return False
+            import phase3_online
+            for entry in manifest:
+                try:
+                    phase3_online.run_online(entry, experiment_id, duration=duration)
+                except Exception as e:  # noqa: BLE001
+                    logger.error("Online run failed for %s: %s", entry.get("cve"), e)
+            all_results = collect_all_trial_results(experiment_id)
+            results_path = os.path.join(
+                config.RESULTS_DIR, experiment_id, "trial_results.json")
+            with open(results_path, "w") as f:
+                json.dump(all_results, f, indent=2)
+            mark_phase_completed(state, 3)
+            save_state(state, experiment_id)
+            logger.info("Phase 3 (online) complete: %d trials", len(all_results))
+            return True
+
         # Filter to only projects that were successfully set up
         setup_manifest = []
         for entry in manifest:
@@ -826,7 +850,16 @@ def main():
         "--sample-seed", type=int, default=None,
         help="Random seed for --sample-cves (default: random)",
     )
+    parser.add_argument(
+        "--online", action="store_true",
+        help="Phase 3: run online (continuous) optimization during fuzzing "
+             "(baseline vs online, LOCAL backend). Forces PHASE3_BACKEND=local.",
+    )
     args = parser.parse_args()
+
+    if args.online:
+        os.environ["PHASE3_BACKEND"] = "local"
+        config.ONLINE_ENABLED = True
 
     experiment_id = args.experiment_id
     prepare_experiment_dir_for_run(
