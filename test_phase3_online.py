@@ -304,6 +304,9 @@ def test_build_round_env_uses_pure_reservoir(tmp_path):
 
 # --- backend strategy: n132 vs classic-ARVO (selinux) rebuild + validation wiring ---
 def test_strategy_n132_wires_arvo_compile(monkeypatch):
+    # Legacy backend. Under PHASE2_SANDBOX (the default) both strategies
+    # route through the prework image instead -- see test_phase3_online_afl.
+    monkeypatch.setattr(phase3_online.config, "PHASE2_SANDBOX", False)
     calls = {}
     def rec_rebuild(image, src, out, capture_log=False):
         calls["rebuild"] = (image, str(out)); return True
@@ -322,6 +325,9 @@ def test_strategy_n132_wires_arvo_compile(monkeypatch):
 
 
 def test_strategy_classic_arvo_wires_gcr_rebuild(monkeypatch):
+    # Legacy backend. Under PHASE2_SANDBOX (the default) both strategies
+    # route through the prework image instead -- see test_phase3_online_afl.
+    monkeypatch.setattr(phase3_online.config, "PHASE2_SANDBOX", False)
     calls = {}
     monkeypatch.setattr(phase2_setup, "rebuild_with_modified_source_arvo",
                         lambda lid, issue, src, out, capture_log=False: calls.setdefault("rebuild", (lid, str(out))) or True)

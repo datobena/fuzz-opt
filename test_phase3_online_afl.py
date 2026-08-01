@@ -121,3 +121,32 @@ def test_online_finalize_reads_afl_stats_not_console_text(monkeypatch, tmp_path)
     assert 'parse_fuzzer_stats(dirs["afl_out"])' in src
     assert "parse_fuzzer_stats(logs)" not in src
 
+
+
+def test_online_rebuilds_go_through_the_prework_image(monkeypatch):
+    """Otherwise every hot-swapped binary is a libFuzzer build (`arvo compile`)
+    dropped into a running AFL campaign."""
+    import phase3_online
+
+    monkeypatch.setattr(phase3_online.config, "PHASE2_SANDBOX", True)
+    entry = {"project": "libavc", "cve": "arvo-16505", "local_id": 16505,
+             "image": "n132/arvo:16505-vul"}
+    _rebuild, wrapper_env_fn = phase3_online._online_target_strategy(
+        entry, "avc_dec_fuzzer")
+    env = wrapper_env_fn("/src", "/state")
+    assert env["PHASE2_PREWORK_IMAGE"] == "bench-aflpp/libavc-arvo-16505"
+    assert env["FUZZ_SOURCE_FOLDS_BUILD_COMMAND"].startswith("/work/bin/")
+    assert "docker" not in env["FUZZ_SOURCE_FOLDS_VALIDATE_COMMAND"]
+
+
+def test_online_legacy_path_still_available_when_unsandboxed(monkeypatch, tmp_path):
+    import phase3_online
+
+    monkeypatch.setattr(phase3_online.config, "PHASE2_SANDBOX", False)
+    entry = {"project": "libavc", "cve": "arvo-16505", "local_id": 16505,
+             "image": "n132/arvo:16505-vul"}
+    _rebuild, wrapper_env_fn = phase3_online._online_target_strategy(
+        entry, "avc_dec_fuzzer")
+    env = wrapper_env_fn(str(tmp_path / "src"), str(tmp_path / "state"))
+    assert "PHASE2_PREWORK_IMAGE" not in env
+    assert "docker" in env["FUZZ_SOURCE_FOLDS_BUILD_COMMAND"]

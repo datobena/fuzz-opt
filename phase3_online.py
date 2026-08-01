@@ -400,11 +400,35 @@ def _is_n132_entry(entry: dict) -> bool:
 def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = None):
     """Return (rebuild_fn, wrapper_env_fn) closures for this entry's backend.
 
-    n132/arvo image -> ``arvo compile`` on the bundled image; classic ARVO (a bare
-    ``local_id``, e.g. selinux) -> rebuild via the ``gcr.io/oss-fuzz/<local_id>`` image
-    and the ARVO wrapper-validation commands. rebuild_fn(source_root, out_bin_dir) and
+    Under PHASE2_SANDBOX (the default) both closures go through the pinned prework
+    image: rebuilds run there, and the agent's build/smoke commands become broker
+    clients. Leaving the legacy branches in place would silently rebuild each
+    online round with `arvo compile` -- i.e. FUZZING_ENGINE=libfuzzer -- so every
+    hot-swapped binary would be a libFuzzer build dropped into an AFL campaign.
+
+    Legacy (PHASE2_SANDBOX=0): n132/arvo image -> ``arvo compile`` on the bundled
+    image; classic ARVO (a bare ``local_id``, e.g. selinux) -> rebuild via
+    ``gcr.io/oss-fuzz/<local_id>``. rebuild_fn(source_root, out_bin_dir) and
     wrapper_env_fn(source_root, state_dir) hide the backend from run_round.
     """
+    if getattr(config, "PHASE2_SANDBOX", True):
+        from prework.prework_build import rebuild_with_prework_image
+        from sandbox.session import build_sandbox_validation_env
+
+        def rebuild_fn(source_root, out_bin_dir):
+            return rebuild_with_prework_image(
+                entry=entry, source_dir=str(source_root),
+                out_dir=out_bin_dir, capture_log=True)
+
+        def wrapper_env_fn(source_root, state_dir):
+            from prework.prework_build import prework_image_for
+            env = build_sandbox_validation_env()
+            env["PHASE2_PREWORK_IMAGE"] = prework_image_for(entry)
+            env["FUZZ_TARGET"] = fuzz_target
+            return env
+
+        return rebuild_fn, wrapper_env_fn
+
     if _is_n132_entry(entry):
         image = str(entry["image"])
 
