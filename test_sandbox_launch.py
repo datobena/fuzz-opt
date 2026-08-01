@@ -140,3 +140,22 @@ def test_agent_tools_speak_the_broker_protocol(tmp_path, monkeypatch):
     assert r.returncode == 0, r.stderr
     assert "replay_seconds=7.5000" in r.stdout
     assert "repeats=3" in r.stdout
+
+
+def test_sandbox_internal_paths_survive_but_host_paths_do_not():
+    """/work/... is sandbox-internal by construction and names nothing on the
+    host; any other absolute path carries the <project>-<cve> experiment dir."""
+    env = build_agent_env({
+        "FUZZ_SOURCE_FOLDS_BUILD_COMMAND": "/work/bin/fold-build",
+        "FUZZ_SOURCE_FOLDS_VALIDATION_MODE": "wrapper",
+    })
+    assert env["FUZZ_SOURCE_FOLDS_BUILD_COMMAND"] == "/work/bin/fold-build"
+    assert env["FUZZ_SOURCE_FOLDS_VALIDATION_MODE"] == "wrapper"
+
+
+def test_a_host_path_smuggled_into_an_allowlisted_key_is_dropped():
+    env = build_agent_env({
+        "FUZZ_SOURCE_FOLDS_BUILD_COMMAND":
+            "/home/x/results/libxml2-arvo-1972/build.sh",
+    })
+    assert "FUZZ_SOURCE_FOLDS_BUILD_COMMAND" not in env

@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
+from prework.prework_build import prework_image_for, rebuild_with_prework_image
 from sandbox.scrub import scrub
 from lib import corpus as corpus_util
 from lib import docker_util
@@ -2023,11 +2024,65 @@ def _invoke_agent_capture(
     project: str = "", extra_env: dict[str, str] | None = None,
     backend: str | None = None,
 ) -> dict:
-    """Dispatch to the configured optimizer backend (Claude or Codex)."""
+    """Run the optimizer, sandboxed unless explicitly disabled.
+
+    With the bug-preservation gate removed, confinement is the ONLY thing that
+    makes a measured bug-survival rate meaningful: an agent that can read the
+    PoC, the ASAN trace, or the CVE id can preserve the bug deliberately, and
+    the number then says nothing about optimization.
+
+    So the sandbox is the default and its absence is an error, not a fallback --
+    a silent downgrade to the unconfined path would produce results that look
+    fine and mean nothing. PHASE2_SANDBOX=0 opts out explicitly, for debugging
+    the optimizer itself.
+    """
+    if getattr(config, "PHASE2_SANDBOX", True):
+        return _invoke_agent_sandboxed(
+            source_dir, prompt, timeout=timeout, project=project,
+            extra_env=extra_env,
+        )
+    logger.warning(
+        "PHASE2_SANDBOX=0: running the optimizer UNCONFINED. Bug-survival "
+        "results from this run are not trustworthy."
+    )
     backend = (backend or _optimizer_backend()).lower()
     if backend == "claude":
         return _invoke_claude_capture(source_dir, prompt, timeout, project, extra_env)
     return _invoke_codex_capture(source_dir, prompt, timeout, project, extra_env)
+
+
+def _invoke_agent_sandboxed(
+    source_dir: str, prompt: str, *, timeout: int | None, project: str,
+    extra_env: dict[str, str] | None,
+) -> dict:
+    """Run one optimizer session in the container sandbox (sandbox/session.py)."""
+    from sandbox.session import run_sandboxed_optimizer
+
+    env = dict(extra_env or {})
+    out_dir = env.get("FUZZ_SOURCE_FOLDS_OUT_DIR", "")
+    corpus_dir = (env.get("FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR")
+                  or env.get("FUZZ_SOURCE_FOLDS_CORPUS_DIR", ""))
+    profile_dir = env.get("FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR", "")
+    image = env.get("PHASE2_PREWORK_IMAGE", "")
+    fuzz_target = env.get("FUZZ_TARGET", "")
+
+    missing = [n for n, v in (
+        ("FUZZ_SOURCE_FOLDS_OUT_DIR", out_dir),
+        ("corpus dir", corpus_dir),
+        ("FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR", profile_dir),
+        ("PHASE2_PREWORK_IMAGE", image),
+        ("FUZZ_TARGET", fuzz_target),
+    ) if not v]
+    if missing:
+        raise RuntimeError(
+            f"sandboxed optimizer is missing required context: {missing}"
+        )
+
+    return run_sandboxed_optimizer(
+        source_dir=source_dir, profile_dir=profile_dir, out_dir=out_dir,
+        corpus_dir=corpus_dir, image=image, fuzz_target=fuzz_target,
+        project=project, prompt=prompt, timeout=timeout, base_env=env,
+    )
 
 
 def _invoke_codex(
@@ -2790,14 +2845,29 @@ def setup_cve_arvo_image(
         entry=entry,
         baseline_out_dir=baseline_bin_dir,
     )
-    validation_env.update(_make_n132_wrapper_validation_env(
-        image=image,
-        source_dir=source_dir,
-        fuzz_target=fuzz_target,
-        state_dir=Path(experiment_dir) / "optimized" / "validation",
-    ))
+    if getattr(config, "PHASE2_SANDBOX", True):
+        # Sandboxed: the agent has no docker, so build/smoke/validate are broker
+        # clients under /work/bin. The prework image is passed through for the
+        # BROKER to build in -- it is never named to the agent.
+        from sandbox.session import build_sandbox_validation_env
+        validation_env.update(build_sandbox_validation_env())
+        validation_env["PHASE2_PREWORK_IMAGE"] = prework_image_for(entry)
+        validation_env["FUZZ_TARGET"] = fuzz_target
+    else:
+        validation_env.update(_make_n132_wrapper_validation_env(
+            image=image,
+            source_dir=source_dir,
+            fuzz_target=fuzz_target,
+            state_dir=Path(experiment_dir) / "optimized" / "validation",
+        ))
 
     def build_fn():
+        if getattr(config, "PHASE2_SANDBOX", True):
+            return rebuild_with_prework_image(
+                entry=entry,
+                source_dir=str(_find_project_source(source_dir, project)),
+                out_dir=optimized_bin_dir, capture_log=True,
+            )
         return rebuild_with_modified_source_n132(
             image, source_dir, optimized_bin_dir, capture_log=True,
         )

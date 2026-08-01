@@ -131,6 +131,13 @@ PHASE2_MIN_REPLAY_SPEEDUP_PARTIAL = float(
     os.environ.get("PHASE2_MIN_REPLAY_SPEEDUP_PARTIAL", "1.05")  # require >5% when partial
 )
 
+# Confine the phase-2 optimizer to a container with no docker socket, no host
+# filesystem, and egress allowlisted to the model API (see sandbox/session.py).
+# ON by default and its absence is an error, not a fallback: with the
+# bug-preservation gate removed, confinement is the only thing making a measured
+# bug-survival rate meaningful. Set 0 only to debug the optimizer itself.
+PHASE2_SANDBOX = os.environ.get("PHASE2_SANDBOX", "1") == "1"
+
 # Which agent CLI drives the phase-2 source optimization: "claude" or "codex".
 # Overridable per-run with the BENCHMARK_OPTIMIZER env var.
 OPTIMIZER_BACKEND = os.environ.get("BENCHMARK_OPTIMIZER", "claude").lower()

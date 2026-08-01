@@ -492,7 +492,13 @@ def test_invoke_claude_capture_uses_skip_permissions_and_model_env(monkeypatch):
 
 
 def test_invoke_agent_capture_dispatches_by_backend(monkeypatch):
-    seen = {}
+    """Backend dispatch applies only to the UNCONFINED path.
+
+    With PHASE2_SANDBOX on (the default) every backend runs inside the same
+    container via sandbox/session.py, so there is no claude-vs-codex branch to
+    take -- see test_sandbox_session.py.
+    """
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_SANDBOX", False)
 
     monkeypatch.setattr(
         phase2_setup, "_invoke_claude_capture",

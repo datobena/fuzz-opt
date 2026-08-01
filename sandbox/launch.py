@@ -48,6 +48,12 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "FUZZ_SOURCE_FOLDS_REPLAY_REPEATS",
     "FUZZ_SOURCE_FOLDS_CORPUS_BUILD_DURATION",
     "FUZZ_SOURCE_FOLDS_VALIDATION_MODE",
+    # The build/smoke/validate contract. Under the sandbox these are broker
+    # clients under /work/bin rather than docker command lines; without them
+    # allowlisted the agent reaches its source with no way to build it.
+    "FUZZ_SOURCE_FOLDS_BUILD_COMMAND",
+    "FUZZ_SOURCE_FOLDS_SMOKE_COMMAND",
+    "FUZZ_SOURCE_FOLDS_VALIDATE_COMMAND",
 )
 
 # Where each allowlisted path variable is remapped inside the sandbox.
@@ -70,8 +76,15 @@ def build_agent_env(base: dict) -> dict:
             env[key] = _PATH_REWRITES[key]
         else:
             value = str(base[key])
-            # Defence in depth: never forward something path-shaped that we did
-            # not explicitly plan to rewrite.
+            # A value already rooted at /work is sandbox-internal by
+            # construction -- it names nothing on the host and cannot leak the
+            # project, CVE, or experiment. The validation commands are exactly
+            # this shape (/work/bin/fold-build).
+            if value.startswith(WORK_ROOT + "/"):
+                env[key] = value
+                continue
+            # Defence in depth: never forward any OTHER path-shaped value, since
+            # host paths carry the experiment dir name <project>-<cve>.
             if value.startswith("/") or PurePosixPath(value).is_absolute():
                 logger.warning("dropping unexpected path-valued env %s", key)
                 continue
