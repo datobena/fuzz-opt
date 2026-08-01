@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sandbox import broker as broker_mod
+from sandbox import egress
 from sandbox.launch import (
     SRC_MOUNT,
     TOOLS_MOUNT,
@@ -139,12 +140,34 @@ def run_sandboxed_optimizer(
     t = threading.Thread(target=_serve, daemon=True)
     t.start()
 
+    # The agent's only route out: an allowlisting proxy on both networks.
+    proxy = egress.start_proxy(
+        internal_network=network, log_dir=str(session_dir / "egress"),
+    )
+
     env = build_agent_env({**(base_env or {}), **build_sandbox_validation_env()})
+    # Proxy settings are not part of the FUZZ_SOURCE_FOLDS allowlist -- they are
+    # sandbox plumbing, added after scrubbing. NO_PROXY keeps the broker socket
+    # and loopback off the proxy path.
+    env.update({
+        "HTTPS_PROXY": proxy, "https_proxy": proxy,
+        "HTTP_PROXY": proxy, "http_proxy": proxy,
+        "NO_PROXY": "localhost,127.0.0.1", "no_proxy": "localhost,127.0.0.1",
+    })
+
     tools = str(Path(__file__).resolve().parent / "agent_tools")
     cmd = build_agent_docker_command(
         image=AGENT_IMAGE, src=source_dir, profile=profile_dir, tools=tools,
         sock=sock_path, network=network, env=env,
     )
+    # Subscription OAuth: the credential is a FILE, mounted as a writable copy so
+    # the CLI can refresh a short-lived access token without touching the host's.
+    # Only the credential itself -- never ~/.claude, which holds prior-run
+    # transcripts naming these bugs.
+    insert = cmd.index("-w")
+    for spec in egress.stage_credentials(session_dir):
+        cmd[insert:insert] = ["-v", spec]
+        insert += 2
     # The prompt becomes the container's argv, which is readable from inside via
     # /proc/1/cmdline -- so it must carry nothing identifying about the target.
     cmd += ["claude", "-p", prompt, "--dangerously-skip-permissions"]
