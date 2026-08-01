@@ -225,32 +225,57 @@ def snapshot_live_corpus(src_dir, dest_dir, *, now: float,
 # .so, so the online trials carry it and a round consumes what they produced.
 # ---------------------------------------------------------------------------
 BATCH_MARKER = ".batch_complete"
+DUMP_REQUEST = ".dump_now"
 
 
-def rearm_mutation_capture(dump_dirs) -> int:
-    """Clear each trial's dump and re-arm the shim for the next round.
+def request_mutation_dump(dump_dirs, *, timeout: float = 60.0,
+                          poll: float = 0.5) -> list[str]:
+    """Ask every capture trial to write its batch, and wait for the markers.
 
-    The shim goes idle once its batch is written and watches for the marker to
-    disappear. Removing it here means the NEXT round profiles mutations generated
-    since this moment, so the workload tracks the corpus and binary as they
-    evolve -- which is the whole premise of online optimization.
+    The shim samples continuously across the whole inter-round window and only
+    writes when asked, so a round must REQUEST a dump rather than simply reading
+    whatever is on disk. Requesting also stamps the window boundary: the shim
+    resets and starts the next window as soon as it has written.
 
-    The directory itself is preserved: it is a live bind mount into a running
-    container, and replacing it would detach the shim's view of it.
+    Returns the dirs that produced a complete batch. A trial that does not answer
+    in time is skipped rather than waited on -- a stalled or just-restarted trial
+    must not hold up an optimization round.
     """
-    cleared = 0
+    pending = []
     for d in dump_dirs:
         p = Path(d)
         if not p.is_dir():
             continue
+        # Clear any previous batch first so the marker we wait for is this one's.
         for f in p.iterdir():
             if f.name == BATCH_MARKER or f.name.startswith("mut_"):
                 try:
                     f.unlink()
-                    cleared += 1
                 except OSError:
                     pass
-    return cleared
+        try:
+            (p / DUMP_REQUEST).write_text("")
+            pending.append(p)
+        except OSError:
+            continue
+
+    ready, deadline = [], time.time() + timeout
+    while pending and time.time() < deadline:
+        for p in list(pending):
+            if (p / BATCH_MARKER).is_file():
+                ready.append(str(p))
+                pending.remove(p)
+        if pending:
+            time.sleep(poll)
+
+    for p in pending:
+        logger.warning("mutation dump not delivered within %.0fs by %s; skipping",
+                       timeout, p)
+        try:
+            (p / DUMP_REQUEST).unlink()
+        except OSError:
+            pass
+    return ready
 
 
 def collect_round_mutations(dump_dirs, dest, *, cap: int, seed: int = 1337) -> int:
@@ -698,15 +723,15 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             for t in ctx.online_trials
         ]
         harvest_dir = os.path.join(iter_dir, "live_mutations")
+        ready = request_mutation_dump(dump_dirs)
         n = collect_round_mutations(
-            dump_dirs, harvest_dir,
+            ready, harvest_dir,
             cap=int(getattr(config, "PHASE2_MUTATION_CAP", 20000)),
             seed=config.BASE_SEED + iter_n)
-        cleared = rearm_mutation_capture(dump_dirs)
-        logger.info("online round %d: harvested %d live mutations, re-armed %d files",
-                    iter_n, n, cleared)
+        logger.info("online round %d: %d/%d trials delivered a batch, %d mutations",
+                    iter_n, len(ready), len(dump_dirs), n)
         _write_json(os.path.join(iter_dir, "live_mutation_meta.json"),
-                    {"harvested": n, "rearmed": cleared,
+                    {"harvested": n, "trials_ready": len(ready),
                      "dump_dirs": len(dump_dirs)})
         if n:
             live_mutations = harvest_dir

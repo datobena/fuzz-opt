@@ -6,7 +6,7 @@ redundant fuzzing per target over a 24h run. The shim is a runtime .so, so a liv
 trial can carry it and a round just picks up what it produced.
 """
 import phase3_runner
-from phase3_online import collect_round_mutations, rearm_mutation_capture
+from phase3_online import collect_round_mutations, request_mutation_dump
 
 
 def _trial(variant="optimized", capture=False):
@@ -64,20 +64,44 @@ def test_shim_build_failure_does_not_kill_the_trial(monkeypatch, tmp_path):
     assert shell.index("continuing without capture") < shell.index("afl-fuzz")
 
 
-def test_rearm_clears_dumps_and_marker(tmp_path):
-    """Each round profiles mutations generated SINCE the last round, so the
-    workload tracks the corpus as it evolves."""
+def test_dump_request_clears_the_previous_batch_and_asks_for_a_new_one(tmp_path):
+    """The shim samples across the whole window and writes only on request, so a
+    round must ASK. Requesting also stamps the window boundary."""
+    import threading
+    import time as _t
+
     d = tmp_path / "mutations"
     d.mkdir()
     for i in range(5):
-        (d / f"mut_1_{i:08d}").write_bytes(b"x")
+        (d / f"mut_1_{i:08d}").write_bytes(b"stale")
     (d / ".batch_complete").write_text("5\n")
 
-    rearm_mutation_capture([str(d)])
+    def fake_shim():
+        # Stand in for the shim: notice the request, write a batch, mark it done.
+        for _ in range(100):
+            if (d / ".dump_now").exists():
+                (d / "mut_1_00000000").write_bytes(b"fresh")
+                (d / ".batch_complete").write_text("1\n")
+                (d / ".dump_now").unlink()
+                return
+            _t.sleep(0.02)
 
-    assert not (d / ".batch_complete").exists()
-    assert list(d.glob("mut_*")) == []
-    assert d.is_dir(), "the dir itself must survive; it is a live bind mount"
+    threading.Thread(target=fake_shim, daemon=True).start()
+    ready = request_mutation_dump([str(d)], timeout=10)
+
+    assert ready == [str(d)]
+    files = list(d.glob("mut_*"))
+    assert len(files) == 1
+    assert files[0].read_bytes() == b"fresh", "stale batch was not cleared"
+
+
+def test_a_silent_trial_is_skipped_not_waited_on(tmp_path):
+    """A stalled or just-restarted trial must not hold up an optimization round."""
+    d = tmp_path / "silent"
+    d.mkdir()
+    ready = request_mutation_dump([str(d)], timeout=1, poll=0.1)
+    assert ready == []
+    assert not (d / ".dump_now").exists(), "request should be withdrawn on timeout"
 
 
 def test_collect_samples_across_all_capture_trials(tmp_path):

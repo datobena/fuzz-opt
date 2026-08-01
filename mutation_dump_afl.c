@@ -16,12 +16,15 @@
  *   later discards. The profile must reflect what the fuzzer EXECUTES, not what
  *   it keeps.
  *
- * Lifecycle (collect -> dump -> idle -> re-arm):
- *   Mutations accumulate IN MEMORY. On reaching the cap the whole batch is
- *   written out once and the shim goes IDLE -- no per-exec work at all for the
- *   rest of the period. The orchestrator re-arms it for the next optimization
- *   round by removing the completion marker, which the shim notices on a cheap
- *   periodic check.
+ * Lifecycle (sample continuously -> dump on request -> resume):
+ *   Mutations accumulate IN MEMORY across the whole inter-round window. The
+ *   orchestrator asks for a batch by creating .dump_now; the shim notices on a
+ *   cheap periodic check, writes the batch, and resumes sampling immediately.
+ *
+ *   Sampling must span the WINDOW, not stop when the buffer first fills. At
+ *   ~7k exec/s a 20k buffer fills in ~3 seconds, so dumping on full would make
+ *   every round profile the first 3 seconds of an hour -- and the 3 seconds
+ *   right after a hot-swap, while AFL re-calibrates.
  *
  *   Buffering in memory rather than writing a file per mutation is what makes
  *   this affordable inside a measured trial: 20k small file creations spread
@@ -57,6 +60,7 @@ typedef struct {
 typedef struct {
     const char   *dir;
     char          marker[4096];
+    char          request[4096];
     unsigned long cap;
     unsigned long every;
     int           mode;
@@ -69,7 +73,6 @@ typedef struct {
     unsigned long produced;   /* every call */
     unsigned long candidates; /* post-`every` filter */
     unsigned long batches;
-    int           idle;       /* dumped; waiting to be re-armed */
     unsigned long since_check;
 
     uint64_t      rng;
@@ -131,11 +134,14 @@ static void mdump_flush(dump_state_t *st) {
     FILE *m = fopen(st->marker, "w");
     if (m) { fprintf(m, "%lu\n", written); fclose(m); }
 
+    unlink(st->request);
     st->filled = 0;
     st->bytes = 0;
     st->candidates = 0;
     st->batches++;
-    st->idle = 1;
+    st->since_check = 0;
+    /* Resume sampling at once. Going idle here would leave the next window
+     * blind for however long the orchestrator takes to harvest. */
 }
 
 void *afl_custom_init(void *afl, unsigned int seed) {
@@ -154,6 +160,7 @@ void *afl_custom_init(void *afl, unsigned int seed) {
 
     if (st->dir) {
         snprintf(st->marker, sizeof(st->marker), "%s/.batch_complete", st->dir);
+        snprintf(st->request, sizeof(st->request), "%s/.dump_now", st->dir);
         st->slots = (entry_t *)calloc(st->cap, sizeof(entry_t));
         if (!st->slots) st->dir = NULL;
     }
@@ -169,19 +176,6 @@ size_t afl_custom_post_process(void *data, uint8_t *buf, size_t buf_size,
     *out_buf = buf;
     if (!st || !st->dir) return buf_size;
 
-    if (st->idle) {
-        /* Dormant between rounds: one counter and a stat() every few thousand
-         * calls, so an idle shim costs effectively nothing. */
-        if (++st->since_check < REARM_CHECK_INTERVAL) return buf_size;
-        st->since_check = 0;
-        struct stat sb;
-        if (stat(st->marker, &sb) != 0) {
-            st->idle = 0;
-            fprintf(stderr, "[mutation_dump_afl] re-armed for batch %lu\n", st->batches);
-        }
-        return buf_size;
-    }
-
     st->produced++;
     if (st->every > 1 && (st->produced % st->every) != 0) return buf_size;
 
@@ -196,9 +190,23 @@ size_t afl_custom_post_process(void *data, uint8_t *buf, size_t buf_size,
         if (r < st->cap) slot_set(st, (unsigned long)r, buf, buf_size);
     }
 
-    /* Memory ceiling: a target with large inputs could otherwise hold gigabytes
-     * inside a live trial. Dumping early is better than being OOM-killed. */
-    if (st->filled >= st->cap || st->bytes >= st->max_bytes) mdump_flush(st);
+    /* Memory ceiling only. Deliberately NOT `filled >= cap`: flushing the moment
+     * the buffer fills would make every mode behave as prefix, since the
+     * reservoir branch above is only reached once filled == cap. That bug made
+     * each round profile the first ~3 seconds of a 60-minute window -- and the
+     * seconds right after a hot-swap, while AFL re-calibrates its queue.
+     *
+     * In prefix mode the buffer simply stops accepting (the branch above does
+     * nothing once full) and the batch is written on request, so both modes now
+     * dump at the same point and differ only in WHICH mutations they hold. */
+    if (st->bytes >= st->max_bytes) {
+        fprintf(stderr, "[mutation_dump_afl] byte ceiling hit; dumping early\n");
+        mdump_flush(st);
+    } else if (++st->since_check >= REARM_CHECK_INTERVAL) {
+        st->since_check = 0;
+        struct stat sb;
+        if (stat(st->request, &sb) == 0) mdump_flush(st);
+    }
     return buf_size;
 }
 

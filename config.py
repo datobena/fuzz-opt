@@ -210,9 +210,11 @@ ONLINE_LEDGER_REOPEN_SHARE_REL = float(os.environ.get("ONLINE_LEDGER_REOPEN_SHAR
 # round, ~4h per target over a 24h run). Set 0 to fall back to the re-fuzz.
 ONLINE_LIVE_MUTATION_CAPTURE = os.environ.get(
     "ONLINE_LIVE_MUTATION_CAPTURE", "1") == "1"
-# reservoir = uniform over the collection window; prefix = first N then idle.
-# Benchmarked indistinguishable (medians within ~1%, run-to-run spread ~15%), so
-# reservoir is kept for its lower shallow-queue bias.
+# reservoir = uniform over the whole inter-round window; prefix = first N only.
+# Prefix is a poor fit here: at ~7k exec/s a 20k buffer fills in ~3 seconds, so a
+# round would profile the first 3s of a 60-minute window -- and the 3s right
+# after a hot-swap, while AFL re-calibrates its queue. Benchmarked at 7764 vs
+# 7743 execs/s (0.3% apart, within-mode spread ~30%), so reservoir is free.
 ONLINE_MUTATION_MODE = os.environ.get("ONLINE_MUTATION_MODE", "reservoir")
 
 # Seed generation
