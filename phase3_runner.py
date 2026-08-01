@@ -123,6 +123,19 @@ def get_trial_dirs(experiment_id: str, trial: Trial) -> dict[str, str]:
     }
 
 
+def get_live_corpus_dir(experiment_id: str, trial: Trial) -> str:
+    """Where the trial's ACCUMULATED corpus lives, for the online loop.
+
+    Under libFuzzer this was the trial's corpus/ directory, which libFuzzer both
+    read and appended to. AFL treats -i as read-only input and writes discovered
+    inputs to <afl_out>/default/queue instead, so snapshotting corpus/ would hand
+    the optimizer the unchanging SEED corpus every round -- the loop would look
+    healthy while optimizing against inputs that never grow.
+    """
+    dirs = get_trial_dirs(experiment_id, trial)
+    return os.path.join(dirs["afl_out"], "default", "queue")
+
+
 def get_fuzzer_binary(experiment_id: str, trial: Trial) -> str:
     """Get path to the fuzzer binary for this trial."""
     cve_dir = f"{trial.project}-{trial.cve}"

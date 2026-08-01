@@ -61,7 +61,7 @@ def classify_exit(*, swap_requested: bool, found_bug: bool,
     """Classify why an online trial's container exited.
 
     Priority (most-terminal first):
-      - ``bug_found``   : a real target bug reproduced (libFuzzer has no -fork, so it
+      - ``bug_found``   : a real target bug reproduced (under AFL the run continues, so it
                           exits at the first crash) — terminal, never relaunch.
       - ``budget_done`` : the time budget is exhausted — terminal. This also wins over
                           a pending swap: a swap requested with no time left must not
@@ -176,9 +176,10 @@ def snapshot_live_corpus(src_dir, dest_dir, *, now: float,
                          min_age_s: float = 2.0) -> dict:
     """Copy a corpus that is being written concurrently into ``dest_dir``, consistently.
 
-    libFuzzer corpus units are write-once, so a stable-mtime/size filter yields a
-    consistent set: skip any file whose mtime is within ``min_age_s`` of ``now`` (still
-    in flight) or whose size changes during the copy. Returns
+    Both libFuzzer corpus units and AFL queue entries are write-once, so a
+    stable-mtime/size filter yields a consistent set: skip any file whose mtime is
+    within ``min_age_s`` of ``now`` (still in flight) or whose size changes during
+    the copy. Returns
     {"file_count", "bytes", "skipped_in_flight", "taken_at"}.
     """
     src = Path(src_dir)
@@ -474,7 +475,8 @@ def _write_json(path, obj):
 
 
 def _corpus_file_count(experiment_id, trial):
-    cdir = phase3_runner.get_trial_dirs(experiment_id, trial)["corpus"]
+    # AFL's queue, not the read-only seed input dir -- see get_live_corpus_dir.
+    cdir = phase3_runner.get_live_corpus_dir(experiment_id, trial)
     if not os.path.isdir(cdir):
         return 0
     return sum(1 for p in Path(cdir).rglob("*") if p.is_file())
@@ -562,7 +564,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     # 1. snapshot the chosen live trial's accumulated corpus (consistent copy)
     chosen = select_snapshot_trial(
         ctx.online_trials, lambda t: _corpus_file_count(ctx.experiment_id, t))
-    src_corpus = phase3_runner.get_trial_dirs(ctx.experiment_id, chosen)["corpus"]
+    src_corpus = phase3_runner.get_live_corpus_dir(ctx.experiment_id, chosen)
     snap_dir = os.path.join(iter_dir, "corpus_snapshot")
     meta = snapshot_live_corpus(src_corpus, snap_dir, now=time.time())
     meta["trial_id"] = chosen.trial_id
@@ -694,7 +696,10 @@ def _finalize_online_trial(trial, experiment_id, duration, overall_start, crash_
     os.makedirs(dirs["base"], exist_ok=True)
     with open(dirs["log"], "w") as f:
         f.write(logs)
-    final_stats = phase3_runner.parse_fuzzer_stats(logs)
+    # parse_fuzzer_stats now reads AFL's structured output tree, not console
+    # text -- passing `logs` here silently produced empty stats for every
+    # online trial.
+    final_stats = phase3_runner.parse_fuzzer_stats(dirs["afl_out"])
     with open(dirs["crash_times"], "w") as f:
         json.dump(crash_times, f, indent=2)
     actual = round(time.time() - overall_start, 2)
