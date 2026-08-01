@@ -133,6 +133,10 @@ def test_phase2_corpus_source_bundled_only_no_gcs(tmp_path):
 def test_make_phase2_profile_env_adds_mutation_image_for_arvo_entry(monkeypatch, tmp_path):
     monkeypatch.setattr(phase2_setup.config, "PHASE2_MUTATION_ENABLED", True)
     monkeypatch.setattr(phase2_setup.config, "PHASE2_MUTATION_CAP", 40000)
+    # Legacy libFuzzer builders. Under PHASE2_SANDBOX (the default) the shim
+    # is an AFL_CUSTOM_MUTATOR_LIBRARY .so loaded by the prework image -- see
+    # test_afl_mutation_capture.py.
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_SANDBOX", False)
     ed = tmp_path / "results" / "exp" / "selinux-CVE-1"
     diff_dir = ed / "optimized" / "source_diff"
 

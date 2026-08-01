@@ -552,6 +552,16 @@ def _phase2_mutation_builder(entry: dict | None) -> tuple[str | None, str]:
     """
     if not entry:
         return None, ""
+    # Under the AFL pipeline the shim is an AFL_CUSTOM_MUTATOR_LIBRARY .so loaded
+    # at runtime by the PREWORK image's afl-fuzz -- see lib/afl_mutation_capture.
+    # Returning an ARVO builder here would capture LIBFUZZER mutations and then
+    # profile an AFL experiment against them: not a crash, just the wrong
+    # workload, silently.
+    if getattr(config, "PHASE2_SANDBOX", True):
+        try:
+            return prework_image_for(entry), "afl-custom-mutator"
+        except ValueError:
+            return None, ""
     image = str(entry.get("image") or "")
     if "n132/arvo" in image:
         return image, "arvo compile"
