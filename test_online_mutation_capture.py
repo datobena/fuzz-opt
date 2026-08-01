@@ -44,7 +44,8 @@ def test_capture_trials_load_the_shim(monkeypatch, tmp_path):
     joined = " ".join(_launch(monkeypatch, _trial(capture=True), tmp_path))
     assert "AFL_CUSTOM_MUTATOR_LIBRARY" in joined
     assert "MUTATION_DUMP_DIR=/mutations" in joined
-    assert "MUTATION_DUMP_MODE=reservoir" in joined
+    # Default is prefix; reservoir is switched in via ONLINE_MUTATION_MODE.
+    assert "MUTATION_DUMP_MODE=prefix" in joined
 
 
 def test_non_capture_trials_are_untouched(monkeypatch, tmp_path):
@@ -221,3 +222,11 @@ def test_empty_live_dir_does_not_short_circuit(tmp_path, monkeypatch, caplog):
     assert not any("reusing" in r.message for r in caplog.records)
     assert not (profiles / "corpus_combined").exists()
     assert result is None
+
+
+def test_sampling_mode_is_configurable(monkeypatch, tmp_path):
+    """Both modes must be reachable so the two can be compared on real runs."""
+    import config
+    monkeypatch.setattr(config, "ONLINE_MUTATION_MODE", "reservoir")
+    joined = " ".join(_launch(monkeypatch, _trial(capture=True), tmp_path))
+    assert "MUTATION_DUMP_MODE=reservoir" in joined

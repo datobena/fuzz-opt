@@ -211,11 +211,19 @@ ONLINE_LEDGER_REOPEN_SHARE_REL = float(os.environ.get("ONLINE_LEDGER_REOPEN_SHAR
 ONLINE_LIVE_MUTATION_CAPTURE = os.environ.get(
     "ONLINE_LIVE_MUTATION_CAPTURE", "1") == "1"
 # reservoir = uniform over the whole inter-round window; prefix = first N only.
-# Prefix is a poor fit here: at ~7k exec/s a 20k buffer fills in ~3 seconds, so a
-# round would profile the first 3s of a 60-minute window -- and the 3s right
-# after a hot-swap, while AFL re-calibrates its queue. Benchmarked at 7764 vs
-# 7743 execs/s (0.3% apart, within-mode spread ~30%), so reservoir is free.
-ONLINE_MUTATION_MODE = os.environ.get("ONLINE_MUTATION_MODE", "reservoir")
+#
+# Default is "prefix" as the initial configuration, with reservoir to be trialled
+# as a comparison. Both cost the same (benchmarked 7743 vs 7764 execs/s, 0.3%
+# apart against a ~30% within-mode spread), so this is a sampling-bias choice,
+# not a performance one.
+#
+# The bias is worth stating: at ~7k exec/s a 20k buffer fills in roughly 3
+# seconds, so prefix profiles the first ~3s of each inter-round window -- and
+# those are the seconds just after a hot-swap, while AFL re-calibrates its queue.
+# Over many rounds the sampled moments are spread across the campaign, which is
+# the argument for it being acceptable. Switch with ONLINE_MUTATION_MODE=reservoir
+# to compare hotspot rankings.
+ONLINE_MUTATION_MODE = os.environ.get("ONLINE_MUTATION_MODE", "prefix")
 
 # Seed generation
 BASE_SEED = 1337
