@@ -88,6 +88,71 @@ def _run(cmd: list[str], timeout: int | None = None) -> subprocess.CompletedProc
     )
 
 
+def copy_src_from_image(image: str, src_out: Path, *, tag: str) -> None:
+    """`docker cp` /src out of an image, via a created (not running) container."""
+    container = f"prework_extract_{tag}"
+    _run(["docker", "rm", "-f", container])
+    create = _run(["docker", "create", "--name", container, image])
+    if create.returncode != 0:
+        raise RuntimeError(f"docker create {image} failed: {(create.stderr or '')[-300:]}")
+    try:
+        cp = _run(build_cp_command(container, "/src/.", str(src_out)))
+        if cp.returncode != 0:
+            raise RuntimeError(f"docker cp /src failed: {(cp.stderr or '')[-300:]}")
+    finally:
+        _run(["docker", "rm", "-f", container])
+
+
+def extract_source_only(
+    image: str, project: str, dest: str | Path, *, poc_source: str | Path,
+    pull: bool = False, pull_timeout: int = 1800,
+) -> ExtractResult:
+    """Extract source from an image that has NO `arvo` wrapper.
+
+    ARVO ships two image shapes. n132/arvo:<id>-vul bakes a reproducer (`arvo`
+    plus /tmp/poc); gcr.io/oss-fuzz/<local_id> is a plain OSS-Fuzz builder with
+    neither -- selinux/CVE-2021-36085 is built that way. For those, the PoC has
+    to come from outside, which is why `poc_source` is required rather than
+    optional: a prework run with no PoC could not verify that the bug survived,
+    and an unverified target is exactly what must not reach the benchmark.
+
+    `baseline_crashed` is reported False here because this image cannot
+    self-reproduce; the authoritative check is prework/verify.py against the
+    NEWLY built binary, which is the one that actually matters.
+    """
+    dest = Path(dest)
+    src_out, poc_out = dest / "src", dest / "poc"
+    for d in (src_out, poc_out):
+        d.mkdir(parents=True, exist_ok=True)
+
+    if pull:
+        p = _run(["docker", "pull", image], timeout=pull_timeout)
+        if p.returncode != 0:
+            raise RuntimeError(f"docker pull {image} failed: {(p.stderr or '')[-400:]}")
+
+    copy_src_from_image(image, src_out, tag=project)
+
+    removed = strip_identity(src_out)
+    logger.info("Stripped %d .git path(s) from %s", len(removed), src_out)
+
+    poc_source = Path(poc_source)
+    if not poc_source.is_file():
+        raise RuntimeError(f"poc_source not found: {poc_source}")
+    poc_path = poc_out / "poc_input"
+    shutil.copy2(poc_source, poc_path)
+    logger.info("PoC taken from %s", poc_source)
+
+    build_sh = src_out / "build.sh"
+    if not build_sh.is_file():
+        raise RuntimeError(f"no /src/build.sh in {image}")
+
+    return ExtractResult(
+        source_dir=src_out, build_sh=build_sh, poc_path=poc_path,
+        repro_log=f"(source-only extraction from {image}; PoC supplied externally)",
+        baseline_crashed=False,
+    )
+
+
 def extract_arvo(
     image: str, project: str, dest: str | Path, *, pull_timeout: int = 1200,
     run_timeout: int = 900,

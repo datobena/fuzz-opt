@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from prework.build_image import build_image, image_tag, load_meta
-from prework.extract import extract_arvo
+from prework.extract import extract_arvo, extract_source_only
 from prework.verify import compile_command, verify_poc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -53,10 +53,19 @@ def main() -> int:
         logger.info("[1/4] reusing extraction at %s", work)
     else:
         logger.info("[1/4] extracting from %s", meta["arvo_image"])
-        extracted = extract_arvo(meta["arvo_image"], meta["project"], work)
-        if not extracted.baseline_crashed:
-            logger.error("ARVO image itself does not reproduce; target is unusable")
-            return EXIT_ARVO_UNUSABLE
+        # Two ARVO image shapes: n132/arvo:<id>-vul bakes a reproducer, while a
+        # plain gcr.io/oss-fuzz/<local_id> builder has neither `arvo` nor
+        # /tmp/poc. The latter needs an externally supplied PoC.
+        if meta.get("poc_source"):
+            extracted = extract_source_only(
+                meta["arvo_image"], meta["project"], work,
+                poc_source=meta["poc_source"],
+            )
+        else:
+            extracted = extract_arvo(meta["arvo_image"], meta["project"], work)
+            if not extracted.baseline_crashed:
+                logger.error("ARVO image itself does not reproduce; target unusable")
+                return EXIT_ARVO_UNUSABLE
         if extracted.poc_path is None:
             logger.error("no PoC extracted; cannot verify")
             return EXIT_ARVO_UNUSABLE

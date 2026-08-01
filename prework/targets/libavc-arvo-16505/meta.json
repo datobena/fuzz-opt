@@ -1,0 +1,9 @@
+{
+  "project": "libavc",
+  "arvo_id": 16505,
+  "arvo_image": "n132/arvo:16505-vul",
+  "fuzz_target": "avc_dec_fuzzer",
+  "crash_type": "Heap-buffer-overflow READ 8",
+  "workdir": "libavc",
+  "deviations": []
+}
