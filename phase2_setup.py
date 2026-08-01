@@ -1151,6 +1151,17 @@ def _augment_corpus_with_mutations(env: dict[str, str], fuzz_target: str) -> str
     mutation_required = mutation_enabled and bool(
         getattr(config, "PHASE2_MUTATION_REQUIRED", True))
 
+    # Live capture: the online loop's trials already dumped mutations while
+    # fuzzing, so re-fuzzing here would regenerate work that has been done --
+    # ~600s per round, ~4h per target over a 24h run. Reuse them and skip
+    # straight to combining.
+    prebuilt = env.get("FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS")
+    if prebuilt and _dir_has_files(prebuilt):
+        n = sum(1 for _ in Path(prebuilt).rglob("*") if _.is_file())
+        logger.info("reusing %d live-captured mutations from %s (no re-fuzz)",
+                    n, prebuilt)
+        return _combine_seed_and_mutations(env, Path(prebuilt))
+
     def _fail(msg: str, exc: Exception | None = None):
         """Hard-fail when required, else fall back to seed-only (return None)."""
         if mutation_required:
@@ -1213,16 +1224,32 @@ def _augment_corpus_with_mutations(env: dict[str, str], fuzz_target: str) -> str
         return _fail(f"mutation capture produced 0 mutations for {fuzz_target} "
                      f"(meta={meta})")
 
-    # Combine seed + mutations into one flat corpus (seeds first, then mutations).
+    return _combine_seed_and_mutations(env, Path(frozen_dir))
+
+
+def _combine_seed_and_mutations(env: dict[str, str], mutations_dir: Path) -> str | None:
+    """Flatten seeds + mutations into the one corpus that is profiled AND gated.
+
+    Shared by phase 2's own capture and by the online loop's live capture, so both
+    produce an identically-shaped corpus -- what gets profiled is exactly what the
+    replay-timing gate measures.
+    """
+    profiles = Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
+    seed_dir = env.get("FUZZ_SOURCE_FOLDS_CORPUS_DIR", "")
+    mut_files = [p for p in sorted(Path(mutations_dir).rglob("*")) if p.is_file()]
+    if not mut_files:
+        return None
+
     combined = profiles / "corpus_combined"
     if combined.exists():
         shutil.rmtree(combined, ignore_errors=True)
     combined.mkdir(parents=True, exist_ok=True)
     n = 0
-    for p in sorted(Path(seed_dir).rglob("*")):
-        if p.is_file():
-            shutil.copy2(p, combined / f"seed_{n:08d}")
-            n += 1
+    if seed_dir:
+        for p in sorted(Path(seed_dir).rglob("*")):
+            if p.is_file():
+                shutil.copy2(p, combined / f"seed_{n:08d}")
+                n += 1
     m = 0
     for p in mut_files:
         shutil.copy2(p, combined / f"mut_{m:08d}")

@@ -117,6 +117,10 @@ def get_trial_dirs(experiment_id: str, trial: Trial) -> dict[str, str]:
         # AFL owns its output tree (queue/, crashes/, fuzzer_stats, plot_data)
         # and needs it writable -- /out stays read-only.
         "afl_out": os.path.join(base, "afl_out"),
+        # Live mutation capture (online arm only): the shim batches mutations
+        # in memory and dumps here, so an optimization round reuses what the
+        # trial already executed instead of re-fuzzing to regenerate it.
+        "mutations": os.path.join(base, "mutations"),
         "log": os.path.join(base, "fuzzer.log"),
         "metadata": os.path.join(base, "metadata.json"),
         "crash_times": os.path.join(base, "crash_times.json"),
@@ -298,6 +302,17 @@ def _launch_container(
     #               AFL's own binding on top of that fails to find a free core
     #   abort_on_error=1  AFL detects a crash by the process dying; without this
     #               ASAN reports and exits cleanly and the crash is invisible
+    # Live mutation capture. Only trials flagged for it carry the shim; see
+    # capture_mutations_enabled(). The .so is compiled at launch rather than baked
+    # into the prework image so the capture logic can change without rebuilding
+    # four multi-GB images.
+    capture = bool(getattr(trial, "capture_mutations", False))
+    mutations_dir = dirs.get("mutations") or os.path.join(dirs["base"], "mutations")
+    shim_src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "mutation_dump_afl.c")
+    if capture:
+        os.makedirs(mutations_dir, exist_ok=True)
+
     cmd = [
         "docker", "run", "-d",
         "--name", container_name,
@@ -313,10 +328,29 @@ def _launch_container(
         "-v", f"{bin_dir}:/out:ro",
         "-v", f"{dirs['corpus']}:/corpus",
         "-v", f"{afl_out}:/afl_out",
+    ]
+    if capture:
+        cmd += [
+            "-e", f"MUTATION_DUMP_DIR=/mutations",
+            "-e", f"MUTATION_DUMP_CAP={int(getattr(config, 'PHASE2_MUTATION_CAP', 20000))}",
+            "-e", f"MUTATION_DUMP_MODE={getattr(config, 'ONLINE_MUTATION_MODE', 'reservoir')}",
+            "-e", f"MUTATION_DUMP_SEED={seed}",
+            "-v", f"{mutations_dir}:/mutations",
+            "-v", f"{shim_src}:/tmp/mutation_dump_afl.c:ro",
+        ]
+    cmd += [
         docker_image,
         "/bin/bash", "-c",
         (
-            f"/out/afl-fuzz -i /corpus -o /afl_out"
+            # Build the capture shim first when enabled. A failure here must NOT
+            # take the trial down: losing mutation capture costs an optimization
+            # round, losing the trial costs a data point.
+            (f"clang-{getattr(config, 'PREWORK_LLVM_VERSION', 18)} -O2 -shared -fPIC "
+             f"-o /tmp/mutdump.so /tmp/mutation_dump_afl.c 2>/tmp/shim_build.log "
+             f"&& export AFL_CUSTOM_MUTATOR_LIBRARY=/tmp/mutdump.so "
+             f"|| echo 'mutation shim build FAILED; continuing without capture';"
+             if capture else "")
+            + f" /out/afl-fuzz -i /corpus -o /afl_out"
             f" -V {duration}"
             f" -s {seed}"
             f" -m none"

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -216,6 +217,77 @@ def snapshot_live_corpus(src_dir, dest_dir, *, now: float,
 
 
 # ---------------------------------------------------------------------------
+# Live mutation capture
+#
+# Each round used to re-fuzz a corpus snapshot for PHASE2_MUTATION_DURATION_SECS
+# purely to regenerate mutations the live trials had ALREADY executed -- roughly
+# 4 hours of redundant fuzzing per target over a 24h run. The shim is a runtime
+# .so, so the online trials carry it and a round consumes what they produced.
+# ---------------------------------------------------------------------------
+BATCH_MARKER = ".batch_complete"
+
+
+def rearm_mutation_capture(dump_dirs) -> int:
+    """Clear each trial's dump and re-arm the shim for the next round.
+
+    The shim goes idle once its batch is written and watches for the marker to
+    disappear. Removing it here means the NEXT round profiles mutations generated
+    since this moment, so the workload tracks the corpus and binary as they
+    evolve -- which is the whole premise of online optimization.
+
+    The directory itself is preserved: it is a live bind mount into a running
+    container, and replacing it would detach the shim's view of it.
+    """
+    cleared = 0
+    for d in dump_dirs:
+        p = Path(d)
+        if not p.is_dir():
+            continue
+        for f in p.iterdir():
+            if f.name == BATCH_MARKER or f.name.startswith("mut_"):
+                try:
+                    f.unlink()
+                    cleared += 1
+                except OSError:
+                    pass
+    return cleared
+
+
+def collect_round_mutations(dump_dirs, dest, *, cap: int, seed: int = 1337) -> int:
+    """Sample up to `cap` mutations across every capture trial into `dest`.
+
+    Pooled and sampled uniformly rather than taken per-trial in order, so no
+    single trial dominates the profiling corpus.
+
+    A dump without its completion marker is SKIPPED: the shim writes the marker
+    last, so its absence means the batch is mid-write, and consuming it would
+    silently profile a truncated set.
+    """
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    pool: list[Path] = []
+    for d in dump_dirs:
+        p = Path(d)
+        if not (p / BATCH_MARKER).is_file():
+            logger.info("mutation dump %s has no completion marker; skipping", p)
+            continue
+        pool.extend(sorted(f for f in p.iterdir() if f.name.startswith("mut_")))
+
+    if not pool:
+        return 0
+    rng = random.Random(seed)
+    chosen = pool if len(pool) <= cap else rng.sample(pool, cap)
+    written = 0
+    for i, src in enumerate(chosen):
+        try:
+            shutil.copy2(src, dest / f"mut_{i:08d}")
+            written += 1
+        except OSError:
+            continue
+    return written
+
+
+# ---------------------------------------------------------------------------
 # Trial selection (which live trial's corpus feeds a round)
 # ---------------------------------------------------------------------------
 def select_snapshot_trial(trials, corpus_count_fn):
@@ -385,8 +457,19 @@ def _build_online_trials(entry: dict):
                   + config.OPTIMIZED_SEED_OFFSET)
         baseline.append(phase3_runner.Trial(project=project, cve=cve,
                                              variant="baseline", trial_id=tid, seed=b_seed))
-        online.append(phase3_runner.Trial(project=project, cve=cve,
-                                          variant="optimized", trial_id=tid, seed=o_seed))
+        o = phase3_runner.Trial(project=project, cve=cve,
+                                variant="optimized", trial_id=tid, seed=o_seed)
+        # Online trials carry the mutation-dump shim so rounds reuse mutations the
+        # fuzzer already executed instead of re-fuzzing to regenerate them.
+        #
+        # NOTE this is an asymmetry between the arms: baseline trials do not carry
+        # it. Chosen deliberately -- the shim batches in memory and goes idle once
+        # its 20k are collected, so the cost is bounded to the fill window rather
+        # than the whole campaign, and it measured as indistinguishable from noise.
+        # Recorded here because it is the kind of difference that must be reported
+        # alongside a TTB comparison, not discovered later.
+        o.capture_mutations = getattr(config, "ONLINE_LIVE_MUTATION_CAPTURE", True)
+        online.append(o)
     for i, t in enumerate(baseline + online):
         t.cpu = trial_cores[i % len(trial_cores)]
     return baseline, online
@@ -600,6 +683,38 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         _record_ledger(ctx, iter_n, diff_dir, "build-failed", None)
         return (False, None)
 
+    # 1b. Harvest the mutations the live trials already executed, and re-arm the
+    # shim for the next round. This is what removes the redundant re-fuzz: phase 2
+    # would otherwise spend PHASE2_MUTATION_DURATION_SECS regenerating mutations
+    # these trials had already produced.
+    #
+    # If the harvest comes back empty the round FALLS BACK to phase 2's own
+    # capture rather than profiling seeds alone -- seeds-only measures the wrong
+    # workload, which is why mutation augmentation is mandatory.
+    live_mutations = None
+    if getattr(config, "ONLINE_LIVE_MUTATION_CAPTURE", True):
+        dump_dirs = [
+            phase3_runner.get_trial_dirs(ctx.experiment_id, t)["mutations"]
+            for t in ctx.online_trials
+        ]
+        harvest_dir = os.path.join(iter_dir, "live_mutations")
+        n = collect_round_mutations(
+            dump_dirs, harvest_dir,
+            cap=int(getattr(config, "PHASE2_MUTATION_CAP", 20000)),
+            seed=config.BASE_SEED + iter_n)
+        cleared = rearm_mutation_capture(dump_dirs)
+        logger.info("online round %d: harvested %d live mutations, re-armed %d files",
+                    iter_n, n, cleared)
+        _write_json(os.path.join(iter_dir, "live_mutation_meta.json"),
+                    {"harvested": n, "rearmed": cleared,
+                     "dump_dirs": len(dump_dirs)})
+        if n:
+            live_mutations = harvest_dir
+        else:
+            logger.warning(
+                "online round %d: no completed mutation batch yet; falling back "
+                "to phase-2 capture for this round", iter_n)
+
     # 2. env: profile the snapshot; anchor the replay gate on the previous best
     env = build_round_env(
         experiment_dir=ctx.experiment_dir, diff_dir=diff_dir,
@@ -607,6 +722,10 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         snapshot_dir=snap_dir, entry=ctx.entry,
         previous_best_bin=ctx.previous_best_bin)
     env.update(ctx.wrapper_env_fn(ctx.source_root, os.path.join(iter_dir, "validation")))
+    if live_mutations:
+        # Hand phase 2 the already-captured mutations; its own capture step sees
+        # this and skips the re-fuzz.
+        env["FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS"] = live_mutations
 
     # 3. soft ledger -> optimizer prompt (avoid prior folds unless profile shifted)
     ledger_summary = build_ledger_summary(ctx.ledger, ctx.last_profile)
