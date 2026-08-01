@@ -122,3 +122,93 @@ def test_extra_allowed_hosts_are_passed_through(tmp_path):
     cmd = e.build_proxy_run_command(
         internal_network="n", log_dir=str(tmp_path), extra_allow=["example.com"])
     assert "--allow" in cmd and "example.com" in cmd
+
+
+# --- credential lifetime across sessions -------------------------------------
+#
+# Access tokens last hours; runs last days. OAuth refresh tokens typically
+# ROTATE, so a refresh performed inside the sandbox can revoke the credential the
+# next session would otherwise re-seed from.
+
+def _store(tmp_path, monkeypatch):
+    import sandbox.egress as e
+    monkeypatch.setattr(e, "CREDENTIAL_STORE", tmp_path / "store")
+    return e
+
+
+def test_refreshed_credential_survives_into_the_next_session(tmp_path, monkeypatch):
+    """The bug this replaced: a per-session copy discarded every refresh, so the
+    next session re-seeded from a host token that rotation had just revoked."""
+    import time
+
+    e = _store(tmp_path, monkeypatch)
+    host = tmp_path / "host.json"
+    host.write_text('{"token": "v1"}')
+    monkeypatch.setattr(e, "CREDENTIAL_FILES", {"claude": (host, "/c.json")})
+
+    s1 = tmp_path / "s1"
+    staged = e.stage_credentials(s1)[0].split(":")[0]
+    from pathlib import Path
+    Path(staged).write_text('{"token": "v2-refreshed"}')
+    import os
+    os.utime(staged, (time.time() + 10, time.time() + 10))
+    assert e.harvest_credentials(s1) == ["claude"]
+
+    s2 = tmp_path / "s2"
+    staged2 = e.stage_credentials(s2)[0].split(":")[0]
+    assert Path(staged2).read_text() == '{"token": "v2-refreshed"}'
+
+
+def test_store_is_not_re_seeded_from_a_stale_host_credential(tmp_path, monkeypatch):
+    """Re-seeding would overwrite a current token with a possibly revoked one."""
+    e = _store(tmp_path, monkeypatch)
+    host = tmp_path / "host.json"
+    host.write_text('{"token": "stale-host"}')
+    monkeypatch.setattr(e, "CREDENTIAL_FILES", {"claude": (host, "/c.json")})
+
+    e.seed_store()
+    (e.CREDENTIAL_STORE / "claude.json").write_text('{"token": "fresh"}')
+    e.seed_store()
+
+    assert (e.CREDENTIAL_STORE / "claude.json").read_text() == '{"token": "fresh"}'
+
+
+def test_harvest_never_writes_the_host_credential(tmp_path, monkeypatch):
+    """The operator's own CLI login must not be rewritten by the sandbox."""
+    import os
+    import time
+
+    e = _store(tmp_path, monkeypatch)
+    host = tmp_path / "host.json"
+    host.write_text('{"token": "host-original"}')
+    monkeypatch.setattr(e, "CREDENTIAL_FILES", {"claude": (host, "/c.json")})
+
+    s = tmp_path / "s"
+    staged = e.stage_credentials(s)[0].split(":")[0]
+    from pathlib import Path
+    Path(staged).write_text('{"token": "sandbox-refreshed"}')
+    os.utime(staged, (time.time() + 10, time.time() + 10))
+    e.harvest_credentials(s)
+
+    assert host.read_text() == '{"token": "host-original"}'
+
+
+def test_harvest_ignores_an_older_session_copy(tmp_path, monkeypatch):
+    """Parallel sessions must converge on the newest refresh, not the last to finish."""
+    import os
+    import time
+
+    e = _store(tmp_path, monkeypatch)
+    host = tmp_path / "host.json"
+    host.write_text('{"token": "v1"}')
+    monkeypatch.setattr(e, "CREDENTIAL_FILES", {"claude": (host, "/c.json")})
+
+    s = tmp_path / "s"
+    staged = e.stage_credentials(s)[0].split(":")[0]
+    (e.CREDENTIAL_STORE / "claude.json").write_text('{"token": "newer"}')
+    os.utime(e.CREDENTIAL_STORE / "claude.json", (time.time() + 60, time.time() + 60))
+    from pathlib import Path
+    Path(staged).write_text('{"token": "older"}')
+
+    assert e.harvest_credentials(s) == []
+    assert (e.CREDENTIAL_STORE / "claude.json").read_text() == '{"token": "newer"}'

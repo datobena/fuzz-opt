@@ -32,3 +32,6 @@ covdiff_pertrial_mut8h/
 # prework: staged source is a build artifact, not source of record
 prework/targets/*/src/
 sandbox/Dockerfile.egress
+
+# sandbox credential store (contains live OAuth tokens)
+.sandbox-creds/

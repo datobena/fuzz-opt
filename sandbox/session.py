@@ -187,6 +187,13 @@ def run_sandboxed_optimizer(
         logger.warning("sandboxed optimizer timed out after %ss", timeout)
         return {"ok": False, "stdout": "", "stderr": "", "timed_out": True}
     finally:
+        # Fold any token refresh the session performed back into the store.
+        # Skipping this means re-seeding from a stale credential next time, which
+        # under refresh-token rotation stops authenticating entirely.
+        try:
+            egress.harvest_credentials(session_dir)
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("credential harvest failed: %s", e)
         stop.set()
         try:
             os.unlink(sock_path)
