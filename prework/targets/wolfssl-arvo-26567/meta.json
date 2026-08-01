@@ -1,0 +1,22 @@
+{
+  "project": "wolfssl",
+  "arvo_id": 26567,
+  "arvo_image": "n132/arvo:26567-vul",
+  "fuzz_target": "fuzzer-wolfssl-rsa",
+  "crash_type": "Heap-buffer-overflow WRITE {*}",
+  "workdir": "wolfssl",
+  "deviations": [
+    {
+      "what": "build.sh: dropped the trailing fuzz-targets build",
+      "why": "it hardcodes ./configure CC=\"clang\", which overrides compile_afl's afl-clang-fast and yields an UNINSTRUMENTED library",
+      "affects_measurement": false,
+      "rationale": "that step builds only the pem_cert target; fuzzer-wolfssl-rsa comes from the nested wolf-ssl-ssh-fuzzers build, which respects $CC and $LIB_FUZZING_ENGINE"
+    },
+    {
+      "what": "build.sh: removed --enable-blake2 --enable-blake2s from the nested configure params",
+      "why": "clang 18 rejects wolfcrypt/blake2-int.h with a hard error on array element alignment that clang 12 accepted",
+      "affects_measurement": "unlikely-but-check",
+      "rationale": "blake2 is independent of RSA and our target is fuzzer-wolfssl-rsa; however feature flags change binary/heap layout and this is a heap-buffer-overflow, so the PoC verification is the empirical check"
+    }
+  ]
+}
