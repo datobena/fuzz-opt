@@ -57,9 +57,14 @@ def main() -> int:
         # plain gcr.io/oss-fuzz/<local_id> builder has neither `arvo` nor
         # /tmp/poc. The latter needs an externally supplied PoC.
         if meta.get("poc_source"):
+            # Resolve relative to the target dir so a fresh clone works from any
+            # cwd, and so the PoC can live beside the target under version control.
+            poc_source = Path(meta["poc_source"])
+            if not poc_source.is_absolute():
+                poc_source = target_dir / poc_source
             extracted = extract_source_only(
                 meta["arvo_image"], meta["project"], work,
-                poc_source=meta["poc_source"],
+                poc_source=poc_source,
             )
         else:
             extracted = extract_arvo(meta["arvo_image"], meta["project"], work)
