@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from lib import cpu_ledger
+from prework.prework_build import restore_ownership
 from sandbox.scrub import scrub
 
 logger = logging.getLogger(__name__)
@@ -80,10 +82,27 @@ def _build_command(ctx: BrokerContext) -> list[str]:
     return [
         "docker", "run", "--rm", "--privileged",
         "--cpuset-cpus", str(ctx.cpu),
+        # No core dumps: these containers run the target too, and a
+        # smoke/replay that crashes would otherwise dump its image
+        # synchronously. See phase3_runner for the full reasoning.
+        "--ulimit", "core=0",
         "-e", "FUZZING_ENGINE=afl",
+        # Exclude the optimizer's INSERTED helpers from coverage instrumentation.
+        # A coverage-guided fuzzer biases mutation toward inputs that reach new
+        # edges, so helpers the skill adds shift the gradient away from the code
+        # under test -- the skill records a ~5x time-to-bug swing from exactly
+        # this. Its prescribed `no_sanitize("coverage")` is libFuzzer's mechanism
+        # and does NOT work here: AFL++ 5.02c runs LLVM-PCGUARD, its own fork of
+        # the sancov pass, and instruments a marked helper identically to an
+        # unmarked one (verified by counting __afl_area_ptr relocations). The
+        # denylist is the mechanism that does work, which is why the skill
+        # requires every inserted function to be named fold_*.
+        "-e", "AFL_LLVM_DENYLIST=/src/aflpp_fold_denylist.txt",
         "-e", "SANITIZER=address",
         "-e", "ARCHITECTURE=x86_64",
         "-e", "FUZZING_LANGUAGE=c++",
+        "-v", f"{Path(__file__).resolve().parent.parent / 'prework' / 'aflpp_fold_denylist.txt'}"
+              f":/src/aflpp_fold_denylist.txt:ro",
         "-v", f"{Path(ctx.source_dir).absolute()}:/src/{ctx.project}",
         "-v", f"{Path(ctx.out_dir).absolute()}:/out",
         ctx.image, "compile",
@@ -100,12 +119,25 @@ def _replay_command(ctx: BrokerContext) -> list[str]:
     return [
         "docker", "run", "--rm", "--privileged",
         "--cpuset-cpus", str(ctx.cpu),
+        # No core dumps: these containers run the target too, and a
+        # smoke/replay that crashes would otherwise dump its image
+        # synchronously. See phase3_runner for the full reasoning.
+        "--ulimit", "core=0",
         "-v", f"{Path(ctx.out_dir).absolute()}:/out:ro",
         "-v", f"{Path(ctx.corpus_dir).absolute()}:/corpus:ro",
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
         "export AFL_NO_AFFINITY=1 AFL_SKIP_CPUFREQ=1 "
         "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 ASAN_OPTIONS=detect_leaks=0; "
-        f"/out/afl-showmap -i /corpus -o /dev/null -t 5000+ -m none -- "
+        # -C (collect-coverage) is REQUIRED with -i <dir>. Without it afl-showmap
+        # treats -o as a DIRECTORY to write one bitmap per input into, so
+        # `-o /dev/null` aborts instantly with
+        #   SYSTEM ERROR : cannot create output directory /dev/null (File exists)
+        # and the call still returns a plausible-looking wall-clock. Every fold
+        # was then accepted or rejected on ~0.5s of start-up failure rather than
+        # on execution time. With -C the whole corpus is replayed and -o is a
+        # single file, so /dev/null is valid and no per-input I/O pollutes the
+        # timing.
+        f"/out/afl-showmap -C -i /corpus -o /dev/null -t 5000+ -m none -- "
         f"/out/{ctx.fuzz_target}",
     ]
 
@@ -113,6 +145,11 @@ def _replay_command(ctx: BrokerContext) -> list[str]:
 def _run_build(ctx: BrokerContext) -> tuple[bool, str]:
     rc, blob = _run(_build_command(ctx), BUILD_TIMEOUT_SECS)
     _audit(ctx, "build", blob)
+    # `compile` runs as root through a bind mount, so it leaves root-owned objects
+    # in the tree the AGENT (uid 1000) is editing and the orchestrator later has to
+    # `git clean` when a round is rejected. Restored on failure too: a build that
+    # died halfway leaves exactly the artifacts that have to be cleanable.
+    restore_ownership(ctx.image, [ctx.source_dir, ctx.out_dir])
     return rc == 0, blob
 
 
@@ -121,6 +158,10 @@ def _run_smoke(ctx: BrokerContext) -> tuple[bool, str]:
     cmd = [
         "docker", "run", "--rm", "--privileged",
         "--cpuset-cpus", str(ctx.cpu),
+        # No core dumps: these containers run the target too, and a
+        # smoke/replay that crashes would otherwise dump its image
+        # synchronously. See phase3_runner for the full reasoning.
+        "--ulimit", "core=0",
         "-v", f"{Path(ctx.out_dir).absolute()}:/out:ro",
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
         f"export ASAN_OPTIONS=detect_leaks=0; printf '' > /tmp/e; "
@@ -141,12 +182,27 @@ def _run_replay(ctx: BrokerContext, repeats: int) -> float | None:
         _audit(ctx, "replay", f"rc={rc} elapsed={elapsed:.3f}\n{blob[-2000:]}")
         if rc == 124:
             return None
+        # A replay that did not actually execute the corpus must not be timed.
+        # afl-showmap reports its own outcome; absent that line the run failed
+        # before the forkserver and the "elapsed" is pure start-up cost, which
+        # is indistinguishable from a very fast binary.
+        if "coverage of" not in blob and "Captured" not in blob:
+            logger.error("replay produced no coverage report; refusing to time "
+                         "it: %s", blob[-300:])
+            return None
         times.append(elapsed)
     return statistics.median(times) if times else None
 
 
 def handle_request(req, ctx: BrokerContext) -> dict:
-    """Dispatch one request. Never raises -- a broker crash would kill the round."""
+    """Dispatch one request. Never raises -- a broker crash would kill the round.
+
+    Every op here is real CPU work the optimizer causes, so each is timed into
+    the CPU ledger. This is the ONLY place agent-requested compute can happen --
+    the request surface is a closed enum -- which is what makes "everything
+    except the model wait" measurable at a single point. All three ops are
+    pinned to ctx.cpu, so core-seconds equal wall-seconds.
+    """
     if not isinstance(req, dict):
         return {"ok": False, "error": "malformed request"}
     op = req.get("op")
@@ -154,11 +210,15 @@ def handle_request(req, ctx: BrokerContext) -> dict:
         return {"ok": False, "error": "missing or malformed op"}
 
     if op == "build":
-        ok, blob = _run_build(ctx)
+        with cpu_ledger.timed("broker_build", cores=1) as info:
+            ok, blob = _run_build(ctx)
+            info["ok"] = ok
         return {"ok": ok, "log": scrub(blob)}
 
     if op == "smoke":
-        ok, blob = _run_smoke(ctx)
+        with cpu_ledger.timed("broker_smoke", cores=1) as info:
+            ok, blob = _run_smoke(ctx)
+            info["ok"] = ok
         return {"ok": ok, "log": scrub(blob)}
 
     if op == "replay_time":
@@ -166,7 +226,9 @@ def handle_request(req, ctx: BrokerContext) -> dict:
         if isinstance(raw, bool) or not isinstance(raw, int):
             return {"ok": False, "error": "repeats must be an integer"}
         repeats = max(1, min(raw, MAX_REPLAY_REPEATS))
-        seconds = _run_replay(ctx, repeats)
+        with cpu_ledger.timed("broker_replay", cores=1) as info:
+            seconds = _run_replay(ctx, repeats)
+            info["repeats"] = repeats
         if seconds is None:
             return {"ok": False, "error": "replay did not complete"}
         return {"ok": True, "seconds": seconds, "repeats": repeats}
@@ -201,8 +263,19 @@ def serve(socket_path: str, ctx: BrokerContext) -> None:
                     conn.sendall(json.dumps(
                         {"ok": False, "error": f"bad request: {e}"}).encode() + b"\n")
                     continue
-                reply = handle_request(req, ctx)
-                conn.sendall(json.dumps(reply).encode() + b"\n")
+                try:
+                    reply = handle_request(req, ctx)
+                    conn.sendall(json.dumps(reply).encode() + b"\n")
+                except OSError as e:
+                    # The CLIENT went away (BrokenPipeError/ECONNRESET) -- the
+                    # agent abandoned a slow build or replay. Without this the
+                    # exception escapes the accept loop, `finally` closes the
+                    # listener and UNLINKS the socket, and the broker is gone for
+                    # the rest of the agent session: every later build/smoke/
+                    # replay fails with ENOENT and the round produces nothing.
+                    # One disconnected client must not end the service.
+                    logger.warning("client disconnected mid-reply: %s", e)
+                    continue
     finally:
         srv.close()
         if os.path.exists(socket_path):

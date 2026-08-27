@@ -32,6 +32,12 @@ DEFAULT_ALLOWLIST = (
     # Claude (claude.ai Max / Pro subscription auth)
     "api.anthropic.com",
     "console.anthropic.com",
+    # The CLI refreshes its OAuth token against platform.claude.com, which this
+    # list predates. Without it the refresh is denied, the access token expires
+    # a few hours in, and EVERY remaining round dies on "401 OAuth access token
+    # has expired" -- observed 2026-08-14: first DENY 12:40:49, first 401 at
+    # 12:50:54, and the yara arm lost rounds 5 and 6 outright.
+    "platform.claude.com",
     "claude.ai",
     # Codex (ChatGPT subscription auth)
     "api.openai.com",

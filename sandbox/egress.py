@@ -31,9 +31,12 @@ to close. That is leak-inventory item 10.
 from __future__ import annotations
 
 import logging
+import fcntl
+import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -145,6 +148,44 @@ def stop_proxy() -> None:
     subprocess.run(["docker", "rm", "-f", PROXY_NAME], capture_output=True)
 
 
+def _credential_expiry(path) -> int:
+    """Best-effort freshness key for a credential file.
+
+    Uses the OAuth ``expiresAt`` when present (the only field that reliably
+    orders two copies of a rotating credential), else falls back to mtime so a
+    backend with a different file shape still compares sensibly.
+    """
+    from pathlib import Path as _P
+    path = _P(path)
+    try:
+        blob = json.loads(path.read_text())
+    except Exception:                                     # noqa: BLE001
+        try:
+            return int(path.stat().st_mtime * 1000)
+        except OSError:
+            return 0
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict) and holder.get("expiresAt"):
+            try:
+                return int(holder["expiresAt"])
+            except (TypeError, ValueError):
+                pass
+        # An OAuth-shaped credential whose expiresAt is 0/absent is a FAILED
+        # refresh, not an old one, and it must sort as the oldest thing there
+        # is. Falling through to mtime instead ranks it by when it was written,
+        # which is precisely when it is freshest -- so a poisoned copy outranks
+        # the good host credential and seed_store refuses to heal from it. That
+        # is what stranded b3r2: the store sat at expiresAt=0 from 18:46 on,
+        # every later round reported "no fresher credential is available", and
+        # the refresh token underneath was valid for another 12 days.
+        if isinstance(holder, dict) and "refreshToken" in holder:
+            return 0
+    try:
+        return int(path.stat().st_mtime * 1000)
+    except OSError:
+        return 0
+
+
 def seed_store(backends=None) -> None:
     """Copy host credentials into the store, but only to initialize it.
 
@@ -160,14 +201,331 @@ def seed_store(backends=None) -> None:
             continue
         host_path, _ = entry
         stored = CREDENTIAL_STORE / f"{backend}.json"
-        if stored.exists():
-            continue
         if not host_path.is_file():
-            logger.info("no %s credential at %s to seed from", backend, host_path)
+            if not stored.exists():
+                logger.info("no %s credential at %s to seed from", backend, host_path)
             continue
+        if stored.exists():
+            # Take the HOST copy only when it is strictly newer. Refresh tokens
+            # ROTATE: whoever refreshes last revokes the other side's token. The
+            # store must win after a sandbox-side refresh (that was the original
+            # reason this was seed-only), but the HOST also refreshes -- it is a
+            # live CLI on this machine -- and then the store silently holds a
+            # revoked token and every session dies with "401 OAuth access token
+            # has been revoked". Comparing expiry handles both directions.
+            if _credential_expiry(host_path) <= _credential_expiry(stored):
+                continue
+            logger.info("host %s credential is newer than the store; refreshing "
+                        "it (the host refreshed and rotated the token)", backend)
         shutil.copy2(host_path, stored)
         os.chmod(stored, 0o600)
         logger.info("seeded %s credential into the sandbox store", backend)
+
+
+# How much life an access token must have left before a session may be launched.
+# The optimizer backstop is PHASE2_OPTIMIZER_TIMEOUT_SECS (4h by default), so a
+# token that outlives the backstop cannot expire mid-session no matter how long
+# the agent runs. Observed sessions are 13-60 min; the margin is deliberate.
+MIN_TOKEN_REMAINING_SECS = int(
+    os.environ.get("SANDBOX_MIN_TOKEN_REMAINING_SECS", str(5 * 3600)))
+
+# Serialises check-and-refresh across concurrent projects. b3r2's two projects
+# launched their first sandboxes 21 SECONDS apart, so without this both would
+# see "under threshold", both would refresh the one shared refresh token, and the
+# loser would get a rejection -- the failure this whole path exists to avoid.
+CREDENTIAL_LOCK = CREDENTIAL_STORE / ".refresh.lock"
+
+# Command that makes the HOST CLI refresh its own credential. Deliberately not a
+# hand-rolled OAuth call: the CLI owns the token endpoint and the client id, and
+# reimplementing that here would silently rot. Override if a cheaper trigger
+# exists.
+#
+# It must be a command that actually TALKS to the API. Verified 2026-08-22:
+# `claude auth status` never refreshes; a real prompt does, once the CLI has
+# reason to believe the token is stale.
+REFRESH_CMD = os.environ.get("SANDBOX_CREDENTIAL_REFRESH_CMD", 'claude -p "ok"')
+
+# How near expiry the credential is stamped in order to make the CLI refresh it.
+# See _force_refresh_via_stamp.
+STAMP_REMAINING_SECS = int(os.environ.get("SANDBOX_REFRESH_STAMP_SECS", "60"))
+
+
+def access_token_remaining_secs(path) -> float:
+    """Seconds of life left in a credential's ACCESS token; 0.0 if unreadable.
+
+    Reads expiresAt only. refreshTokenExpiresAt is a different, far longer clock
+    (28 days vs ~8 hours) and confusing the two reads a dead credential as valid.
+    """
+    from pathlib import Path as _P
+    try:
+        blob = json.loads(_P(path).read_text())
+    except Exception:                                     # noqa: BLE001
+        return 0.0
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict) and holder.get("expiresAt"):
+            try:
+                return max(0.0, int(holder["expiresAt"]) / 1000.0 - time.time())
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
+# Sessions currently holding a staged access token. A refresh REVOKES the token
+# every running session is using -- observed twice in b3r3 (08:52 and 12:01),
+# each costing 20-40 min of optimizer work to a relaunch. Refreshes land roughly
+# every 3h while rounds run every 2h and sessions take 15-60 min, so colliding is
+# the normal case, not an edge case.
+INFLIGHT_DIR = CREDENTIAL_STORE / "inflight"
+
+# A marker older than this is assumed to belong to a session that died without
+# cleaning up, and stops holding off refreshes.
+INFLIGHT_STALE_SECS = int(os.environ.get("SANDBOX_INFLIGHT_STALE_SECS", str(5 * 3600)))
+
+# Below this, refresh even if sessions are in flight: revoking their token costs
+# a relaunch, but letting it expire underneath them costs the same and leaves no
+# valid token for the next session either.
+TOKEN_HARD_FLOOR_SECS = int(os.environ.get("SANDBOX_TOKEN_HARD_FLOOR_SECS", str(90 * 60)))
+
+
+def _marker_path(session_dir):
+    import hashlib
+    from pathlib import Path as _P
+    key = hashlib.sha1(str(_P(session_dir).resolve()).encode()).hexdigest()[:16]
+    return INFLIGHT_DIR / key
+
+
+def mark_session_start(session_dir) -> None:
+    """Record that a session is about to run on the current access token."""
+    try:
+        INFLIGHT_DIR.mkdir(parents=True, exist_ok=True)
+        _marker_path(session_dir).write_text(str(time.time()))
+    except OSError as e:
+        logger.warning("could not mark session in flight: %s", e)
+
+
+def clear_session_marker(session_dir) -> None:
+    """Session finished; it no longer holds a token worth protecting."""
+    try:
+        _marker_path(session_dir).unlink()
+    except OSError:
+        pass
+
+
+def sessions_in_flight() -> int:
+    """How many sessions are currently running on a staged token.
+
+    Stale markers are removed as they are found, so a session killed without
+    cleanup cannot block refreshes forever.
+    """
+    if not INFLIGHT_DIR.is_dir():
+        return 0
+    now, live = time.time(), 0
+    for p in INFLIGHT_DIR.iterdir():
+        try:
+            if now - p.stat().st_mtime < INFLIGHT_STALE_SECS:
+                live += 1
+            else:
+                p.unlink()
+        except OSError:
+            pass
+    return live
+
+
+def _set_expires_at(path, when_ms: int) -> bool:
+    """Rewrite only the expiresAt field of a credential, preserving the rest."""
+    from pathlib import Path as _P
+    path = _P(path)
+    try:
+        blob = json.loads(path.read_text())
+    except Exception:                                     # noqa: BLE001
+        return False
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict) and "expiresAt" in holder:
+            holder["expiresAt"] = when_ms
+            path.write_text(json.dumps(blob))
+            os.chmod(path, 0o600)
+            return True
+    return False
+
+
+def _force_refresh_via_stamp(host_path) -> bool:
+    """Refresh the host access token on demand, by telling the CLI it is stale.
+
+    The CLI refreshes only when it believes its token is about to expire, and a
+    HEALTHY token cannot be refreshed by any command -- verified 2026-08-22:
+    neither `claude auth status` nor a real prompt moved a token with 5.9h left.
+    So stamp expiresAt a minute out and let the CLI's own logic do the rest.
+
+    This lies DOWNWARD, which is sound: expiresAt is the client's own note about
+    when to renew, and the renewal that follows is a real, server-validated
+    exchange of a genuine refresh token. Lying UPWARD -- a far-future stamp to
+    dodge expiry -- cannot work, because the server decides what it accepts, not
+    this file.
+
+    Verified by A/B on credentials differing only in expiresAt: at ~5.6h the CLI
+    used the access token and answered normally; stamped to 60s it attempted a
+    refresh instead.
+
+    On failure the original expiry is restored, so a refresh that does not take
+    cannot leave the operator's own CLI believing its token is stale.
+    """
+    from pathlib import Path as _P
+    original = None
+    try:
+        blob = json.loads(_P(host_path).read_text())
+        for holder in (blob, blob.get("claudeAiOauth") or {},
+                       blob.get("tokens") or {}):
+            if isinstance(holder, dict) and holder.get("expiresAt"):
+                original = int(holder["expiresAt"])
+                break
+    except Exception:                                     # noqa: BLE001
+        return False
+    if original is None:
+        return False
+
+    stamp = int((time.time() + STAMP_REMAINING_SECS) * 1000)
+    if not _set_expires_at(host_path, stamp):
+        return False
+    try:
+        subprocess.run(REFRESH_CMD, shell=True, capture_output=True,
+                       stdin=subprocess.DEVNULL, timeout=180)
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning("refresh command failed: %s", e)
+
+    if access_token_remaining_secs(host_path) > STAMP_REMAINING_SECS + 30:
+        return True
+    _set_expires_at(host_path, original)      # put the clock back exactly
+    return False
+
+
+def ensure_fresh_host_credential(min_remaining: int | None = None) -> float:
+    """Make sure the host access token outlives any session about to start.
+
+    Returns the seconds remaining after any refresh. Serialised with flock, and
+    the remaining life is RE-CHECKED after the lock is taken: a second project
+    that blocked here wakes to find a freshly minted token and does nothing,
+    which is what keeps one refresh per threshold crossing however many projects
+    are running.
+
+    A failed refresh writes NOTHING. A CLI that cannot refresh rewrites its
+    credential with expiresAt=0, and folding that back is what stranded b3r2 for
+    the last eight hours of a 24h campaign.
+    """
+    min_remaining = MIN_TOKEN_REMAINING_SECS if min_remaining is None else min_remaining
+    host_path, _ = CREDENTIAL_FILES["claude"]
+    CREDENTIAL_STORE.mkdir(parents=True, exist_ok=True)
+    os.chmod(CREDENTIAL_STORE, 0o700)
+
+    with open(CREDENTIAL_LOCK, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            remaining = access_token_remaining_secs(host_path)
+            if remaining >= min_remaining:
+                return remaining
+            # Defer rather than collide. The threshold is generous (5h) precisely
+            # so there is room to wait: a session needs at most the 4h backstop
+            # and in practice 15-60 min, so a token below the threshold is still
+            # comfortably enough for whoever is running. Refreshing now would
+            # revoke their token for no benefit.
+            busy = sessions_in_flight()
+            if busy and remaining > TOKEN_HARD_FLOOR_SECS:
+                logger.info(
+                    "access token has %.2fh left (< %.2fh) but %d session(s) are "
+                    "in flight; deferring the refresh so their token is not "
+                    "revoked mid-run", remaining / 3600, min_remaining / 3600, busy)
+                return remaining
+            logger.info(
+                "access token has %.2fh left (< %.2fh); forcing a refresh%s",
+                remaining / 3600, min_remaining / 3600,
+                f" despite {busy} session(s) in flight (below the "
+                f"{TOKEN_HARD_FLOOR_SECS / 3600:.1f}h floor)" if busy else "")
+            _force_refresh_via_stamp(host_path)
+            after = access_token_remaining_secs(host_path)
+            if after > remaining:
+                logger.info("refreshed: access token now has %.2fh left",
+                            after / 3600)
+            else:
+                # Not necessarily fatal, and the wording matters: a token with
+                # 2h left still carries a typical 13-60 min session fine. What
+                # is at risk is a session that runs to the 4h backstop. Verified
+                # 2026-08-22: neither `claude auth status` nor a real inference
+                # call refreshes a HEALTHY token -- the CLI refreshes only when
+                # near expiry, so this branch is expected to be a no-op until
+                # then and must not cry wolf.
+                logger.warning(
+                    "access token still has %.2fh left (wanted %.2fh) and could "
+                    "not be refreshed early; short sessions are unaffected, but "
+                    "one that runs to the optimizer backstop may outlive it. "
+                    "Run `claude` on the host to re-authenticate.",
+                    after / 3600, min_remaining / 3600)
+            return after
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+API_KEY_ENV = "ANTHROPIC_API_KEY"
+
+
+def api_key() -> str:
+    """The sandbox's own API key, or "" to fall back to subscription OAuth.
+
+    An API key removes the failure that cost b3r2 seven optimizer rounds. OAuth
+    access tokens expire and their refresh tokens ROTATE, and this benchmark
+    points three independent refreshers at ONE identity: the operator's host CLI
+    and both projects' sandboxes, which run concurrently (b3r2's lcms and yara
+    sessions started 21s apart and ran ~40 min each). Whichever refreshes last
+    invalidates the others, so a long campaign reliably loses its back half --
+    yara died at 16.7h, lcms at 18.9h, and neither recovered.
+
+    stage_credentials hands each session a COPY so the CLI can refresh without
+    racing on the file; that fixes file contention, not lineage contention. An
+    API key does not expire, refresh or rotate, so N concurrent clients is fine.
+    """
+    return os.environ.get(API_KEY_ENV, "").strip()
+
+
+def _has_refresh_token(path) -> bool:
+    """Whether a credential file still carries a refresh token."""
+    from pathlib import Path as _P
+    try:
+        blob = json.loads(_P(path).read_text())
+    except Exception:                                     # noqa: BLE001
+        return False
+    return any(
+        isinstance(h, dict) and (h.get("refreshToken") or h.get("refresh_token"))
+        for h in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {})
+    )
+
+
+def _strip_refresh_token(path) -> bool:
+    """Remove the refresh token from a staged copy, in place.
+
+    The sandbox gets an ACCESS token and nothing else. An access token is a
+    bearer credential: using it neither consumes nor rotates it, so N concurrent
+    sessions holding the same one is safe. A refresh token is the opposite --
+    using it destroys it and mints a replacement, so the first session to refresh
+    invalidates every other holder, including the host. Removing the field makes
+    that physically impossible rather than merely unlikely.
+
+    Verified 2026-08-22: the CLI reports loggedIn and completes a real inference
+    call with no refreshToken field present, and does not write one back.
+    """
+    from pathlib import Path as _P
+    path = _P(path)
+    try:
+        blob = json.loads(path.read_text())
+    except Exception:                                     # noqa: BLE001
+        return False
+    stripped = False
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict):
+            for field in ("refreshToken", "refresh_token"):
+                if holder.pop(field, None) is not None:
+                    stripped = True
+    if stripped:
+        path.write_text(json.dumps(blob))
+        os.chmod(path, 0o600)
+    return stripped
 
 
 def stage_credentials(session_dir: str | Path, backends=None) -> list[str]:
@@ -179,6 +537,10 @@ def stage_credentials(session_dir: str | Path, backends=None) -> list[str]:
     directory.
     """
     session_dir = Path(session_dir)
+    # Gate FIRST: refresh the host credential if it is too close to expiry,
+    # before anything is copied downstream, so a session never starts on a
+    # token that will die under it.
+    ensure_fresh_host_credential()
     seed_store(backends)
     creds_dir = session_dir / "creds"
     creds_dir.mkdir(parents=True, exist_ok=True)
@@ -198,8 +560,14 @@ def stage_credentials(session_dir: str | Path, backends=None) -> list[str]:
         staged = creds_dir / f"{backend}.json"
         shutil.copy2(source, staged)
         os.chmod(staged, 0o600)
+        stripped = _strip_refresh_token(staged)
+        mark_session_start(session_dir)
         mounts.append(f"{staged}:{container_path}")
-        logger.info("staged %s credential (writable copy) for the sandbox", backend)
+        logger.info(
+            "staged %s credential for the sandbox (%s, %.2fh of access-token "
+            "life left)", backend,
+            "access token only" if stripped else "no refresh token present",
+            access_token_remaining_secs(staged) / 3600)
     return mounts
 
 
@@ -217,6 +585,9 @@ def harvest_credentials(session_dir: str | Path, backends=None) -> list[str]:
     """
     creds_dir = Path(session_dir) / "creds"
     updated: list[str] = []
+    # The session is over either way, so it must stop holding off refreshes even
+    # if there is nothing to harvest.
+    clear_session_marker(session_dir)
     if not creds_dir.is_dir():
         return updated
     CREDENTIAL_STORE.mkdir(parents=True, exist_ok=True)
@@ -226,6 +597,24 @@ def harvest_credentials(session_dir: str | Path, backends=None) -> list[str]:
             continue
         stored = CREDENTIAL_STORE / f"{backend}.json"
         try:
+            # Never fold back a credential the session left un-authenticated.
+            # A CLI that fails to refresh rewrites the file with expiresAt=0,
+            # and mtime alone cannot tell that from a successful refresh -- so
+            # the failure overwrites a WORKING store credential and every later
+            # round inherits the dead one. Validate the content, not the clock.
+            if _credential_expiry(staged) <= 0:
+                logger.warning(
+                    "not harvesting %s: the session's credential has no valid "
+                    "expiry (a failed refresh, not a new token)", backend)
+                continue
+            # An access-token-only copy cannot have refreshed anything, so it has
+            # nothing to fold back. Without this the strip propagates UPWARD: the
+            # staleness test below is mtime-based, _strip_refresh_token rewrites
+            # the staged file (bumping its mtime) while seed_store copy2's the
+            # store (preserving the host's), so every stripped copy looks newer
+            # and quietly deletes the store's own refresh token.
+            if not _has_refresh_token(staged):
+                continue
             if stored.exists() and staged.stat().st_mtime <= stored.stat().st_mtime:
                 continue
             if stored.exists() and staged.read_bytes() == stored.read_bytes():

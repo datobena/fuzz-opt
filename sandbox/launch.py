@@ -35,6 +35,12 @@ SRC_MOUNT = f"{WORK_ROOT}/src"
 PROFILE_MOUNT = f"{WORK_ROOT}/profile"
 TOOLS_MOUNT = f"{WORK_ROOT}/bin"
 SOCK_MOUNT = "/run/broker.sock"
+# Where the CLI looks for skills. NOT under /work: the agent's HOME is the only
+# place it searches, and only this ONE skill directory is mounted -- never
+# ~/.claude itself, which holds transcripts from prior runs on these targets.
+AGENT_HOME = "/home/agent"
+SKILLS_MOUNT = f"{AGENT_HOME}/.claude/skills"
+HARNESS_MOUNT = f"{WORK_ROOT}/harness"
 
 # Only the variables the optimizer skill actually reads. Anything absent here is
 # dropped rather than forwarded -- an allowlist, so a newly-added orchestrator
@@ -94,9 +100,26 @@ def build_agent_env(base: dict) -> dict:
 
 def build_agent_docker_command(
     *, image: str, src: str, profile: str, tools: str, sock: str, network: str,
-    env: dict, memory: str = "8g", cpus: str = "",
+    env: dict, memory: str = "8g", cpus: str = "", skill: str = "",
+    skill_name: str = "", harness: str = "",
 ) -> list[str]:
-    """`docker run` for the agent container. No socket, no host filesystem."""
+    """`docker run` for the agent container. No socket, no host filesystem.
+
+    ``skill`` is the host path of the ONE optimizer skill directory to expose,
+    read-only, under the agent's own skills dir. The prompt says "Use the <skill>
+    skill", and without this the CLI has no such skill: the agent correctly
+    refuses with BLOCKED_LOW_CONFIDENCE and every round is lost.
+
+    Read-only and single-skill on purpose. The mount target is a child of
+    ~/.claude, never ~/.claude itself -- that directory holds transcripts from
+    prior runs naming these very bugs (leak-inventory item 10), which is the same
+    reason the credential is mounted as one file rather than its parent.
+
+    NOTE the skill's own text is part of the leak surface: methodology is neutral,
+    but a worked example naming a target hands the agent prior knowledge about it.
+    That is a property of the tree being mounted, not of this function -- check it
+    before pointing this at a new skill.
+    """
     cmd = [
         "docker", "run", "--rm",
         "--network", network,
@@ -113,8 +136,16 @@ def build_agent_docker_command(
         "-v", f"{profile}:{PROFILE_MOUNT}:ro",
         "-v", f"{tools}:{TOOLS_MOUNT}:ro",
         "-v", f"{sock}:{SOCK_MOUNT}",
-        "-w", SRC_MOUNT,
     ]
+    if skill:
+        name = skill_name or PurePosixPath(skill).name
+        cmd += ["-v", f"{skill}:{SKILLS_MOUNT}/{name}:ro"]
+    if harness:
+        # OSS-Fuzz keeps the harness NEXT TO the project dir, not inside it, so
+        # it falls outside the /work/src mount. Read-only: the prompt forbids
+        # editing it, and the agent only needs to read the entry point.
+        cmd += ["-v", f"{harness}:{HARNESS_MOUNT}/{PurePosixPath(harness).name}:ro"]
+    cmd += ["-w", SRC_MOUNT]
     for key, value in sorted(env.items()):
         cmd += ["-e", f"{key}={value}"]
     cmd.append(image)

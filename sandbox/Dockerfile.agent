@@ -32,5 +32,21 @@ RUN userdel -r ubuntu 2>/dev/null || true; \
     id agent
 USER agent
 
+# Pre-create the CLI's config dir, owned by the agent.
+#
+# Docker creates the missing PARENT of a bind mount as root. The credential is
+# mounted at /home/agent/.claude/.credentials.json and the skill under
+# /home/agent/.claude/skills/, so without this /home/agent/.claude comes into
+# existence root-owned and uid 1000 cannot write to it. The CLI creates
+# ~/.claude/session-env when it first runs a command, so that fails with EACCES
+# and the Bash tool is dead for the whole session -- no build, no smoke, no
+# replay, no reading the FUZZ_SOURCE_FOLDS_* contract. The agent then correctly
+# reports BLOCKED_LOW_CONFIDENCE, which is indistinguishable from "the optimizer
+# had nothing to say" unless you read its reasoning.
+#
+# Created here (after USER agent) so the mounts land in a directory that already
+# exists with the right owner.
+RUN mkdir -p /home/agent/.claude/skills
+
 ENV PATH="/work/bin:${PATH}"
 WORKDIR /work/src

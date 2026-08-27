@@ -5,7 +5,30 @@ bug is: the CVE is public, ARVO-Meta is keyed by the image id, and the upstream
 repo contains the fix commit. A leak here is silent -- the run completes and the
 bug-survival number is simply meaningless.
 """
+import json
+import os
+
+import pytest
+
+from sandbox import egress
 from sandbox.egress_proxy import DEFAULT_ALLOWLIST, host_allowed
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credential_store(tmp_path, monkeypatch):
+    """Never let a test write the REAL credential store.
+
+    stage_credentials() calls seed_store(), and seed_store is seed-only by
+    design: once a file exists it is the authority and is never re-seeded from
+    the host. So a test that stages a fake credential without redirecting the
+    store leaves `{"accessToken": "secret"}` in .sandbox-creds/claude.json
+    permanently -- and every sandboxed optimizer session afterwards dies with
+    "Not logged in", reported only as "No changes made by <skill>". Running the
+    test suite bricked the benchmark, which is exactly the kind of coupling an
+    autouse fixture exists to make impossible rather than remembered.
+    """
+    import sandbox.egress as e
+    monkeypatch.setattr(e, "CREDENTIAL_STORE", tmp_path / "_store")
 
 
 def test_allows_the_backends_the_optimizer_actually_uses():
@@ -212,3 +235,41 @@ def test_harvest_ignores_an_older_session_copy(tmp_path, monkeypatch):
 
     assert e.harvest_credentials(s) == []
     assert (e.CREDENTIAL_STORE / "claude.json").read_text() == '{"token": "newer"}'
+
+
+# --- a failed refresh must not poison the store -----------------------------
+# b3r2 lost 7 optimizer rounds to exactly this: a session whose refresh failed
+# wrote expiresAt=0, harvest folded it back on mtime alone, and _credential_expiry
+# then ranked the dead copy by mtime -- i.e. as the FRESHEST thing on disk -- so
+# seed_store would not heal from the host and every later round reported "no
+# fresher credential is available" while the refresh token was still valid.
+def _oauth(expires_at):
+    return json.dumps({"claudeAiOauth": {
+        "accessToken": "a", "refreshToken": "r", "expiresAt": expires_at}})
+
+
+def test_failed_refresh_sorts_as_oldest_not_newest(tmp_path):
+    dead = tmp_path / "dead.json"
+    dead.write_text(_oauth(0))
+    live = tmp_path / "live.json"
+    live.write_text(_oauth(1900000000000))
+    assert egress._credential_expiry(dead) == 0
+    assert egress._credential_expiry(live) == 1900000000000
+    assert egress._credential_expiry(dead) < egress._credential_expiry(live)
+
+
+def test_harvest_refuses_credential_with_no_valid_expiry(tmp_path, monkeypatch):
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "claude.json").write_text(_oauth(1900000000000))
+    monkeypatch.setattr(egress, "CREDENTIAL_STORE", store)
+
+    session = tmp_path / "session"
+    (session / "creds").mkdir(parents=True)
+    staged = session / "creds" / "claude.json"
+    staged.write_text(_oauth(0))
+    os.utime(staged, (2_000_000_000, 2_000_000_000))   # newer by mtime
+
+    assert egress.harvest_credentials(session, backends=["claude"]) == []
+    kept = json.loads((store / "claude.json").read_text())["claudeAiOauth"]
+    assert kept["expiresAt"] == 1900000000000

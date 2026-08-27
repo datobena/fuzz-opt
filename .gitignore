@@ -35,3 +35,12 @@ sandbox/Dockerfile.egress
 
 # sandbox credential store (contains live OAuth tokens)
 .sandbox-creds/
+
+# Local run bookkeeping (PID files, renamed run logs, ad-hoc backups)
+.online_*_pids.txt
+*.log.failed-*
+.skill-backup-*
+manifest.json.bak-*
+
+# `results` is a symlink to machine-local bulk storage on this host
+results
