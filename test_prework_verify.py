@@ -46,7 +46,7 @@ def test_crash_with_matching_signature_is_reproduced():
         "==10==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7f8f\n"
         "SUMMARY: AddressSanitizer: stack-buffer-overflow /src/libxml2/valid.c:1279:3 in xmlSnprintfElementContent\n"
     )
-    assert classify_run(blob, 1, "Stack-buffer-overflow WRITE {*}") == "reproduced"
+    assert classify_run(blob, 1, "Stack-buffer-overflow WRITE {*}") == "poc_crash"
 
 
 def test_clean_execution_without_a_crash_is_no_crash():
@@ -75,7 +75,7 @@ def test_crash_with_a_different_signature_is_wrong_crash():
         "Reading 10 bytes from /testcase\n"
         "SUMMARY: AddressSanitizer: heap-use-after-free /src/p/foo.c:12:5 in bar\n"
     )
-    assert classify_run(blob, 1, "Stack-buffer-overflow WRITE {*}") == "wrong_crash"
+    assert classify_run(blob, 1, "Stack-buffer-overflow WRITE {*}") == "other_crash"
 
 
 def test_signature_capture_is_not_polluted_by_a_relative_path():
@@ -84,4 +84,4 @@ def test_signature_capture_is_not_polluted_by_a_relative_path():
         "Reading 5 bytes from /testcase\n"
         "SUMMARY: AddressSanitizer: stack-buffer-overflow valid.c:1279 in xmlSnprintf\n"
     )
-    assert classify_run(blob, 1, "Stack-buffer-overflow WRITE {*}") == "reproduced"
+    assert classify_run(blob, 1, "Stack-buffer-overflow WRITE {*}") == "poc_crash"

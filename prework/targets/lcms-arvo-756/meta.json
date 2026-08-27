@@ -1,0 +1,9 @@
+{
+  "project": "lcms",
+  "arvo_id": 756,
+  "arvo_image": "n132/arvo:756-vul",
+  "fuzz_target": "cms_transform_fuzzer",
+  "crash_type": "Heap-buffer-overflow READ 4",
+  "workdir": "lcms",
+  "deviations": []
+}

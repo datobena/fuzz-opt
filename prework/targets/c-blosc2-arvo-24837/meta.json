@@ -1,0 +1,9 @@
+{
+  "project": "c-blosc2",
+  "arvo_id": 24837,
+  "arvo_image": "n132/arvo:24837-vul",
+  "fuzz_target": "decompress_fuzzer",
+  "crash_type": "Heap-buffer-overflow READ 1",
+  "workdir": "c-blosc2",
+  "deviations": []
+}

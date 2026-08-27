@@ -1,0 +1,9 @@
+{
+  "project": "yara",
+  "arvo_id": 3848,
+  "arvo_image": "n132/arvo:3848-vul",
+  "fuzz_target": "pe_fuzzer",
+  "crash_type": "Heap-buffer-overflow READ 1",
+  "workdir": "yara",
+  "deviations": []
+}

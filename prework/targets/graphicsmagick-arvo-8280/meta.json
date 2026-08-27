@@ -1,0 +1,9 @@
+{
+  "project": "graphicsmagick",
+  "arvo_id": 8280,
+  "arvo_image": "n132/arvo:8280-vul",
+  "fuzz_target": "coder_PTIF_fuzzer",
+  "crash_type": "Heap-double-free",
+  "workdir": "graphicsmagick",
+  "deviations": []
+}

@@ -1,0 +1,9 @@
+{
+  "project": "radare2",
+  "arvo_id": 10222,
+  "arvo_image": "n132/arvo:10222-vul",
+  "fuzz_target": "ia_fuzz",
+  "crash_type": "Heap-buffer-overflow READ 8",
+  "workdir": "radare2",
+  "deviations": []
+}

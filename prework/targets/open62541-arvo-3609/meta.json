@@ -1,0 +1,9 @@
+{
+  "project": "open62541",
+  "arvo_id": 3609,
+  "arvo_image": "n132/arvo:3609-vul",
+  "fuzz_target": "fuzz_binary_message",
+  "crash_type": "Negative-size-param",
+  "workdir": "open62541",
+  "deviations": []
+}

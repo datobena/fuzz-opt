@@ -1,0 +1,11 @@
+{
+  "project": "freeradius-server",
+  "arvo_id": 38283,
+  "arvo_image": "n132/arvo:38283-vul",
+  "fuzz_target": "fuzzer_tacacs",
+  "crash_type": "Global-buffer-overflow READ 1",
+  "workdir": "freeradius-server",
+  "deviations": [
+    "libtalloc-dev/libssl-dev/libpcap-dev installed (upstream OSS-Fuzz deps)"
+  ]
+}

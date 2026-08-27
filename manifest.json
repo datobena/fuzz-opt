@@ -36,6 +36,79 @@
     "cve": "CVE-2021-36085",
     "local_id": 42493454,
     "fuzz_target": "secilc-fuzzer",
-    "crash_type": "Heap-use-after-free READ 8"
+    "crash_type": "Heap-use-after-free READ 8",
+    "image": "n132/arvo:42493454-vul"
+  },
+  {
+    "project": "lcms",
+    "cve": "arvo-756",
+    "local_id": 756,
+    "image": "n132/arvo:756-vul",
+    "fuzz_target": "cms_transform_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 4"
+  },
+  {
+    "project": "yara",
+    "cve": "arvo-3848",
+    "local_id": 3848,
+    "image": "n132/arvo:3848-vul",
+    "fuzz_target": "pe_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  },
+  {
+    "project": "c-blosc2",
+    "cve": "arvo-24837",
+    "local_id": 24837,
+    "image": "n132/arvo:24837-vul",
+    "fuzz_target": "decompress_fuzzer",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  },
+  {
+    "project": "PcapPlusPlus",
+    "cve": "arvo-22232",
+    "local_id": 22232,
+    "image": "n132/arvo:22232-vul",
+    "fuzz_target": "FuzzTarget",
+    "crash_type": "Heap-buffer-overflow READ 1"
+  },
+  {
+    "project": "freeradius-server",
+    "cve": "arvo-38283",
+    "local_id": 38283,
+    "image": "n132/arvo:38283-vul",
+    "fuzz_target": "fuzzer_tacacs",
+    "crash_type": "Global-buffer-overflow READ 1"
+  },
+  {
+    "project": "graphicsmagick",
+    "cve": "arvo-8280",
+    "local_id": 8280,
+    "image": "n132/arvo:8280-vul",
+    "fuzz_target": "coder_PTIF_fuzzer",
+    "crash_type": "Heap-double-free"
+  },
+  {
+    "project": "libredwg",
+    "cve": "arvo-31419",
+    "local_id": 31419,
+    "image": "n132/arvo:31419-vul",
+    "fuzz_target": "llvmfuzz",
+    "crash_type": "Heap-buffer-overflow READ 7"
+  },
+  {
+    "project": "open62541",
+    "cve": "arvo-3609",
+    "local_id": 3609,
+    "image": "n132/arvo:3609-vul",
+    "fuzz_target": "fuzz_binary_message",
+    "crash_type": "Negative-size-param"
+  },
+  {
+    "project": "radare2",
+    "cve": "arvo-10222",
+    "local_id": 10222,
+    "image": "n132/arvo:10222-vul",
+    "fuzz_target": "ia_fuzz",
+    "crash_type": "Heap-buffer-overflow READ 8"
   }
 ]

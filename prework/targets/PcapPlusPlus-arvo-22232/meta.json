@@ -1,0 +1,9 @@
+{
+  "project": "PcapPlusPlus",
+  "arvo_id": 22232,
+  "arvo_image": "n132/arvo:22232-vul",
+  "fuzz_target": "FuzzTarget",
+  "crash_type": "Heap-buffer-overflow READ 1",
+  "workdir": "PcapPlusPlus",
+  "deviations": []
+}

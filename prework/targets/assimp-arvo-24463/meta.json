@@ -1,0 +1,11 @@
+{
+  "project": "assimp",
+  "arvo_id": 24463,
+  "arvo_image": "n132/arvo:24463-vul",
+  "fuzz_target": "assimp_fuzzer",
+  "crash_type": "Heap-buffer-overflow READ 1",
+  "workdir": "assimp",
+  "deviations": [
+    "-Wno-error appended: clang 18 diagnoses warnings clang 9 did not"
+  ]
+}

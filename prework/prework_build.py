@@ -17,6 +17,7 @@ across every target, and no reproducer baked in.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,39 @@ from prework.build_image import image_tag
 logger = logging.getLogger(__name__)
 
 BUILD_TIMEOUT_SECS = 5400
+
+
+def restore_ownership(image: str, paths: list[str]) -> None:
+    """Give bind-mounted build output back to the user running the benchmark.
+
+    OSS-Fuzz `compile` runs as root, so everything it writes through a bind mount
+    -- both $OUT and the in-tree artifacts of an autotools/CMake build -- comes
+    back root-owned. For a non-root orchestrator that breaks the steps either side
+    of the build, all of them silently:
+
+      * `git clean -fd` in _revert_source_tree cannot remove root-owned artifacts,
+        so a REJECTED round leaves its objects behind and the next round links
+        against them;
+      * `os.chmod` on the fuzzer binary raises EPERM before a trial can start;
+      * rmtree of a previous experiment's source tree half-fails.
+
+    A no-op when the benchmark IS run as root, which is why none of this shows up
+    on a machine that runs it that way.
+    """
+    if os.geteuid() == 0:
+        return
+    mounts: list[str] = []
+    for i, p in enumerate(paths):
+        mounts += ["-v", f"{Path(p).absolute()}:/fix{i}"]
+    r = subprocess.run(
+        ["docker", "run", "--rm", *mounts, "--entrypoint", "chown", image,
+         "-R", f"{os.getuid()}:{os.getgid()}",
+         *[f"/fix{i}" for i in range(len(paths))]],
+        capture_output=True, text=True, errors="replace",
+    )
+    if r.returncode != 0:
+        logger.warning("could not restore ownership of %s: %s",
+                       paths, (r.stderr or "")[-200:])
 
 
 def prework_image_for(entry: dict) -> str:
@@ -55,9 +89,22 @@ def build_prework_rebuild_command(
         cmd += ["--cpuset-cpus", str(cpu)]
     cmd += [
         "-e", "FUZZING_ENGINE=afl",
+        # Exclude the optimizer's INSERTED helpers from coverage instrumentation.
+        # A coverage-guided fuzzer biases mutation toward inputs that reach new
+        # edges, so helpers the skill adds shift the gradient away from the code
+        # under test -- the skill records a ~5x time-to-bug swing from exactly
+        # this. Its prescribed `no_sanitize("coverage")` is libFuzzer's mechanism
+        # and does NOT work here: AFL++ 5.02c runs LLVM-PCGUARD, its own fork of
+        # the sancov pass, and instruments a marked helper identically to an
+        # unmarked one (verified by counting __afl_area_ptr relocations). The
+        # denylist is the mechanism that does work, which is why the skill
+        # requires every inserted function to be named fold_*.
+        "-e", "AFL_LLVM_DENYLIST=/src/aflpp_fold_denylist.txt",
         "-e", "SANITIZER=address",
         "-e", "ARCHITECTURE=x86_64",
         "-e", "FUZZING_LANGUAGE=c++",
+        "-v", f"{Path(__file__).resolve().parent / 'aflpp_fold_denylist.txt'}"
+              f":/src/aflpp_fold_denylist.txt:ro",
         "-v", f"{Path(source_dir).absolute()}:/src/{project}",
         "-v", f"{Path(out_dir).absolute()}:/out",
         image, "compile",
@@ -85,9 +132,13 @@ def rebuild_with_prework_image(
     except subprocess.TimeoutExpired:
         log = f"build timed out after {timeout}s"
         logger.error("%s for %s", log, project)
+        # A build killed mid-flight leaves the MOST root-owned debris, so this
+        # path needs the restore more than the success path does.
+        restore_ownership(image, [source_dir, out_dir])
         return (False, log) if capture_log else False
     log = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0:
         logger.error("prework rebuild failed for %s (exit %d)", project, r.returncode)
     ok = r.returncode == 0
+    restore_ownership(image, [source_dir, out_dir])
     return (ok, log) if capture_log else ok

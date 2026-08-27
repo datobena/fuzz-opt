@@ -96,14 +96,19 @@ def main() -> int:
         return EXIT_COMPILE_FAILED
 
     logger.info("[4/4] verifying the PoC still reproduces")
-    v = verify_poc(tag, out_dir, meta["fuzz_target"], poc_path, meta["crash_type"])
+    # ARVO's own reproducer output for this same PoC, when the image baked one.
+    # It identifies the bug by WHERE it fires, which survives the harness change
+    # that renames the sanitizer check (see verify.matches_reference).
+    reference_log = Path(poc_path).parent / "repro.log"
+    v = verify_poc(tag, out_dir, meta["fuzz_target"], poc_path, meta["crash_type"],
+                   reference_log=reference_log if reference_log.is_file() else None)
     # Four-state, because "the binary would not load" must never be recorded as
     # "the bug is gone" -- that would corrupt the bug-survival rate the study
     # reports. Only a PROVEN clean execution counts as attrition.
     status_map = {
-        "reproduced": "ready",
+        "poc_crash": "ready",
         "no_crash": "dropped_bug_gone",
-        "wrong_crash": "dropped_wrong_bug",
+        "other_crash": "dropped_wrong_bug",
         "did_not_run": "error_did_not_run",
     }
     result = {
@@ -113,7 +118,7 @@ def main() -> int:
         "expected_signature": meta["crash_type"],
         "detected_signature": v.detected_signature,
         "verdict": v.status,
-        "reproduced": v.reproduced,
+        "poc_crash": v.reproduced,
         "status": status_map.get(v.status, "error_did_not_run"),
         "deviations": meta.get("deviations", []),
     }
@@ -121,7 +126,7 @@ def main() -> int:
     (work / "verify.log").write_text(v.log)
     print(json.dumps(result, indent=2))
 
-    if v.status == "reproduced":
+    if v.status == "poc_crash":
         return EXIT_OK
     if v.status == "did_not_run":
         logger.error(

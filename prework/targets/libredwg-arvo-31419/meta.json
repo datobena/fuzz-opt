@@ -1,0 +1,11 @@
+{
+  "project": "libredwg",
+  "arvo_id": 31419,
+  "arvo_image": "n132/arvo:31419-vul",
+  "fuzz_target": "llvmfuzz",
+  "crash_type": "Heap-buffer-overflow READ 7",
+  "workdir": ".",
+  "deviations": [
+    "build.sh cds into the project itself, so WORKDIR is $SRC"
+  ]
+}

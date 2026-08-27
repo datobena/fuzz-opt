@@ -21,8 +21,15 @@ PREWORK_DIR = Path(__file__).parent
 
 
 def image_tag(project: str, arvo_id: int) -> str:
-    """Neutral image name. Deliberately carries no '-vul' marker."""
-    return f"bench-aflpp/{project}-arvo-{arvo_id}"
+    """Neutral image name. Deliberately carries no '-vul' marker.
+
+    Lowercased because Docker repository names must be: a project whose upstream
+    name has capitals (PcapPlusPlus) otherwise fails the build with
+    "repository name must be lowercase". Only the TAG is lowered -- the project
+    name itself still has to match the real directory under $SRC, which is what
+    build.sh and the source bind-mounts use.
+    """
+    return f"bench-aflpp/{project.lower()}-arvo-{arvo_id}"
 
 
 def load_meta(target_dir: str | Path) -> dict:

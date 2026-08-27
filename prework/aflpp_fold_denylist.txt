@@ -1,0 +1,18 @@
+# AFL++ instrumentation denylist (AFL_LLVM_DENYLIST).
+#
+# Functions the optimizer INSERTS must not add edges to the coverage map: a
+# coverage-guided fuzzer biases mutation toward inputs reaching new edges, so
+# instrumented helpers pull the search away from the code under test. The skill
+# records a ~5x time-to-bug swing from exactly this effect.
+#
+# The skill's prescribed __attribute__((no_sanitize("coverage"))) is libFuzzer's
+# mechanism (upstream SanitizerCoverage) and has NO effect under AFL++ 5.02c,
+# which runs LLVM-PCGUARD -- its own fork of that pass. Verified by counting
+# __afl_area_ptr relocations: a marked helper and an unmarked one were
+# instrumented identically. This denylist is the mechanism that works, which is
+# why the skill requires every inserted function to be named fold_*.
+#
+# Scope is deliberately narrow: it excludes ONLY the fold_ prefix, never any
+# pre-existing project function, so the coverage map of the code under test is
+# byte-for-byte what the baseline arm sees.
+fun:fold_*

@@ -57,12 +57,13 @@ _DID_NOT_RUN_MARKERS = (
 )
 
 
-def classify_run(blob: str, returncode: int, expected_signature: str) -> str:
+def classify_run(blob: str, returncode: int, expected_signature: str,
+                 reference: str | None = None) -> str:
     """Classify one PoC replay into a four-state verdict.
 
     Returns one of:
-      "reproduced"   the target bug fired (SUMMARY matches expected_signature)
-      "wrong_crash"  a sanitizer fired, but a DIFFERENT bug class
+      "poc_crash"   the target bug fired (SUMMARY matches expected_signature)
+      "other_crash"  a sanitizer fired, but a DIFFERENT bug class
       "no_crash"     the target provably ran to completion and did not crash
       "did_not_run"  no proof of execution -- treat as an error, never as a result
 
@@ -72,7 +73,11 @@ def classify_run(blob: str, returncode: int, expected_signature: str) -> str:
     m = _SUMMARY_RE.search(blob)
     detected = m.group(1).strip() if m else ""
     if detected:
-        return "reproduced" if signature_matches(detected, expected_signature) else "wrong_crash"
+        # Prefer the reference stack when ARVO gave us one: it identifies the bug
+        # by WHERE it fires, not by which sanitizer check won the race.
+        if reference:
+            return "poc_crash" if matches_reference(blob, reference)[0] else "other_crash"
+        return "poc_crash" if signature_matches(detected, expected_signature) else "other_crash"
     if any(marker in blob for marker in _DID_NOT_RUN_MARKERS):
         return "did_not_run"
     if EXECUTION_MARKER in blob:
@@ -98,6 +103,50 @@ def compile_command(tag: str, out_dir: str | Path) -> list[str]:
     ]
 
 
+_FRAME_RE = re.compile(r"#\d+ 0x[0-9a-f]+ in ([A-Za-z_][A-Za-z0-9_:]*)")
+_ASAN_KIND_RE = re.compile(r"ERROR: AddressSanitizer: ([a-z-]+)")
+_RUNTIME_FRAMES = ("__asan", "__sanitizer", "__interceptor", "__lsan")
+
+
+def report_identity(blob: str, depth: int = 3) -> tuple[str, list[str]]:
+    """(sanitizer kind, top non-runtime frames) from a crash report."""
+    k = _ASAN_KIND_RE.search(blob or "")
+    if not k:
+        return "", []
+    frames = [f for f in _FRAME_RE.findall(blob) if not f.startswith(_RUNTIME_FRAMES)]
+    return k.group(1), frames[:depth]
+
+
+def matches_reference(blob: str, reference: str, depth: int = 3) -> tuple[bool, str]:
+    """Compare a replay against ARVO's OWN reproducer output for the same PoC.
+
+    The bug class alone is the wrong test in both directions. Too loose: any
+    heap-buffer-overflow anywhere in the program passes. Too strict: the SAME
+    invalid access is labelled differently depending on where the harness puts
+    the input. Under libFuzzer the input is a heap allocation, so an over-read
+    lands in a heap redzone ("heap-buffer-overflow"); under AFL++ persistent mode
+    it lives in the shared-memory buffer, whose redzone ASan reports as
+    "use-after-poison". Observed on yara and c-blosc2 with frame-for-frame
+    identical stacks.
+
+    So the location is the identity: same top frames on the same input means the
+    same code performed the same invalid access. The kind label describes which
+    allocation the pointer landed in, which is a harness property. A differing
+    kind is recorded as a deviation, not treated as a different bug.
+    """
+    kind, frames = report_identity(blob, depth)
+    ref_kind, ref_frames = report_identity(reference, depth)
+    if not frames or not ref_frames:
+        return False, "no reference stack to compare"
+    if frames != ref_frames:
+        return False, f"different location: {frames} vs reference {ref_frames}"
+    if kind != ref_kind:
+        return True, (f"same location, sanitizer kind differs "
+                      f"({ref_kind} -> {kind}); harness allocates the input "
+                      f"differently under AFL++")
+    return True, ""
+
+
 def signature_matches(detected: str, expected: str) -> bool:
     """True iff a detected ASAN signature is the manifest's expected bug class.
 
@@ -112,6 +161,7 @@ def signature_matches(detected: str, expected: str) -> bool:
 def verify_poc(
     tag: str, out_dir: str | Path, fuzz_target: str, poc: str | Path,
     expected_signature: str, *, timeout: int = 300,
+    reference_log: str | Path | None = None,
 ) -> VerifyResult:
     """Replay the PoC on the freshly built AFL++/ASAN binary.
 
@@ -140,10 +190,16 @@ def verify_poc(
     blob = (r.stdout or "") + (r.stderr or "")
     m = _SUMMARY_RE.search(blob)
     detected = m.group(1).strip() if m else ""
-    status = classify_run(blob, r.returncode, expected_signature)
+    ref = ""
+    if reference_log and Path(reference_log).is_file():
+        ref = Path(reference_log).read_text(errors="replace")
+    status = classify_run(blob, r.returncode, expected_signature, ref or None)
+    note = matches_reference(blob, ref)[1] if ref else ""
+    if note:
+        logger.info("verify: %s", note)
     return VerifyResult(
-        reproduced=(status == "reproduced"),
-        detected_signature=detected,
+        reproduced=(status == "poc_crash"),
+        detected_signature=detected + (f"  [{note}]" if note else ""),
         log=blob,
         status=status,
     )
