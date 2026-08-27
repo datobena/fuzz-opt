@@ -1,0 +1,15 @@
+{
+  "assimp-arvo-24463": {
+    "counts": {
+      "baseline:reproducible": 1841,
+      "baseline:present in both arms": 1841,
+      "baseline:non-reproducible (excluded)": 972,
+      "optimized:reproducible": 3632,
+      "optimized:present in both arms": 3632,
+      "optimized:non-reproducible (excluded)": 1342
+    },
+    "introduced": [],
+    "removed": [],
+    "final_optimized_binary": "iter_02"
+  }
+}

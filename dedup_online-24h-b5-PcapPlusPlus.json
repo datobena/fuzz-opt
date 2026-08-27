@@ -1,0 +1,370 @@
+{
+  "PcapPlusPlus-arvo-22232": {
+    "baseline": {
+      "artifacts_raw": 3017,
+      "poc_crash": 3015,
+      "unique_by_content": 3001,
+      "unique_bugs_1frame": 28,
+      "unique_bugs_3frame": 45,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:pcpp::tbp_my_own_strnlen",
+          "artifacts": 1878,
+          "trials": 9,
+          "first_seen_s": 451.541
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::DnsResource::getDataLength",
+          "artifacts": 234,
+          "trials": 9,
+          "first_seen_s": 4.085
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::getSessionIDLength",
+          "artifacts": 144,
+          "trials": 9,
+          "first_seen_s": 424.19
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Extension::getExtensionLen",
+          "artifacts": 102,
+          "trials": 9,
+          "first_seen_s": 1.877
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 94,
+          "trials": 9,
+          "first_seen_s": 3.085
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::NullLoopbackLayer::getFamily",
+          "artifacts": 90,
+          "trials": 9,
+          "first_seen_s": 0.079
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::isDataValid",
+          "artifacts": 59,
+          "trials": 9,
+          "first_seen_s": 68.272
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::getSessionIDLength",
+          "artifacts": 52,
+          "trials": 9,
+          "first_seen_s": 422.071
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::RadiusLayer::isDataValid",
+          "artifacts": 49,
+          "trials": 9,
+          "first_seen_s": 370.31
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLCertificateRequestMessage::SSLCertificateRequestMessage",
+          "artifacts": 48,
+          "trials": 9,
+          "first_seen_s": 452.63
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength",
+          "artifacts": 47,
+          "trials": 9,
+          "first_seen_s": 438.683
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName",
+          "artifacts": 32,
+          "trials": 9,
+          "first_seen_s": 315.026
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getSrcIpAddress",
+          "artifacts": 32,
+          "trials": 9,
+          "first_seen_s": 10.842
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getDstIpAddress",
+          "artifacts": 30,
+          "trials": 9,
+          "first_seen_s": 12.366
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField",
+          "artifacts": 30,
+          "trials": 9,
+          "first_seen_s": 514.545
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck",
+          "artifacts": 27,
+          "trials": 9,
+          "first_seen_s": 1658.839
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen",
+          "artifacts": 16,
+          "trials": 9,
+          "first_seen_s": 110.766
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getHeaderLen",
+          "artifacts": 9,
+          "trials": 9,
+          "first_seen_s": 278.473
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket",
+          "artifacts": 7,
+          "trials": 6,
+          "first_seen_s": 10.403
+        },
+        {
+          "signature": "requested:operator",
+          "artifacts": 7,
+          "trials": 7,
+          "first_seen_s": 3657.161
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::getHeaderLen",
+          "artifacts": 7,
+          "trials": 4,
+          "first_seen_s": 1094.997
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IgmpLayer::getIGMPVerFromData",
+          "artifacts": 4,
+          "trials": 4,
+          "first_seen_s": 79.788
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::GtpExtension::getTotalLength",
+          "artifacts": 4,
+          "trials": 3,
+          "first_seen_s": 1225.056
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getFragmentFlags",
+          "artifacts": 3,
+          "trials": 3,
+          "first_seen_s": 468.235
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::SSLServerHelloMessage",
+          "artifacts": 3,
+          "trials": 3,
+          "first_seen_s": 509.546
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6AuthenticationHeader::getExtensionLen",
+          "artifacts": 3,
+          "trials": 2,
+          "first_seen_s": 2.344
+        },
+        {
+          "signature": "stack-buffer-overflow:strlen",
+          "artifacts": 2,
+          "trials": 2,
+          "first_seen_s": 668.196
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::SSLClientHelloMessage",
+          "artifacts": 2,
+          "trials": 2,
+          "first_seen_s": 573.018
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 8013,
+      "poc_crash": 8013,
+      "unique_by_content": 7550,
+      "unique_bugs_1frame": 30,
+      "unique_bugs_3frame": 50,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:pcpp::tbp_my_own_strnlen",
+          "artifacts": 5252,
+          "trials": 9,
+          "first_seen_s": 395.967
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::DnsResource::getDataLength",
+          "artifacts": 494,
+          "trials": 9,
+          "first_seen_s": 19.975
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::getSessionIDLength",
+          "artifacts": 296,
+          "trials": 9,
+          "first_seen_s": 523.078
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 230,
+          "trials": 9,
+          "first_seen_s": 14.806
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Extension::getExtensionLen",
+          "artifacts": 226,
+          "trials": 9,
+          "first_seen_s": 0.408
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::NullLoopbackLayer::getFamily",
+          "artifacts": 222,
+          "trials": 9,
+          "first_seen_s": 0.116
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::isDataValid",
+          "artifacts": 150,
+          "trials": 9,
+          "first_seen_s": 116.391
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLCertificateRequestMessage::SSLCertificateRequestMessage",
+          "artifacts": 144,
+          "trials": 9,
+          "first_seen_s": 485.06
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::getSessionIDLength",
+          "artifacts": 126,
+          "trials": 9,
+          "first_seen_s": 489.135
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength",
+          "artifacts": 126,
+          "trials": 9,
+          "first_seen_s": 498.525
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::RadiusLayer::isDataValid",
+          "artifacts": 93,
+          "trials": 9,
+          "first_seen_s": 450.165
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName",
+          "artifacts": 87,
+          "trials": 9,
+          "first_seen_s": 243.154
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getDstIpAddress",
+          "artifacts": 79,
+          "trials": 9,
+          "first_seen_s": 23.661
+        },
+        {
+          "signature": "requested:operator",
+          "artifacts": 79,
+          "trials": 6,
+          "first_seen_s": 8482.78
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getSrcIpAddress",
+          "artifacts": 77,
+          "trials": 9,
+          "first_seen_s": 62.05
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField",
+          "artifacts": 76,
+          "trials": 9,
+          "first_seen_s": 651.278
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck",
+          "artifacts": 53,
+          "trials": 9,
+          "first_seen_s": 2338.942
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen",
+          "artifacts": 36,
+          "trials": 9,
+          "first_seen_s": 157.32
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::getHeaderLen",
+          "artifacts": 31,
+          "trials": 8,
+          "first_seen_s": 827.416
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getHeaderLen",
+          "artifacts": 24,
+          "trials": 9,
+          "first_seen_s": 202.263
+        },
+        {
+          "signature": "stack-buffer-overflow:strlen",
+          "artifacts": 17,
+          "trials": 7,
+          "first_seen_s": 461.351
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::SSLClientHelloMessage",
+          "artifacts": 17,
+          "trials": 8,
+          "first_seen_s": 483.428
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::GtpExtension::getTotalLength",
+          "artifacts": 15,
+          "trials": 8,
+          "first_seen_s": 1686.38
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::SSLServerHelloMessage",
+          "artifacts": 15,
+          "trials": 5,
+          "first_seen_s": 1113.901
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6AuthenticationHeader::getExtensionLen",
+          "artifacts": 14,
+          "trials": 7,
+          "first_seen_s": 624.361
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IgmpLayer::getIGMPVerFromData",
+          "artifacts": 12,
+          "trials": 6,
+          "first_seen_s": 8.876
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket",
+          "artifacts": 10,
+          "trials": 6,
+          "first_seen_s": 22.53
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getFragmentFlags",
+          "artifacts": 7,
+          "trials": 4,
+          "first_seen_s": 644.673
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLLayer::IsSSLMessage",
+          "artifacts": 3,
+          "trials": 1,
+          "first_seen_s": 3348.521
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SipRequestFirstLine::parseVersion",
+          "artifacts": 2,
+          "trials": 1,
+          "first_seen_s": 14143.249
+        }
+      ]
+    }
+  }
+}

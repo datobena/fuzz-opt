@@ -1,0 +1,13 @@
+{
+  "yara-arvo-3848": {
+    "counts": {
+      "optimized:reproducible": 343,
+      "optimized:present in both arms": 343,
+      "baseline:reproducible": 11,
+      "baseline:present in both arms": 11
+    },
+    "introduced": [],
+    "removed": [],
+    "final_optimized_binary": "iter_08"
+  }
+}

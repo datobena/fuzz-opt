@@ -24,15 +24,15 @@ def test_only_the_matching_signature_counts_as_the_target_bug(tmp_path, monkeypa
     _mk(crashes, "id:000002,sig:06,time:9000,execs:90")   # different bug
 
     verdicts = {
-        "id:000000,sig:06,time:1000,execs:10": ("wrong_crash", "heap-use-after-free"),
-        "id:000001,sig:06,time:5000,execs:50": ("reproduced", "stack-buffer-overflow"),
-        "id:000002,sig:06,time:9000,execs:90": ("wrong_crash", "heap-use-after-free"),
+        "id:000000,sig:06,time:1000,execs:10": ("other_crash", "heap-use-after-free"),
+        "id:000001,sig:06,time:5000,execs:50": ("poc_crash", "stack-buffer-overflow"),
+        "id:000002,sig:06,time:9000,execs:90": ("other_crash", "heap-use-after-free"),
     }
     monkeypatch.setattr(t, "_replay", lambda ctx, path: verdicts[path.name])
 
     got = triage_trial(crashes, image="i", out_dir="o", fuzz_target="f",
                        expected_signature="Stack-buffer-overflow WRITE {*}")
-    assert sum(1 for g in got if g["verdict"] == "reproduced") == 1
+    assert sum(1 for g in got if g["verdict"] == "poc_crash") == 1
 
 
 def test_ttb_is_the_matching_crash_not_the_earliest(tmp_path, monkeypatch):
@@ -44,8 +44,8 @@ def test_ttb_is_the_matching_crash_not_the_earliest(tmp_path, monkeypatch):
     _mk(crashes, "id:000001,sig:06,time:5000,execs:50")
 
     verdicts = {
-        "id:000000,sig:06,time:1000,execs:10": ("wrong_crash", "heap-use-after-free"),
-        "id:000001,sig:06,time:5000,execs:50": ("reproduced", "stack-buffer-overflow"),
+        "id:000000,sig:06,time:1000,execs:10": ("other_crash", "heap-use-after-free"),
+        "id:000001,sig:06,time:5000,execs:50": ("poc_crash", "stack-buffer-overflow"),
     }
     monkeypatch.setattr(t, "_replay", lambda ctx, path: verdicts[path.name])
 
@@ -59,7 +59,7 @@ def test_ttb_is_none_when_nothing_matched(tmp_path, monkeypatch):
 
     crashes = tmp_path / "crashes"
     _mk(crashes, "id:000000,sig:06,time:1000,execs:10")
-    monkeypatch.setattr(t, "_replay", lambda ctx, path: ("wrong_crash", "other"))
+    monkeypatch.setattr(t, "_replay", lambda ctx, path: ("other_crash", "other"))
 
     got = triage_trial(crashes, image="i", out_dir="o", fuzz_target="f",
                        expected_signature="Stack-buffer-overflow WRITE {*}")
@@ -86,20 +86,20 @@ def test_readme_is_not_triaged(tmp_path, monkeypatch):
 
     crashes = tmp_path / "crashes"
     _mk(crashes, "README.txt")
-    monkeypatch.setattr(t, "_replay", lambda ctx, path: ("reproduced", "x"))
+    monkeypatch.setattr(t, "_replay", lambda ctx, path: ("poc_crash", "x"))
     assert triage_trial(crashes, image="i", out_dir="o", fuzz_target="f",
                         expected_signature="s") == []
 
 
 def test_summarize_counts_each_verdict(tmp_path):
     triaged = [
-        {"verdict": "reproduced", "timestamp_s": 5.0},
-        {"verdict": "wrong_crash", "timestamp_s": 1.0},
-        {"verdict": "wrong_crash", "timestamp_s": 2.0},
+        {"verdict": "poc_crash", "timestamp_s": 5.0},
+        {"verdict": "other_crash", "timestamp_s": 1.0},
+        {"verdict": "other_crash", "timestamp_s": 2.0},
         {"verdict": "did_not_run", "timestamp_s": 3.0},
     ]
     s = summarize_triage(triaged)
-    assert s == {"total": 4, "target_bug": 1, "other_bugs": 2, "errors": 1}
+    assert s == {"total": 4, "poc_crash": 1, "other_crash": 2, "errors": 1}
 
 
 def test_missing_crash_dir_is_empty(tmp_path):

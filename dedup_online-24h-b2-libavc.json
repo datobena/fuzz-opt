@@ -1,0 +1,40 @@
+{
+  "libavc-arvo-16505": {
+    "baseline": {
+      "artifacts_raw": 94,
+      "reproduced": 23,
+      "unique_by_content": 23,
+      "unique_bugs_1frame": 2,
+      "unique_bugs_3frame": 2,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:ih264d_compute_bs_non_mbaff_thread",
+          "artifacts": 22,
+          "trials": 1,
+          "first_seen_s": 12513.054
+        },
+        {
+          "signature": "heap-use-after-free:ih264_inter_pred_luma_vert_qpel_ssse3",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 55465.354
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 40,
+      "reproduced": 3,
+      "unique_by_content": 3,
+      "unique_bugs_1frame": 1,
+      "unique_bugs_3frame": 1,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:ih264d_compute_bs_non_mbaff_thread",
+          "artifacts": 3,
+          "trials": 1,
+          "first_seen_s": 62582.221
+        }
+      ]
+    }
+  }
+}

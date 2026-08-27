@@ -1,0 +1,94 @@
+{
+  "assimp-arvo-24463": {
+    "baseline": {
+      "artifacts_raw": 2813,
+      "poc_crash": 1841,
+      "unique_by_content": 1836,
+      "unique_bugs_1frame": 6,
+      "unique_bugs_3frame": 7,
+      "bugs": [
+        {
+          "signature": "alloc-dealloc-mismatch:std::range_error::",
+          "artifacts": 1557,
+          "trials": 9,
+          "first_seen_s": 0.179
+        },
+        {
+          "signature": "alloc-dealloc-mismatch:std::invalid_argument::",
+          "artifacts": 250,
+          "trials": 9,
+          "first_seen_s": 173.334
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::IOStreamBuffer",
+          "artifacts": 13,
+          "trials": 7,
+          "first_seen_s": 5.242
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileImporter::createVertexArray",
+          "artifacts": 13,
+          "trials": 6,
+          "first_seen_s": 8955.882
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileParser::getFace",
+          "artifacts": 5,
+          "trials": 2,
+          "first_seen_s": 2453.049
+        },
+        {
+          "signature": "heap-use-after-free:Assimp::ObjFileImporter::createVertexArray",
+          "artifacts": 3,
+          "trials": 1,
+          "first_seen_s": 42701.306
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 4974,
+      "poc_crash": 3632,
+      "unique_by_content": 3610,
+      "unique_bugs_1frame": 6,
+      "unique_bugs_3frame": 7,
+      "bugs": [
+        {
+          "signature": "alloc-dealloc-mismatch:std::range_error::",
+          "artifacts": 3024,
+          "trials": 9,
+          "first_seen_s": 0.103
+        },
+        {
+          "signature": "alloc-dealloc-mismatch:std::invalid_argument::",
+          "artifacts": 549,
+          "trials": 9,
+          "first_seen_s": 931.031
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileImporter::createVertexArray",
+          "artifacts": 27,
+          "trials": 7,
+          "first_seen_s": 3523.577
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::IOStreamBuffer",
+          "artifacts": 23,
+          "trials": 9,
+          "first_seen_s": 1.223
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileParser::getFace",
+          "artifacts": 8,
+          "trials": 5,
+          "first_seen_s": 10046.139
+        },
+        {
+          "signature": "heap-use-after-free:Assimp::ObjFileImporter::createVertexArray",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 38747.985
+        }
+      ]
+    }
+  }
+}

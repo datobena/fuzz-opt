@@ -1,0 +1,14 @@
+{
+  "PcapPlusPlus-arvo-22232": {
+    "counts": {
+      "baseline:reproducible": 3015,
+      "baseline:present in both arms": 3015,
+      "baseline:non-reproducible (excluded)": 2,
+      "optimized:reproducible": 8013,
+      "optimized:present in both arms": 8013
+    },
+    "introduced": [],
+    "removed": [],
+    "final_optimized_binary": "iter_04"
+  }
+}

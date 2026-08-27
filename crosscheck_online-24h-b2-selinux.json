@@ -1,0 +1,15 @@
+{
+  "selinux-CVE-2021-36085": {
+    "counts": {
+      "optimized:reproducible": 132,
+      "optimized:present in both arms": 132,
+      "baseline:reproducible": 13,
+      "baseline:present in both arms": 13,
+      "optimized:non-reproducible (excluded)": 38,
+      "baseline:non-reproducible (excluded)": 1
+    },
+    "introduced": [],
+    "removed": [],
+    "final_optimized_binary": "iter_06"
+  }
+}

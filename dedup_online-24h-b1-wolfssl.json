@@ -1,0 +1,40 @@
+{
+  "wolfssl-arvo-26567": {
+    "baseline": {
+      "artifacts_raw": 4,
+      "reproduced": 4,
+      "unique_by_content": 4,
+      "unique_bugs_1frame": 1,
+      "unique_bugs_3frame": 1,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:RsaPad_PSS",
+          "artifacts": 4,
+          "trials": 4,
+          "first_seen_s": 308.166
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 20,
+      "reproduced": 17,
+      "unique_by_content": 17,
+      "unique_bugs_1frame": 2,
+      "unique_bugs_3frame": 2,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:RsaPad_PSS",
+          "artifacts": 14,
+          "trials": 2,
+          "first_seen_s": 515.2
+        },
+        {
+          "signature": "stack-buffer-overflow:fp_div",
+          "artifacts": 3,
+          "trials": 3,
+          "first_seen_s": 63917.208
+        }
+      ]
+    }
+  }
+}

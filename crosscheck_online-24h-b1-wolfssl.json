@@ -1,0 +1,31 @@
+{
+  "wolfssl-arvo-26567": {
+    "counts": {
+      "optimized:reproducible": 17,
+      "optimized:present in both arms": 14,
+      "baseline:reproducible": 4,
+      "baseline:present in both arms": 4,
+      "optimized:non-reproducible (excluded)": 3,
+      "optimized:INTRODUCED": 3
+    },
+    "introduced": [
+      {
+        "trial": "trial_02",
+        "artifact": "id:000001,sig:06,src:001683,time:76962322,execs:294081878,op:havoc,rep:4",
+        "signature": "stack-buffer-overflow:fp_div"
+      },
+      {
+        "trial": "trial_08",
+        "artifact": "id:000000,sig:06,src:001709,time:76511494,execs:240190591,op:havoc,rep:4",
+        "signature": "stack-buffer-overflow:fp_div"
+      },
+      {
+        "trial": "trial_05",
+        "artifact": "id:000000,sig:06,src:001493,time:63917208,execs:302212181,op:havoc,rep:1",
+        "signature": "stack-buffer-overflow:fp_div"
+      }
+    ],
+    "removed": [],
+    "final_optimized_binary": "iter_06"
+  }
+}

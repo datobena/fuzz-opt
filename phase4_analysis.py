@@ -36,10 +36,10 @@ logger = logging.getLogger(__name__)
 # regression.
 # --------------------------------------------------------------------------- #
 
-# Verdicts written by phase 2 (prework.verify.classify_run). "wrong_crash" means
+# Verdicts written by phase 2 (prework.verify.classify_run). "other_crash" means
 # the PoC now triggers a DIFFERENT bug, so the target bug is gone too.
-_VERDICT_BUG_PRESENT = ("reproduced",)
-_VERDICT_BUG_REMOVED = ("no_crash", "wrong_crash")
+_VERDICT_BUG_PRESENT = ("poc_crash",)
+_VERDICT_BUG_REMOVED = ("no_crash", "other_crash")
 
 
 def classify_trial_outcome(ttb, poc_verdict):
@@ -77,6 +77,45 @@ def summarize_bug_survival(arms):
     }
 
 
+_EXEC_S_RE = re.compile(r"exec/s:\s*(\d+)")
+_AVG_EXEC_S_RE = re.compile(r"stat::average_exec_per_sec:\s*(\d+)")
+
+
+def _scan_log_for_exec_rates(
+    log_path: str, chunk_size: int = 1 << 20, overlap: int = 256,
+) -> tuple[Optional[int], Optional[int]]:
+    """Find the last `exec/s:` and the first average-exec rate in a fuzzer log.
+
+    Returns (last_progress_exec_s, avg_exec_s), either of which may be None.
+
+    Reads in fixed chunks rather than lines or one gulp. These logs reach
+    12.5 GB, so lf.read() is an OOM waiting to happen -- and iterating by line
+    is no safer, because AFL++ redraws its status screen with carriage
+    returns, leaving gigabytes between two newlines. Consecutive chunks
+    overlap so a marker split across a boundary is still matched; rescanning
+    the overlap is harmless when all we keep is a first and a last hit.
+    """
+    last_progress = None
+    avg = None
+    tail = ""
+
+    with open(log_path, errors="replace") as lf:
+        while True:
+            chunk = lf.read(chunk_size)
+            if not chunk:
+                break
+            window = tail + chunk
+            for m in _EXEC_S_RE.finditer(window):
+                last_progress = int(m.group(1))
+            if avg is None:
+                m = _AVG_EXEC_S_RE.search(window)
+                if m:
+                    avg = int(m.group(1))
+            tail = window[-overlap:]
+
+    return last_progress, avg
+
+
 def extract_execs_per_second(metadata: dict, trial_dir: str) -> float:
     """Extract a trustworthy executions/sec value for one trial."""
     final_stats = metadata.get("final_stats", {})
@@ -91,20 +130,13 @@ def extract_execs_per_second(metadata: dict, trial_dir: str) -> float:
 
     log_path = os.path.join(trial_dir, "fuzzer.log")
     if os.path.exists(log_path):
-        with open(log_path) as lf:
-            log_text = lf.read()
+        last_progress_exec_s, avg_exec_s = _scan_log_for_exec_rates(log_path)
 
-        progress_execs = re.findall(r"exec/s:\s*(\d+)", log_text)
-        if progress_execs:
-            last_progress_exec_s = int(progress_execs[-1])
-            if last_progress_exec_s > 0:
-                return float(last_progress_exec_s)
+        if last_progress_exec_s and last_progress_exec_s > 0:
+            return float(last_progress_exec_s)
 
-        avg_match = re.search(r"stat::average_exec_per_sec:\s*(\d+)", log_text)
-        if avg_match:
-            avg_exec_s = int(avg_match.group(1))
-            if avg_exec_s > 0:
-                return float(avg_exec_s)
+        if avg_exec_s and avg_exec_s > 0:
+            return float(avg_exec_s)
 
     return 0.0
 

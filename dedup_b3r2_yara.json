@@ -1,0 +1,46 @@
+{
+  "yara-arvo-3848": {
+    "baseline": {
+      "artifacts_raw": 5,
+      "poc_crash": 5,
+      "unique_by_content": 5,
+      "unique_bugs_1frame": 2,
+      "unique_bugs_3frame": 2,
+      "bugs": [
+        {
+          "signature": "heap-use-after-free:pe_parse_exports",
+          "artifacts": 4,
+          "trials": 3,
+          "first_seen_s": 52.78
+        },
+        {
+          "signature": "heap-use-after-free:wide_string_fits_in_pe",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 517.045
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 126,
+      "poc_crash": 125,
+      "unique_by_content": 112,
+      "unique_bugs_1frame": 2,
+      "unique_bugs_3frame": 2,
+      "bugs": [
+        {
+          "signature": "heap-use-after-free:wide_string_fits_in_pe",
+          "artifacts": 90,
+          "trials": 9,
+          "first_seen_s": 203.274
+        },
+        {
+          "signature": "heap-use-after-free:pe_parse_exports",
+          "artifacts": 35,
+          "trials": 7,
+          "first_seen_s": 31.218
+        }
+      ]
+    }
+  }
+}

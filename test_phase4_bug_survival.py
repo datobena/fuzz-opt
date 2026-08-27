@@ -10,12 +10,12 @@ from phase4_analysis import classify_trial_outcome, summarize_bug_survival
 
 
 def test_finding_the_bug_is_found_regardless_of_verdict():
-    assert classify_trial_outcome(ttb=12.5, poc_verdict="reproduced") == "found"
+    assert classify_trial_outcome(ttb=12.5, poc_verdict="poc_crash") == "found"
 
 
 def test_no_finding_with_a_live_bug_is_not_found():
     """The bug is present; the trial was slower or unlucky. Censored, not excluded."""
-    assert classify_trial_outcome(ttb=None, poc_verdict="reproduced") == "not_found"
+    assert classify_trial_outcome(ttb=None, poc_verdict="poc_crash") == "not_found"
 
 
 def test_no_finding_with_a_removed_bug_is_bug_absent():
@@ -38,10 +38,10 @@ def test_unverified_arms_are_not_assumed_present():
 
 def test_survival_summary_counts_and_rates():
     arms = [
-        {"variant": "optimized", "poc_verdict": "reproduced"},
-        {"variant": "optimized", "poc_verdict": "reproduced"},
+        {"variant": "optimized", "poc_verdict": "poc_crash"},
+        {"variant": "optimized", "poc_verdict": "poc_crash"},
         {"variant": "optimized", "poc_verdict": "no_crash"},
-        {"variant": "optimized", "poc_verdict": "wrong_crash"},
+        {"variant": "optimized", "poc_verdict": "other_crash"},
     ]
     s = summarize_bug_survival(arms)
     assert s["total"] == 4
@@ -53,7 +53,7 @@ def test_survival_summary_counts_and_rates():
 def test_survival_summary_excludes_unverified_from_the_rate():
     """An arm we could not verify is not evidence in either direction."""
     arms = [
-        {"variant": "optimized", "poc_verdict": "reproduced"},
+        {"variant": "optimized", "poc_verdict": "poc_crash"},
         {"variant": "optimized", "poc_verdict": "no_crash"},
         {"variant": "optimized", "poc_verdict": "did_not_run"},
     ]

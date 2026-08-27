@@ -4,6 +4,7 @@ Implements Mann-Whitney U test, Vargha-Delaney A12 effect size,
 and survival analysis (Kaplan-Meier + log-rank) for time-to-bug data.
 """
 
+import inspect
 import logging
 import os
 from typing import Optional
@@ -132,7 +133,13 @@ def plot_time_to_bug_boxplot(
     labels = ["Baseline", "Optimized"]
     colors = ["#4C72B0", "#DD8452"]
 
-    bp = ax.boxplot(data, labels=labels, patch_artist=True, widths=0.5)
+    # `labels=` was deprecated in matplotlib 3.9 and removed in 3.11; `tick_labels`
+    # is its replacement and does not exist before 3.9. Both are in the wild, so
+    # pick by signature rather than pinning the plotting library for one keyword.
+    label_kw = ("tick_labels"
+                if "tick_labels" in inspect.signature(ax.boxplot).parameters
+                else "labels")
+    bp = ax.boxplot(data, patch_artist=True, widths=0.5, **{label_kw: labels})
     for patch, color in zip(bp["boxes"], colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.7)

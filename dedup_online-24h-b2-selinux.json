@@ -1,0 +1,46 @@
+{
+  "selinux-CVE-2021-36085": {
+    "baseline": {
+      "artifacts_raw": 14,
+      "reproduced": 13,
+      "unique_by_content": 13,
+      "unique_bugs_1frame": 1,
+      "unique_bugs_3frame": 1,
+      "bugs": [
+        {
+          "signature": "heap-use-after-free:cil_tree_children_destroy",
+          "artifacts": 13,
+          "trials": 2,
+          "first_seen_s": 7811.269
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 170,
+      "reproduced": 132,
+      "unique_by_content": 127,
+      "unique_bugs_1frame": 3,
+      "unique_bugs_3frame": 3,
+      "bugs": [
+        {
+          "signature": "heap-use-after-free:cil_tree_children_destroy",
+          "artifacts": 105,
+          "trials": 7,
+          "first_seen_s": 20437.848
+        },
+        {
+          "signature": "heap-buffer-overflow:cil_post_fc_fill_data",
+          "artifacts": 26,
+          "trials": 9,
+          "first_seen_s": 12875.746
+        },
+        {
+          "signature": "heap-buffer-overflow:cil_classorder_to_policydb",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 77303.665
+        }
+      ]
+    }
+  }
+}

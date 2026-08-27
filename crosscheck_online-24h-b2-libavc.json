@@ -1,0 +1,15 @@
+{
+  "libavc-arvo-16505": {
+    "counts": {
+      "baseline:reproducible": 23,
+      "baseline:present in both arms": 23,
+      "baseline:non-reproducible (excluded)": 71,
+      "optimized:non-reproducible (excluded)": 37,
+      "optimized:reproducible": 3,
+      "optimized:present in both arms": 3
+    },
+    "introduced": [],
+    "removed": [],
+    "final_optimized_binary": "iter_03"
+  }
+}

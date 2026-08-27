@@ -81,7 +81,7 @@ def main():
     ftgt = {e["project"]: e.get("fuzz_target", "") for e in manifest}
 
     cheap = collections.defaultdict(lambda: {"found": 0, "total": 0, "ttbs": []})
-    gold = collections.defaultdict(lambda: {"matched": 0, "reproduced": 0, "no_repro": 0,
+    gold = collections.defaultdict(lambda: {"matched": 0, "poc_crash": 0, "no_repro": 0,
                                             "candidates": 0, "sigs": collections.Counter()})
 
     for project, variant, name, cts, cutoff, exp_dir in _trial_records(a.experiment):
@@ -112,7 +112,7 @@ def main():
             if not crashed:
                 gold[k]["no_repro"] += 1
                 continue
-            gold[k]["reproduced"] += 1
+            gold[k]["poc_crash"] += 1
             gold[k]["sigs"][cc.normalize_signature(detected) or "?"] += 1
             if cc.normalize_signature(detected) == cc.normalize_signature(sig.get(project, "")):
                 gold[k]["matched"] += 1
@@ -131,7 +131,7 @@ def main():
                 sigs = ", ".join(f"{s}×{n}" for s, n in g["sigs"].most_common())
                 # "found a bug" = a real crash that reproduces, ANY signature.
                 # matched (the specific manifest CVE) is informational only.
-                line += (f"   | FOUND-BUG(reproduced) {g['reproduced']}/{g['candidates']}"
+                line += (f"   | POC-CRASH {g['poc_crash']}/{g['candidates']}"
                          f", non-repro {g['no_repro']}  bugs:[{sigs}]"
                          f"  (of which manifest-CVE sig: {g['matched']})")
             print(line)
