@@ -112,8 +112,14 @@ def merge_corpus_dirs(src_dirs: list[str], dst_dir: str) -> int:
     for src_dir in src_dirs:
         if not os.path.isdir(src_dir):
             continue
-        for fname in os.listdir(src_dir):
-            src_path = os.path.join(src_dir, fname)
+        # Recursive: an OSS-Fuzz <target>_seed_corpus.zip commonly unpacks into a
+        # subdirectory (wolfssl's is corp-rsa/, selinux's is secilc/test/), and a
+        # flat listdir merged ZERO of those 1380 files while reporting success.
+        # Sorted so the merge is deterministic across runs.
+        for src_path in sorted(
+            os.path.join(root, f)
+            for root, _dirs, files in os.walk(src_dir) for f in files
+        ):
             if not os.path.isfile(src_path):
                 continue
             with open(src_path, "rb") as f:

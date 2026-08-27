@@ -27,6 +27,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 from lib import afl, crash_classify, docker_util
+from prework.build_image import image_tag
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +44,11 @@ class Trial:
     variant: str  # "baseline" or "optimized"
     trial_id: int
     seed: int
+    # Manifest local_id, i.e. the ARVO id the prework image is tagged with. Carried
+    # on the trial because the runtime image is derived from it and `cve` cannot
+    # stand in: selinux's cve is "CVE-2021-36085" while its image is
+    # bench-aflpp/selinux-arvo-42493454.
+    local_id: int = 0
     cpu: int = -1
     container_id: str = ""
     status: str = "pending"  # pending, running, completed, failed
@@ -65,6 +71,7 @@ def generate_trials(manifest: list[dict]) -> list[Trial]:
     for entry in manifest:
         project = entry["project"]
         cve = entry["cve"]
+        local_id = int(entry.get("local_id") or 0)
 
         for trial_id in range(config.NUM_TRIALS):
             # Baseline trial
@@ -76,6 +83,7 @@ def generate_trials(manifest: list[dict]) -> list[Trial]:
             trials.append(Trial(
                 project=project,
                 cve=cve,
+                local_id=local_id,
                 variant="baseline",
                 trial_id=trial_id,
                 seed=baseline_seed,
@@ -90,6 +98,7 @@ def generate_trials(manifest: list[dict]) -> list[Trial]:
             trials.append(Trial(
                 project=project,
                 cve=cve,
+                local_id=local_id,
                 variant="optimized",
                 trial_id=trial_id,
                 seed=optimized_seed,
@@ -205,6 +214,23 @@ def is_trial_completed(experiment_id: str, trial: Trial) -> bool:
         return False
 
 
+def _ensure_executable(path: str) -> bool:
+    """Make a fuzzer binary runnable, tolerating one produced inside a container.
+
+    A bin dir written by an in-container `compile` through a bind mount is
+    root-owned, and chmod by a non-root orchestrator raises EPERM even when the
+    mode is already 0755 -- so an unconditional chmod kills the trial over a no-op.
+    """
+    try:
+        os.chmod(path, 0o755)
+        return True
+    except OSError as e:
+        if os.access(path, os.X_OK):
+            return True
+        logger.error("Fuzzer binary is not executable and chmod failed: %s", e)
+        return False
+
+
 def start_trial(
     trial: Trial, experiment_id: str, duration: int = config.TRIAL_DURATION_SECS
 ) -> bool:
@@ -233,28 +259,17 @@ def start_trial(
         trial.status = "failed"
         return False
 
-    os.chmod(fuzzer_binary, 0o755)
+    if not _ensure_executable(fuzzer_binary):
+        trial.status = "failed"
+        return False
 
     bin_dir = os.path.dirname(fuzzer_binary)
     fuzz_target_name = os.path.basename(fuzzer_binary)
 
-    # Determine the docker image
-    candidate_images = []
-    if trial.variant == "optimized":
-        candidate_images.append(f"gcr.io/oss-fuzz/{trial.project}_opt")
-    candidate_images.append(f"gcr.io/oss-fuzz/{trial.project}")
-    candidate_images.append("gcr.io/oss-fuzz-base/base-runner")
-
-    docker_image = None
-    for img in candidate_images:
-        check = subprocess.run(
-            ["docker", "image", "inspect", img],
-            capture_output=True,
-        )
-        if check.returncode == 0:
-            docker_image = img
-            break
-
+    # Determine the docker image. Shared with relaunch_preserving_corpus rather
+    # than duplicated: the two lists had already drifted apart once, and a trial
+    # that starts in one image and relaunches in another is not the same trial.
+    docker_image = _resolve_trial_image(trial)
     if docker_image is None:
         logger.error("No suitable Docker image found for trial %s", trial.name)
         trial.status = "failed"
@@ -320,6 +335,32 @@ def _launch_container(
         "--cpuset-cpus", str(trial.cpu),
         "--memory", config.MEMORY_LIMIT,
         "--shm-size", config.DOCKER_SHM_SIZE,
+        # A fuzzer's job is to crash the target, so the host's crash handling is
+        # on the hot path. With kernel.core_pattern=core and RLIMIT_CORE
+        # unlimited (the container default) every crash makes the kernel dump the
+        # process image synchronously before it is reaped -- a per-crash I/O tax
+        # paid by the fuzzer, and unbounded disk growth under afl_out. Nothing
+        # here ever reads a core file: AFL takes the crash from waitpid and the
+        # sanitizer report from stderr, both of which are unaffected.
+        #
+        # The related host setting is kernel.core_pattern. If it pipes to a
+        # userspace handler (Ubuntu ships |/usr/share/apport/apport) the kernel
+        # hands every crash to that helper instead: observed 2026-08-23 on
+        # c-blosc2, whose 756 crashes in 10 min left 36 apport processes holding
+        # ~8000% CPU while the 39 afl-fuzz processes shared 188%. AFL refuses to
+        # start in that state; AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES below opts
+        # out of the refusal, so the host must be set to `core` separately.
+        "--ulimit", "core=0",
+        # Run as the orchestrator's own uid. AFL creates <out>/default with mode
+        # 0700, so as root it produces a tree the orchestrator cannot read -- and
+        # every measurement this benchmark makes comes out of that tree: crash
+        # files (time-to-bug), the queue (the corpus the optimizer snapshots), and
+        # fuzzer_stats. It fails as silent absence, not as an error: no crashes
+        # found, no corpus growth, a campaign that looks like it ran.
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        # The prework image has no passwd entry for that uid, so HOME is unset and
+        # anything that expands ~ writes to /.
+        "-e", "HOME=/tmp",
         "-e", "AFL_NO_AFFINITY=1",
         "-e", "AFL_SKIP_CPUFREQ=1",
         "-e", "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1",
@@ -387,12 +428,22 @@ def _launch_container(
 
 
 def _resolve_trial_image(trial: Trial) -> Optional[str]:
-    """Pick the first locally-available OSS-Fuzz runtime image for this trial.
+    """Pick the first locally-available runtime image for this trial.
 
-    Mirrors the image-selection block in start_trial, factored out so the online
-    loop's corpus-preserving relaunch can reuse it.
+    The pinned prework image comes FIRST. It is the only candidate that exists on
+    a machine brought up by bootstrap_server.py: the gcr.io/oss-fuzz images below
+    are byproducts of the legacy OSS-Fuzz path and are never pulled or built here,
+    so without this entry every trial died with "No suitable Docker image found".
+
+    It is also the correct image rather than merely an available one. The
+    container only supplies the runtime around the binaries -- afl-fuzz and the
+    target come from the bind-mounted bin dir -- and the prework image is the
+    same clang-18 / AFL++ v5.02c environment those binaries were built in, which
+    is what the mutation-capture shim is compiled against at launch.
     """
     candidate_images = []
+    if trial.local_id:
+        candidate_images.append(image_tag(trial.project, int(trial.local_id)))
     if trial.variant == "optimized":
         candidate_images.append(f"gcr.io/oss-fuzz/{trial.project}_opt")
     candidate_images.append(f"gcr.io/oss-fuzz/{trial.project}")
@@ -422,7 +473,9 @@ def relaunch_preserving_corpus(
         logger.error("Relaunch: fuzzer binary not found: %s", fuzzer_binary)
         trial.status = "failed"
         return False
-    os.chmod(fuzzer_binary, 0o755)
+    if not _ensure_executable(fuzzer_binary):
+        trial.status = "failed"
+        return False
     trial._bin_dir = os.path.dirname(fuzzer_binary)
     trial._fuzz_target_name = os.path.basename(fuzzer_binary)
     trial._dirs = dirs
@@ -434,6 +487,23 @@ def relaunch_preserving_corpus(
             return False
         trial._docker_image = image
     return _launch_container(trial, experiment_id, duration)
+
+
+def _log_has_content(log_path: str, log_bytes: int, probe: int = 4096) -> bool:
+    """Whether a trial log holds anything but whitespace.
+
+    Only the head is read. The caller is the ghost-trial heuristic, which
+    already requires a sub-5-second container, so any real output lands well
+    inside the probe -- and reading the whole file would reintroduce the
+    unbounded read this module just got rid of.
+    """
+    if not log_bytes:
+        return False
+    try:
+        with open(log_path, "rb") as f:
+            return bool(f.read(probe).strip())
+    except OSError:
+        return False
 
 
 def monitor_trial(
@@ -483,11 +553,51 @@ def monitor_trial(
     # Ramp the poll interval: short cadence during the first 30 seconds so
     # startup failures (ghost trials that die in <1s) are noticed promptly
     # and don't get their wall duration rounded up by a full 10s poll.
+    # Periodic restart of the BASELINE arm, resuming from its own queue.
+    #
+    # The online arm is stopped and relaunched at every accepted fold; the
+    # baseline never was, so "restarted" and "optimized" were confounded. A
+    # restart is not free: AFL's in-memory dedup bitmap is not restored on
+    # resume (which is why the online arm's raw crash-artifact counts inflate in
+    # proportion to its swap count), and the queue is re-calibrated on start.
+    # Restarting the baseline on a fixed cadence puts that cost on both arms.
+    #
+    # 0 disables. Note the cadence is independent of how often the online arm
+    # actually swaps -- at 3h that is 8 restarts against the 2-3 an accepted-fold
+    # schedule produced in b5, so the baseline takes MORE restart penalty, not
+    # the same. That is a deliberate choice by the operator, not an oversight.
+    restart_every = int(getattr(config, "BASELINE_RESTART_INTERVAL_SECS", 0) or 0)
+    restart_arm = str(getattr(config, "BASELINE_RESTART_ARM", "baseline"))
+    restarts_done = 0
+    next_restart = (overall_start + restart_every) if restart_every else None
+
     while True:
         if not docker_util.container_is_running(trial.container_id):
             break
         scan_crashes()
-        elapsed_since_start = time.time() - overall_start
+        now = time.time()
+        elapsed_since_start = now - overall_start
+
+        if (next_restart and trial.variant == restart_arm
+                and now >= next_restart
+                and (duration - elapsed_since_start) > 300):
+            # Leave >5 min of budget, else a restart costs more than it measures.
+            remaining = int(duration - elapsed_since_start)
+            logger.info(
+                "Trial %s: scheduled restart #%d at %.2fh (resuming its queue, "
+                "%ds budget left)", trial.name, restarts_done + 1,
+                elapsed_since_start / 3600, remaining)
+            docker_util.remove_container(trial.container_id)
+            if relaunch_preserving_corpus(trial, experiment_id, remaining):
+                restarts_done += 1
+                next_restart = now + restart_every
+            else:
+                logger.error(
+                    "Trial %s: scheduled restart FAILED; not retrying, the trial "
+                    "is left stopped and will be harvested short", trial.name)
+                break
+            continue
+
         poll_interval = 2 if elapsed_since_start < 30 else 10
         time.sleep(poll_interval)
 
@@ -496,8 +606,11 @@ def monitor_trial(
 
     actual_duration = docker_util.get_container_duration_seconds(trial.container_id)
 
-    # Collect logs
-    logs = docker_util.get_container_logs(trial.container_id)
+    # Collect logs. Streamed to disk, never held in memory -- see
+    # docker_util.write_container_logs for what the buffered version cost.
+    log_path = dirs["log"]
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    log_bytes = docker_util.write_container_logs(trial.container_id, log_path)
 
     # Capture post-exit docker state BEFORE removing the container.
     # This is the only place ExitCode / OOMKilled / Error are recoverable;
@@ -510,11 +623,6 @@ def monitor_trial(
 
     trial.end_time = time.time()
     trial.status = "completed"
-
-    log_path = dirs["log"]
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "w") as f:
-        f.write(logs)
 
     final_stats = parse_fuzzer_stats(afl_out)
 
@@ -549,7 +657,7 @@ def monitor_trial(
         and actual_duration < 5
         and not final_stats
         and not crash_times
-        and not (logs or "").strip()
+        and not _log_has_content(log_path, log_bytes)
     )
 
     metadata = {
@@ -595,8 +703,28 @@ def monitor_trial(
     }
 
 
+# AFL++ artifact naming: `id:000000,sig:06,src:000344,time:517045,...`. Both
+# fields are required so a stray file in crashes/ (AFL's own README.txt) is not
+# promoted to a crash.
+_AFL_ARTIFACT_RE = re.compile(r"^id:\d+,.*\bsig:\d+")
+
+
 def classify_crash(crash_path: str) -> str:
-    """Try to classify a crash artifact type."""
+    """Try to classify a crash artifact type.
+
+    Handles BOTH naming schemes. The prefix tests below are libFuzzer's; AFL++
+    names every artifact `id:000000,sig:06,src:...,time:...` and puts timeouts
+    in a separate hangs/ directory, so anything AFL writes into crashes/ is a
+    real signal-terminated crash.
+
+    Without the AFL branch this returned "unknown" for every AFL artifact, and
+    crash_classify.is_target_bug_find drops anything whose crash_type is not
+    "crash". Only the ONLINE arm calls this (phase3_online); the baseline arm
+    hardcodes "crash". So the two arms disagreed on identical artifacts and the
+    optimized arm scored found_bug=False on all 9 trials of b3r2 while holding
+    126 sanitizer aborts -- the same arm-asymmetry class as the crashes-dir bug
+    already documented in phase3_online._monitor_online_trial.
+    """
     fname = os.path.basename(crash_path)
     if fname.startswith("crash-"):
         return "crash"
@@ -604,6 +732,8 @@ def classify_crash(crash_path: str) -> str:
         return "oom"
     if fname.startswith("timeout-"):
         return "timeout"
+    if _AFL_ARTIFACT_RE.match(fname):
+        return "crash"
     return "unknown"
 
 

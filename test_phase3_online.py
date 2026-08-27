@@ -11,7 +11,11 @@ import config
 def test_online_config_defaults():
     assert config.ONLINE_ENABLED is False
     assert config.ONLINE_SWAP_INTERVAL_SECS == 3600
-    assert config.ONLINE_CONVERGENCE_K == 2
+    # 0 = never stop early. A run of rejects does not predict the next round:
+    # the corpus the optimizer profiles keeps growing, so a foldable hotspot can
+    # appear late. The old value of 3 ended lcms's optimization at round 4 of a
+    # 24h campaign, leaving the online arm to finish as a second baseline.
+    assert config.ONLINE_CONVERGENCE_K == 0
     assert config.ONLINE_TRIAL_CORES == "4-23"
     assert config.ONLINE_OPTIMIZER_CORES == "24-39"
     assert config.ONLINE_SNAPSHOT_TRIAL_SELECTOR == "largest"
@@ -38,10 +42,24 @@ def test_parse_cpu_range_mixed():
 # ---------------------------------------------------------------------------
 # classify_exit — the ambiguous-container-exit discriminator
 # ---------------------------------------------------------------------------
-def test_classify_exit_bug_beats_everything():
+def test_classify_exit_bug_is_not_terminal():
+    """Finding the bug must NOT stop an online trial.
+
+    AFL keeps fuzzing past a crash, and the baseline arm runs -V {duration} with
+    no early exit -- so stopping the online arm at its first bug truncates the
+    very measurement this benchmark exists to make, which is the libFuzzer
+    behaviour the project migrated away from. A swap with time left still
+    relaunches; finding the bug changes nothing.
+    """
     assert phase3_online.classify_exit(
         swap_requested=True, found_bug=True, elapsed=10, duration=600
-    ) == "bug_found"
+    ) == "swap"
+    assert phase3_online.classify_exit(
+        swap_requested=False, found_bug=True, elapsed=10, duration=600
+    ) == "dead"
+    assert phase3_online.classify_exit(
+        swap_requested=False, found_bug=True, elapsed=600, duration=600
+    ) == "budget_done"
 
 
 def test_classify_exit_budget_when_time_up():
@@ -424,3 +442,79 @@ def test_build_online_trials_two_arms_and_core_pinning(monkeypatch):
     # seeds follow the phase3_runner formula (baseline vs optimized offset)
     assert baseline[0].seed == config.BASE_SEED + config.BASELINE_SEED_OFFSET
     assert online[0].seed == config.BASE_SEED + config.OPTIMIZED_SEED_OFFSET
+
+
+# --- convergence must reflect the TARGET, not the infrastructure ------------
+def test_infrastructure_failures_do_not_count_toward_convergence():
+    """A revoked credential, a dead broker or an empty snapshot says nothing
+    about whether the target still has headroom. Counting them ended
+    optimization for a whole campaign after three transient outages, leaving the
+    online arm as a second baseline for the remaining 20 hours."""
+    rounds = []
+
+    def run_round(i):
+        rounds.append(i)
+        if i <= 5:
+            return (False, None, False)      # infra: not evidence
+        return (False, None, True)           # measured: real reject
+
+    n = phase3_online.run_optimizer_loop(
+        run_round_fn=run_round, hot_swap_fn=lambda b: None, convergence_k=2,
+        wait_fn=lambda: None,
+        all_terminal_fn=lambda: len(rounds) >= 20)
+    # 5 infra failures ignored, then 2 measured rejects stop it
+    assert n == 7
+
+
+def test_measured_rejects_still_converge():
+    n = phase3_online.run_optimizer_loop(
+        run_round_fn=lambda i: (False, None, True), hot_swap_fn=lambda b: None,
+        convergence_k=3, wait_fn=lambda: None, all_terminal_fn=lambda: False)
+    assert n == 3
+
+
+def test_a_two_tuple_round_still_counts_as_measured():
+    """Backward compatible: the older 2-tuple shape keeps its meaning."""
+    n = phase3_online.run_optimizer_loop(
+        run_round_fn=lambda i: (False, None), hot_swap_fn=lambda b: None,
+        convergence_k=2, wait_fn=lambda: None, all_terminal_fn=lambda: False)
+    assert n == 2
+
+
+def test_an_accepted_round_resets_the_counter():
+    seq = [(False, None, True), (True, "/bin", True), (False, None, True),
+           (False, None, True)]
+    n = phase3_online.run_optimizer_loop(
+        run_round_fn=lambda i: seq[i - 1], hot_swap_fn=lambda b: None,
+        convergence_k=2, wait_fn=lambda: None, all_terminal_fn=lambda: False)
+    assert n == 4
+
+
+# --- evidence vs infrastructure, drawn from the saved agent report ----------
+def _report(tmp_path, body):
+    (tmp_path / "agent_attempt_0.txt").write_text(body)
+    return str(tmp_path)
+
+
+def test_a_successful_build_is_always_evidence(tmp_path):
+    assert phase3_online._round_produced_evidence(str(tmp_path), True) is True
+
+
+def test_found_nothing_counts_as_evidence(tmp_path):
+    d = _report(tmp_path, "[harness note] NO source changes\n[ok] True\ntried 3, reverted 3")
+    assert phase3_online._round_produced_evidence(d, False) is True
+
+
+def test_a_timeout_is_not_evidence(tmp_path):
+    d = _report(tmp_path, "[ok] False  [timed_out] True\n")
+    assert phase3_online._round_produced_evidence(d, False) is False
+
+
+def test_an_auth_failure_is_not_evidence(tmp_path):
+    d = _report(tmp_path, "[ok] False  [timed_out] False\n401 OAuth access token has expired")
+    assert phase3_online._round_produced_evidence(d, False) is False
+
+
+def test_a_missing_report_is_not_evidence(tmp_path):
+    """No report means the session never got far enough to write one."""
+    assert phase3_online._round_produced_evidence(str(tmp_path), False) is False

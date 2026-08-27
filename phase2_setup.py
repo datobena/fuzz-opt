@@ -14,15 +14,19 @@ Supports two manifest formats:
 """
 
 import argparse
+import functools
+import fnmatch
 import json
 import logging
 import os
+import random
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -30,8 +34,10 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 from prework.prework_build import prework_image_for, rebuild_with_prework_image
+from lib import tracked_git
 from sandbox.scrub import scrub
 from lib import corpus as corpus_util
+from lib import cpu_ledger
 from lib import docker_util
 
 logging.basicConfig(
@@ -713,21 +719,53 @@ def _copy_build_output(src_dir: str, dst_dir: str):
 def verify_poc_crash(
     bin_dir: str, fuzz_target: str, poc_path: str,
     timeout: int = config.QUICK_VERIFY_DURATION,
+    cpu: int | None = None,
+    image: str | None = None,
 ) -> bool:
-    """Run the fuzzer with the PoC input and check for a crash."""
+    """Run the fuzzer with the PoC input and check for a crash.
+
+    ``cpu`` pins the replay to one core. Callers inside an online campaign pass
+    the optimizer's profile core so the check cannot land on a core running a
+    fuzzing trial; left None it is unpinned, which is fine for offline phase-2
+    use where nothing else is competing.
+
+    ``image`` is the runtime to replay in; it must be able to LOAD the binary,
+    not merely run something. Targets built with -stdlib=libc++ link against
+    libc++.so.1, which base-runner does not ship -- the binary then dies with
+    "error while loading shared libraries" and, since that is not a sanitizer
+    report, this returns False. That reads identically to "the bug is gone" and
+    would silently exclude a healthy target, so every caller holding a prework
+    image should pass it.
+    """
+    runner = image or "gcr.io/oss-fuzz-base/base-runner"
     fuzzer_path = os.path.join(bin_dir, fuzz_target)
     if not os.path.isfile(fuzzer_path):
         logger.warning("Fuzzer binary not found: %s", fuzzer_path)
         return False
 
-    os.chmod(fuzzer_path, 0o755)
+    # Tolerant: a bin dir written by an in-container `compile` through a bind
+    # mount is root-owned, so chmod raises EPERM for a non-root orchestrator even
+    # though the build already set 0755. The binary runs inside a container as
+    # root regardless, so the mode on the host only has to be readable.
+    try:
+        os.chmod(fuzzer_path, 0o755)
+    except OSError as e:
+        logger.debug("chmod %s skipped: %s", fuzzer_path, e)
 
-    cmd = [
-        "docker", "run", "--rm", "--privileged",
+    # Absolutized: docker reads a RELATIVE -v source as a named volume, silently
+    # mounting an empty one instead of the file. The PoC then "does not crash",
+    # which is indistinguishable from the optimization having removed the bug.
+    bin_dir = os.path.abspath(bin_dir)
+    poc_path = os.path.abspath(poc_path)
+
+    cmd = ["docker", "run", "--rm", "--privileged"]
+    if cpu is not None:
+        cmd += ["--cpuset-cpus", str(cpu)]
+    cmd += [
         "--memory", config.MEMORY_LIMIT,
         "-v", f"{bin_dir}:/out:ro",
         "-v", f"{poc_path}:/testcase:ro",
-        "gcr.io/oss-fuzz-base/base-runner",
+        runner,
         "/bin/bash", "-c",
         f"timeout {timeout} /out/{fuzz_target} /testcase 2>&1; exit 0",
     ]
@@ -811,7 +849,7 @@ def apply_fold_deterministic_calls(
     os.environ["FUZZ_TARGET"] = fuzz_target
     codex_result = _invoke_agent_capture(
         source_dir, prompt, project=project, backend=backend,
-        timeout=getattr(config, "PHASE2_OPTIMIZER_TIMEOUT_SECS", None),
+        timeout=_optimizer_timeout(),
     )
     if codex_result["timed_out"]:
         logger.error(
@@ -954,17 +992,48 @@ def _is_infra_build_error(build_log: str) -> bool:
     return any(pat in tail for pat in infra_patterns)
 
 
+# Libtool bookkeeping. These are the MAKE TARGETS whose outputs live in .libs/;
+# deleting the outputs while leaving these behind makes `make` believe the
+# library is up to date, skip rebuilding it, and then fail when something links
+# against the .so that is no longer there.
+# `.lo` is libtool's per-object stub and `.la`/`.lai` its library bookkeeping.
+# All three are MAKE TARGETS whose real outputs live in .libs/. Deleting the
+# outputs while leaving any of these behind makes `make` believe that target is
+# up to date, skip it, and then fail when the link needs the file that is gone.
+_LIBTOOL_META = ("*.la", "*.lai", "*.lo")
+_ARTIFACT_PATTERNS = ("*.o", "*.a", "*.so", "*.so.*", "*.dylib") + _LIBTOOL_META
+
+
 def _clean_build_artifacts(source_dir: str):
-    """Remove build artifacts from source tree to avoid stale .o files."""
-    for pattern in ["*.o", "*.a", "*.so", "*.so.*", "*.dylib"]:
-        for root, dirs, files in os.walk(source_dir):
-            for fname in files:
-                if (fname.endswith(pattern.lstrip("*")) and
-                        not fname.startswith("llvm-")):
-                    try:
-                        os.remove(os.path.join(root, fname))
-                    except OSError:
-                        pass
+    """Remove build artifacts from a source tree, CONSISTENTLY.
+
+    Consistency is the whole point. The previous version matched with
+    ``fname.endswith(pattern.lstrip("*"))``, and ``"*.so.*".lstrip("*")`` strips
+    only the LEADING asterisk -- leaving the literal suffix ".so.*", which no
+    real filename ends with. So it deleted ``liblcms2.so`` and ``liblcms2.a``
+    but kept ``liblcms2.so.2``, ``liblcms2.so.2.0.8`` and ``liblcms2.la``.
+    Autotools then skipped rebuilding the library (its .la target looked
+    satisfied) and the utilities failed to link against the deleted .so. Every
+    online round for lcms failed this way, indefinitely and identically.
+
+    Removing a SUBSET of a build is worse than removing none of it: a fully
+    stale tree rebuilds, a half-deleted one cannot.
+    """
+    for root, _dirs, files in os.walk(source_dir):
+        for fname in files:
+            if fname.startswith("llvm-"):
+                continue
+            if any(fnmatch.fnmatch(fname, pat) for pat in _ARTIFACT_PATTERNS):
+                try:
+                    os.remove(os.path.join(root, fname))
+                except OSError:
+                    pass
+    # .libs holds libtool's real outputs; drop it wholesale so the next make
+    # regenerates library and symlinks together.
+    for root, dirs, _files in os.walk(source_dir):
+        if ".libs" in dirs:
+            subprocess.run(["rm", "-rf", os.path.join(root, ".libs")],
+                           capture_output=True)
     for cache_name in ["cachedObjs", "CMakeCache.txt", "CMakeFiles",
                        "build", "_build"]:
         for root, dirs, _files in os.walk(source_dir):
@@ -1349,6 +1418,15 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
             getattr(config, "PHASE2_CORPUS_REPLAY_BUDGET_SECS", 1800))
         filter_ncpu = int(getattr(config, "PHASE2_CRASH_FILTER_NCPU", 8))
         max_files = os.environ.get("FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES", "0")
+        # Profile and corpus-build INSIDE the prework image. The skill's scripts
+        # default to base-runner, which cannot load a target linked against the
+        # pinned LLVM's libc++: the run dies at exit 127 before main, yet perf
+        # exits 0 and writes a profile anyway -- of ld.so and the timing loop.
+        # Every status signal reports success and the optimizer gets a hotspot
+        # list with no target symbols in it at all.
+        _prebuild_env = dict(os.environ)
+        if env.get("PHASE2_PREWORK_IMAGE"):
+            _prebuild_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = env["PHASE2_PREWORK_IMAGE"]
         bc = subprocess.run(
             ["python3", str(build_corpus),
              "--out-dir", baseline_out, "--corpus-dir", corpus_dir,
@@ -1365,7 +1443,8 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
              "--probe-timeout", "900",
              "--max-corpus-files", str(max_files if max_files else "0")],
             # wrapper covers sizing probe (2 containers <=900s) + filter + grow + overhead
-            capture_output=True, text=True, timeout=dur_int + filter_timeout + 1800 + 3600,
+            capture_output=True, text=True, env=_prebuild_env,
+            timeout=dur_int + filter_timeout + 1800 + 3600,
         )
         if bc.returncode != 0 or not _dir_has_files(fixed_dir):
             logger.warning("Phase-2 prebuild corpus failed (rc=%s); agent will build it. "
@@ -1378,11 +1457,18 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
              "--out-dir", baseline_out, "--corpus-dir", fixed_dir,
              "--artifact-dir", profile_dir, "--fuzz-target", fuzz_target,
              "--min-sample-seconds", min_sample, "--cpu", cpu],
-            capture_output=True, text=True, timeout=int(min_sample) + 1800,
+            capture_output=True, text=True, env=_prebuild_env,
+            timeout=int(min_sample) + 1800,
         )
         if rp.returncode != 0:
             logger.warning("Phase-2 prebuild profile failed (rc=%s); agent will profile. "
                            "tail: %s", rp.returncode, (rp.stderr or "")[-400:])
+            return False
+        if not _profile_has_target_symbols(profile_dir, fuzz_target):
+            logger.error(
+                "Phase-2 prebuild produced a profile with no target symbols -- the "
+                "binary did not run (check %s/fuzzer.log). Refusing to hand the "
+                "optimizer a hotspot list sampled from something else.", profile_dir)
             return False
     except subprocess.TimeoutExpired as e:
         logger.warning("Phase-2 prebuild timed out (%s); agent will build the corpus itself", e)
@@ -1395,6 +1481,30 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
     logger.info("Phase-2 prebuild complete: fixed corpus + profile ready; the optimizer "
                 "agent will skip its build/profile steps.")
     return True
+
+
+def _profile_has_target_symbols(profile_dir: str | Path, fuzz_target: str) -> bool:
+    """True if the flat profile actually sampled the target.
+
+    A profile whose symbols are all loader/shell frames means the binary never
+    ran -- `perf record` happily samples whatever DID execute and exits 0, so
+    this is the only signal that separates "profiled the target" from "profiled
+    ld.so and /bin/date". Cheap and conservative: any frame attributed to the
+    target binary counts, and an unreadable/absent report is treated as bad.
+    """
+    flat = Path(profile_dir) / "flat.txt"
+    try:
+        text = flat.read_text(errors="replace")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        # perf's flat report puts the shared object in the third column; a frame
+        # from the target names the binary (or its statically linked image).
+        if fuzz_target in line:
+            return True
+    return False
 
 
 def _load_replay_timing_module():
@@ -1423,6 +1533,7 @@ def run_replay_speedup(
     profile_cpu: int | None = None,
     repeats: int | None = None,
     measure_fn=None,
+    image: str | None = None,
 ) -> dict | None:
     """Headline throughput metric: deterministic corpus-replay speedup.
 
@@ -1435,9 +1546,36 @@ def run_replay_speedup(
     """
     if not fuzz_target:
         return None
+    if measure_fn is not None:
+        measure = measure_fn
+    elif image:
+        # AFL++ build -> afl-showmap in the pinned prework image. The skill's
+        # replay_timing.py is libFuzzer-era and cannot run these binaries at all
+        # (see lib/afl_replay), and it is the AGENT's measurement contract that
+        # matters here: the broker times folds with afl-showmap, so scoring them
+        # with a different replay would judge the agent on a metric it never saw.
+        from lib import afl_replay
+        measure = functools.partial(afl_replay.measure_binary, image=image)
+    else:
+        # No prework image named -> legacy libFuzzer path. Loaded OUTSIDE the
+        # catch-all below, and logged at ERROR: every other failure here is a
+        # measurement that did not work this once, but a missing replay_timing.py
+        # cannot work for ANY round, so the gate rejects the whole campaign and
+        # the run looks like an optimizer that never found a speedup. That is a
+        # misconfiguration wearing the costume of a result.
+        try:
+            measure = _load_replay_timing_module().measure_binary
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Replay-timing helper unavailable (%s). EVERY optimization round "
+                "will be rejected for lack of a measured speedup. Install the %s "
+                "skill tree under %s -- it is not carried in this repo; "
+                "`python3 bootstrap_server.py --check` reports it.",
+                exc, getattr(config, "PHASE2_OPTIMIZER_SKILL", "optimizer"),
+                getattr(config, "PHASE2_SKILL_SCRIPTS_DIR", "?"),
+            )
+            return None
     try:
-        replay = _load_replay_timing_module() if measure_fn is None else None
-        measure = measure_fn or replay.measure_binary
 
         fixed = _phase2_fixed_corpus_dir(diff_output_dir)
         merged = Path(experiment_dir) / "seed_corpus" / "merged"
@@ -1447,7 +1585,10 @@ def run_replay_speedup(
             return None
 
         snapshot_dir = Path(diff_output_dir) / "profiles" / "replay_snapshot"
-        snapshot_count = _freeze_corpus_snapshot(source_corpus, snapshot_dir)
+        snapshot_count, snapshot_capped = _freeze_corpus_snapshot(
+            source_corpus, snapshot_dir,
+            max_units=_replay_unit_cap(experiment_dir, fuzz_target),
+        )
 
         if profile_cpu is None:
             profile_cpu = max(int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
@@ -1472,10 +1613,18 @@ def run_replay_speedup(
 
         b = baseline.get("median_time_s")
         o = optimized.get("median_time_s")
+        # Feed the observed cost back so the NEXT round's cap is sized by what a
+        # pass actually took here, not by a proxy.
+        _record_replay_rate(experiment_dir, baseline.get("executed_units"), b)
         # A deterministic corpus crasher truncates both binaries at the SAME unit
         # count, so rate-normalize (executed_units/time) to stay apples-to-apples
         # over that common prefix; reduces to base_time/opt_time when units match.
-        partial = bool(baseline.get("partial") or optimized.get("partial"))
+        # A capped snapshot is a sample of the corpus, so it is weaker evidence
+        # in exactly the way a crasher-truncated pass is: same rate-normalised
+        # comparison, same wider margin before a fold is kept.
+        partial = bool(
+            baseline.get("partial") or optimized.get("partial") or snapshot_capped
+        )
         if partial:
             bu = baseline.get("executed_units")
             ou = optimized.get("executed_units")
@@ -1500,20 +1649,133 @@ def _dir_has_files(directory: str | Path) -> bool:
     return directory.is_dir() and any(p.is_file() for p in directory.rglob("*"))
 
 
-def _freeze_corpus_snapshot(source_dir: str | Path, dest_dir: str | Path) -> int:
-    """Copy a flat, immutable snapshot of a corpus for replay timing."""
+def _replay_rate_path(experiment_dir: str | Path) -> Path:
+    """Where the measured replay rate for this target is remembered."""
+    return Path(experiment_dir) / "replay_rate.json"
+
+
+def _record_replay_rate(experiment_dir, units: int, seconds: float) -> None:
+    """Remember units/second observed by the gate, for sizing the next round."""
+    if not units or not seconds or seconds <= 0:
+        return
+    try:
+        p = _replay_rate_path(experiment_dir)
+        p.write_text(json.dumps({
+            "units_per_s": units / seconds, "units": units,
+            "median_time_s": seconds, "measured_at": time.time(),
+        }))
+    except OSError as e:
+        logger.debug("could not record replay rate: %s", e)
+
+
+def _replay_unit_cap(experiment_dir, fuzz_target: str, entry: dict | None = None) -> int:
+    """Units one replay pass may contain, derived from a wall-clock budget.
+
+    Returns 0 for "no cap".
+
+    The budget is converted with the target's own replay rate, resolved in order:
+
+      1. the rate the GATE itself measured last round (units / median_time_s) --
+         the only figure that reflects what this pass actually costs, including
+         afl-showmap's per-input fork;
+      2. failing that, execs_per_sec from a baseline trial's fuzzer_stats -- a
+         proxy available from round 1, before any gate has run;
+      3. failing that, no cap, because guessing a count for an unknown target is
+         worse than paying the full pass once and measuring it.
+
+    PHASE2_REPLAY_MAX_UNITS, when set, is applied as a hard ceiling on top.
+    """
+    budget = int(getattr(config, "PHASE2_REPLAY_BUDGET_SECS", 0))
+    manual = int(getattr(config, "PHASE2_REPLAY_MAX_UNITS", 0))
+    if budget <= 0:
+        return manual
+
+    rate = None
+    try:
+        d = json.loads(_replay_rate_path(experiment_dir).read_text())
+        rate = float(d.get("units_per_s") or 0) or None
+        src = "measured gate rate"
+    except (OSError, ValueError, TypeError):
+        rate = None
+
+    if rate is None:
+        # Fall back to the fuzzer's own throughput on the baseline arm.
+        try:
+            stats = sorted(Path(experiment_dir).glob(
+                "baseline/trial_*/afl_out/default/fuzzer_stats"))
+            for f in stats:
+                for line in f.read_text(errors="replace").splitlines():
+                    if line.startswith("execs_per_sec"):
+                        v = float(line.split(":")[1].strip())
+                        if v > 0:
+                            rate, src = v, "baseline execs_per_sec"
+                        break
+                if rate:
+                    break
+        except (OSError, ValueError, IndexError):
+            rate = None
+
+    if not rate:
+        logger.info("Replay cap: no rate available for %s yet; replaying in full "
+                    "and measuring it", fuzz_target)
+        return manual
+
+    units = max(1, int(budget * rate))
+    if manual:
+        units = min(units, manual)
+    logger.info("Replay cap: %d units for a %ds budget (%s %.0f units/s)",
+                units, budget, src, rate)
+    return units
+
+
+def _freeze_corpus_snapshot(
+    source_dir: str | Path, dest_dir: str | Path, max_units: int = 0,
+) -> tuple[int, bool]:
+    """Copy a flat, immutable snapshot of a corpus for replay timing.
+
+    Returns ``(count, capped)``.
+
+    ``max_units`` bounds how many units the gate replays. The cost of a round is
+    dominated by how fast the TARGET runs, not by how big its source tree is:
+    assimp executes ~53 inputs/s against PcapPlusPlus's ~3230, so the same
+    ~22.8k-unit snapshot x PHASE2_REPLAY_REPEATS x 2 binaries costs assimp ~43
+    min per round and PcapPlusPlus ~40 s. Capping the snapshot turns that into a
+    bounded cost for slow targets and changes nothing for fast ones, which stay
+    under the cap.
+
+    The prefix is chosen by a deterministic shuffle rather than the directory
+    walk. Unit names are assigned in walk order (seed_* then mut_*), so a plain
+    truncation would replay only seeds and never a mutation -- measuring a fold
+    on inputs the fuzzer no longer spends its time in. Seeding the shuffle with
+    BASE_SEED keeps the choice reproducible across the baseline and optimized
+    passes and across re-runs.
+
+    Both binaries always replay the SAME capped set, so the measurement stays
+    apples-to-apples; the caller marks it partial so the rate-normalised
+    comparison and the wider PHASE2_MIN_REPLAY_SPEEDUP_PARTIAL margin apply.
+    """
     source_dir = Path(source_dir)
     dest_dir = Path(dest_dir)
     if dest_dir.exists():
         shutil.rmtree(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    files = [p for p in sorted(source_dir.rglob("*")) if p.is_file()]
+    capped = bool(max_units and len(files) > max_units)
+    if capped:
+        rng = random.Random(int(getattr(config, "BASE_SEED", 1337)))
+        rng.shuffle(files)
+        files = sorted(files[:max_units])
+        logger.info(
+            "Replay snapshot capped: %d of %d units (PHASE2_REPLAY_MAX_UNITS), "
+            "deterministic sample; measurement reported as partial",
+            len(files), len(list(source_dir.rglob("*"))))
+
     count = 0
-    for src_path in sorted(source_dir.rglob("*")):
-        if not src_path.is_file():
-            continue
+    for src_path in files:
         shutil.copy2(src_path, dest_dir / f"unit_{count:08d}")
         count += 1
-    return count
+    return count, capped
 
 
 def _is_source_or_header_file(path: Path) -> bool:
@@ -1650,6 +1912,100 @@ def _emits_blocked_low_confidence(text: str) -> bool:
     return False
 
 
+def _save_agent_session_output(diff_output_dir: str, attempt: int,
+                               result: dict, note: str = "") -> None:
+    """Persist the optimizer's own report for every round, not just failures.
+
+    Previously this was written only when the session emitted
+    BLOCKED_LOW_CONFIDENCE. A round where the agent tried ten folds and reverted
+    all ten therefore left NO trace of the ten: the diff is empty, and the
+    attempt ledger derives its function list from that diff. "Why did this round
+    produce nothing" was unanswerable from the artifacts -- which is exactly the
+    question worth asking about a round that produced nothing.
+    """
+    try:
+        os.makedirs(diff_output_dir, exist_ok=True)
+        path = os.path.join(diff_output_dir, f"agent_attempt_{attempt}.txt")
+        with open(path, "w") as f:
+            if note:
+                f.write(f"[harness note] {note}\n\n")
+            f.write(f"[ok] {result.get('ok')}  [timed_out] {result.get('timed_out')}\n")
+            f.write("\n=== stdout ===\n")
+            f.write(result.get("stdout") or "")
+            if result.get("stderr"):
+                f.write("\n\n=== stderr ===\n")
+                f.write(result["stderr"])
+    except OSError as e:                                  # noqa: BLE001
+        logger.warning("could not save agent session output: %s", e)
+
+
+_AUTH_FAILURE_PATTERNS = (
+    "OAuth access token has expired",
+    "OAuth access token has been revoked",
+    "Failed to authenticate",
+    "Please run /login",
+)
+
+
+def _is_auth_failure(stdout: str, stderr: str) -> bool:
+    """True when a session died because its credential was not usable."""
+    combined = (stdout or "") + (stderr or "")
+    return any(pat in combined for pat in _AUTH_FAILURE_PATTERNS)
+
+
+def _store_credential_is_usable() -> bool:
+    """True if the store currently holds a credential that has not expired.
+
+    The retry condition. Asking "did MY reseed change the file?" is wrong: the
+    keeper, another project's round, or an operator may already have refreshed
+    the store between this session staging its copy and the session failing. The
+    reseed is then a no-op and the round is abandoned even though a perfectly
+    good credential is sitting there -- observed live, both projects lost a round
+    that way one minute after the store had been healed.
+    """
+    import time as _time
+    try:
+        from sandbox import egress
+        for backend in egress.CREDENTIAL_FILES:
+            stored = egress.CREDENTIAL_STORE / f"{backend}.json"
+            if not stored.is_file():
+                continue
+            blob = json.loads(stored.read_text())
+            holder = blob.get("claudeAiOauth") or blob.get("tokens") or blob
+            exp = holder.get("expiresAt")
+            if exp and int(exp) / 1000.0 > _time.time() + 60:
+                return True
+    except Exception:                                     # noqa: BLE001
+        return False
+    return False
+
+
+def _reseed_credentials_after_auth_failure() -> bool:
+    """Pull a refreshed credential into the sandbox store. True if it changed.
+
+    The benchmark and the operator's own CLI share one OAuth identity, and its
+    tokens both EXPIRE (~8h) and ROTATE on refresh. Whichever side refreshes
+    first leaves the other holding a dead token, so a round can land in that gap
+    and lose its whole optimizer session. seed_store already prefers the fresher
+    copy; calling it again here turns "this round is lost" into "retry once".
+    """
+    try:
+        from sandbox import egress
+        before = {}
+        for backend in egress.CREDENTIAL_FILES:
+            stored = egress.CREDENTIAL_STORE / f"{backend}.json"
+            before[backend] = stored.read_bytes() if stored.is_file() else None
+        egress.seed_store()
+        for backend, old in before.items():
+            stored = egress.CREDENTIAL_STORE / f"{backend}.json"
+            new = stored.read_bytes() if stored.is_file() else None
+            if new != old:
+                return True
+    except Exception as exc:                              # noqa: BLE001
+        logger.warning("credential re-seed failed: %s", exc)
+    return False
+
+
 _RATE_LIMIT_PATTERNS = [
     "rate limit", "rate_limit", "Rate limit",
     "usage limit", "Usage limit",
@@ -1694,6 +2050,26 @@ def _skill_mention(backend: str = "codex") -> str:
     if backend.lower() == "claude":
         return f"the {skill} skill"
     return f"${skill}"
+
+
+def _optimizer_timeout() -> int | None:
+    """Wall-clock cap for one optimizer session, or None for no cap.
+
+    ``PHASE2_OPTIMIZER_TIMEOUT_SECS <= 0`` means run to completion. A cap is a
+    blunt instrument here: the diff is only saved once the agent RETURNS, so a
+    killed session loses every fold it had already built, smoked and validated --
+    the whole round is recorded as producing nothing. Letting it finish costs
+    only a later next round, which then optimizes on whatever mutations the
+    trials have accumulated in the meantime.
+    """
+    secs = getattr(config, "PHASE2_OPTIMIZER_TIMEOUT_SECS", None)
+    if secs is None:
+        return None
+    try:
+        secs = int(secs)
+    except (TypeError, ValueError):
+        return None
+    return secs if secs > 0 else None
 
 
 _HEADLESS_SYNC_DIRECTIVE = (
@@ -2115,10 +2491,22 @@ def _invoke_agent_sandboxed(
             f"sandboxed optimizer is missing required context: {missing}"
         )
 
+    # The broker pins every build/smoke/replay it performs to this core. Left
+    # unset it defaults to CPU 0, which means all sandboxed optimizer work for
+    # EVERY concurrently running project lands on the same core -- and on core 0,
+    # which the orchestrator and docker daemon also use. The agent's replay_time
+    # results drive its accept/reject decisions, so measuring them on a contended
+    # core degrades the optimization itself, not just the bookkeeping.
+    try:
+        broker_cpu = int(env.get("FUZZ_SOURCE_FOLDS_PROFILE_CPU", ""))
+    except (TypeError, ValueError):
+        broker_cpu = max(int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
+
     return run_sandboxed_optimizer(
         source_dir=source_dir, profile_dir=profile_dir, out_dir=out_dir,
         corpus_dir=corpus_dir, image=image, fuzz_target=fuzz_target,
         project=project, prompt=prompt, timeout=timeout, base_env=env,
+        cpu=broker_cpu, harness=env.get("PHASE2_HARNESS_HOST_PATH", ""),
     )
 
 
@@ -2159,11 +2547,16 @@ def optimize_and_build(
     os.makedirs(diff_output_dir, exist_ok=True)
     _stage_project_fuzz_support(source_dir, project)
 
-    # Initialize git repo for tracking changes
-    subprocess.run(["git", "init"], cwd=source_dir, capture_output=True)
-    subprocess.run(["git", "add", "."], cwd=source_dir, capture_output=True)
+    # Track changes with a git dir OUTSIDE the tree -- see lib/tracked_git. An
+    # in-tree .git is visible to the agent (upstream history, i.e. the fix) and
+    # changes how some projects build (wolfssl turns on -Werror when it sees one).
+    # Idempotent: the online loop re-enters this every round on a tree the round
+    # before already initialised.
+    _git = tracked_git.git_cmd(source_dir)
+    subprocess.run(_git + ["init", "-q"], cwd=source_dir, capture_output=True)
+    subprocess.run(_git + ["add", "."], cwd=source_dir, capture_output=True)
     subprocess.run(
-        ["git", "commit", "-m", "baseline"],
+        _git + ["commit", "-m", "baseline"],
         cwd=source_dir, capture_output=True,
         env={**os.environ, "GIT_AUTHOR_NAME": "benchmark",
              "GIT_AUTHOR_EMAIL": "bench@test",
@@ -2172,16 +2565,39 @@ def optimize_and_build(
     )
 
     harness_path = _find_harness_source(source_dir, fuzz_target)
+    # Under the sandbox only the PROJECT dir is mounted, at /work/src. OSS-Fuzz
+    # keeps the harness beside that dir rather than inside it, so the resolved
+    # path is "../<target>.cc" -- which resolves to /work/<target>.cc in the
+    # container and does not exist. The agent is then told to use a harness it
+    # cannot open; it reported exactly that as a reason to refuse the round.
+    # Hand it the in-sandbox path and mount the file there (see session.py).
+    harness_host = ""
+    if getattr(config, "PHASE2_SANDBOX", True) and harness_path.startswith(".."):
+        candidate = Path(source_dir) / harness_path
+        if candidate.is_file():
+            harness_host = str(candidate.resolve())
+            harness_path = f"/work/harness/{candidate.name}"
+            if codex_extra_env is not None:
+                # Private channel to _invoke_agent_sandboxed. Dropped by
+                # launch.ENV_ALLOWLIST before the container sees any env, so the
+                # host path never reaches the agent -- only the file does.
+                codex_extra_env["PHASE2_HARNESS_HOST_PATH"] = harness_host
     logger.info("Harness source for %s: %s", fuzz_target, harness_path)
 
     backend = _optimizer_backend()
     build_log = None
+    _auth_retried = False          # at most one auth retry per round
 
     # Do the deterministic heavy steps (corpus grow/freeze + baseline profile) in
     # the harness so the single-turn agent never has to background a long docker
     # step and yield. Best-effort: if it fails, the agent builds the corpus itself.
+    #
+    # This is the single largest CPU item in a round -- mutation augmentation,
+    # the corpus crash-filter/grow/freeze, and the baseline profile all run here,
+    # pinned to FUZZ_SOURCE_FOLDS_PROFILE_CPU -- so it is charged as one stage.
     if codex_extra_env:
-        _prebuild_phase2_corpus_and_profile(codex_extra_env, fuzz_target)
+        with cpu_ledger.timed("profile_prebuild", cores=1):
+            _prebuild_phase2_corpus_and_profile(codex_extra_env, fuzz_target)
 
     for attempt in range(max_attempts):
         # Choose prompt based on whether we have a previous build failure
@@ -2220,16 +2636,73 @@ def optimize_and_build(
         # Set FUZZ_TARGET for the skill's Docker commands
         os.environ["FUZZ_TARGET"] = fuzz_target
 
-        codex_result = _invoke_agent_capture(
-            source_dir, prompt, project=project, extra_env=codex_extra_env,
-            backend=backend,
-            timeout=getattr(config, "PHASE2_OPTIMIZER_TIMEOUT_SECS", None),
-        )
+        # cores=0/counts=False: the agent's own turn is model inference, which
+        # costs no CPU the fuzzing cores could have used. The CPU work it causes
+        # is charged separately and precisely, as broker_* stages -- every build,
+        # smoke and replay it requests goes through sandbox/broker.py. Recording
+        # the wait anyway keeps the round's wall-clock reconstructable from the
+        # ledger alone, which is what makes the excluded time auditable rather
+        # than merely asserted.
+        with cpu_ledger.timed("agent_wait", cores=0, counts=False,
+                              attempt=attempt) as _info:
+            codex_result = _invoke_agent_capture(
+                source_dir, prompt, project=project, extra_env=codex_extra_env,
+                backend=backend,
+                timeout=_optimizer_timeout(),
+            )
+            _info["timed_out"] = bool(codex_result["timed_out"])
+        # Saved unconditionally and before any early return below, so a timeout,
+        # an auth failure and a silent "found nothing" are all reconstructable.
+        _save_agent_session_output(diff_output_dir, attempt, codex_result)
         if codex_result["timed_out"]:
             logger.error(
                 "%s optimization for %s/%s timed out", backend, project, fuzz_target,
             )
             return False
+        # A session that exits non-zero has said WHY -- "Not logged in", a missing
+        # skill, a rate limit -- and until now nothing looked at it. The round
+        # reported only "No changes made", which is what a genuinely unproductive
+        # optimizer looks like too. A campaign can lose every round to a stale
+        # credential and read as a negative result.
+        if not codex_result.get("ok", True):
+            tail = ((codex_result.get("stderr") or "")
+                    + (codex_result.get("stdout") or "")).strip()[-400:]
+            logger.error("%s session for %s/%s exited non-zero: %s",
+                         backend, project, fuzz_target, tail or "(no output)")
+            # An expired/rotated credential costs the whole round otherwise: the
+            # agent never starts, so there is no diff and nothing to gate. Re-seed
+            # from the host copy and take another attempt -- but only if the
+            # credential actually CHANGED, so a genuinely bad login cannot spin.
+            if _is_auth_failure(codex_result.get("stdout", ""),
+                                codex_result.get("stderr", "")):
+                # Retry when a USABLE credential exists now -- whether this
+                # reseed fetched it or someone else already had. Bounded to one
+                # auth retry per round so a dead login cannot spin through all
+                # ten attempts.
+                fresher = _reseed_credentials_after_auth_failure()
+                if (fresher or _store_credential_is_usable()) and not _auth_retried:
+                    _auth_retried = True
+                    # Reset to the tree the PROFILE describes. A killed session
+                    # leaves its half-finished edits behind, and the retry is
+                    # handed the same (now stale) profile -- so it spends cycles
+                    # re-folding code the previous attempt already folded and the
+                    # gate rejects them as no-ops. Observed directly: a retry
+                    # reported "the profile is of the pristine tree, and its top
+                    # three hotspots were already folded in the tree I measured",
+                    # wasting three of its cycles.
+                    subprocess.run(_git + ["reset", "--hard", "HEAD"],
+                                   cwd=source_dir, capture_output=True)
+                    subprocess.run(_git + ["clean", "-fd"],
+                                   cwd=source_dir, capture_output=True)
+                    logger.warning(
+                        "auth failure for %s/%s; credential refreshed, source "
+                        "reset to the profiled state, retrying the optimizer "
+                        "session", project, fuzz_target)
+                    continue
+                logger.error(
+                    "auth failure for %s/%s and no fresher credential is "
+                    "available; run `claude` on the host to re-authenticate",
+                    project, fuzz_target)
         if _codex_output_is_low_confidence(
             codex_result["stdout"], codex_result["stderr"],
         ):
@@ -2250,18 +2723,33 @@ def optimize_and_build(
 
         # Save current diff
         diff_result = subprocess.run(
-            ["git", "diff", "HEAD"],
+            _git + ["diff", "HEAD"],
             cwd=source_dir, capture_output=True, text=True,
         )
-        diff_path = os.path.join(
-            diff_output_dir,
-            "optimization.diff" if attempt == 0 else f"attempt_{attempt}.diff",
-        )
-        with open(diff_path, "w") as f:
+        # optimization.diff is the ROUND's result and is what the caller reads to
+        # decide whether anything was applied -- so the winning attempt must land
+        # there whichever attempt it was. Writing only attempt_<n>.diff meant a
+        # round that succeeded on a retry was recorded as "no changes" and
+        # reverted: libxml2 lost a gate-validated 1.276x that way, because its
+        # first attempt died on an expired token and the second attempt's work
+        # went to a filename nothing reads.
+        with open(os.path.join(diff_output_dir, "optimization.diff"), "w") as f:
             f.write(diff_result.stdout)
+        if attempt > 0:                      # keep the per-attempt copy for forensics
+            with open(os.path.join(diff_output_dir,
+                                   f"attempt_{attempt}.diff"), "w") as f:
+                f.write(diff_result.stdout)
 
         if not diff_result.stdout.strip():
             if attempt == 0:
+                # The round's most important artifact when nothing lands: the
+                # agent's own account of what it tried and why it reverted it.
+                _save_agent_session_output(
+                    diff_output_dir, attempt, codex_result,
+                    note="round produced NO source changes -- the agent either "
+                         "reverted every fold it tried (its own replay timing "
+                         "rejected them) or never applied one. The report below "
+                         "is the only record of what was attempted.")
                 logger.warning("No changes made by %s", config.PHASE2_OPTIMIZER_SKILL)
                 return False
             logger.warning(
@@ -2273,7 +2761,7 @@ def optimize_and_build(
 
         # Save change summary
         stat_result = subprocess.run(
-            ["git", "diff", "--stat", "HEAD"],
+            _git + ["diff", "--stat", "HEAD"],
             cwd=source_dir, capture_output=True, text=True,
         )
         with open(os.path.join(diff_output_dir, "changes_summary.txt"), "w") as f:
@@ -2779,6 +3267,8 @@ def setup_cve_arvo(
             fuzz_target=fuzz_target,
             experiment_dir=experiment_dir,
             profile_cpu=profile_cpu,
+            image=prework_image_for(entry) if getattr(config, "PHASE2_SANDBOX", True)
+            else None,
         )
         optimization_ready, replay_rejection = _reject_if_no_replay_speedup(
             project=project, cve=entry["cve"],
@@ -2938,7 +3428,12 @@ def setup_cve_arvo_image(
 
     opt_crashes = False
     if poc_path_str:
-        opt_crashes = verify_poc_crash(optimized_bin_dir, fuzz_target, poc_path)
+        # Replayed in the prework image: under PHASE2_SANDBOX this bin dir is a
+        # prework build, which base-runner cannot even load (see verify_poc_crash).
+        opt_crashes = verify_poc_crash(
+            optimized_bin_dir, fuzz_target, poc_path,
+            image=prework_image_for(entry) if getattr(config, "PHASE2_SANDBOX", True)
+            else None)
         logger.info("Optimized PoC verification: %s",
                     "PASSED" if opt_crashes else "FAILED")
 
@@ -2962,6 +3457,8 @@ def setup_cve_arvo_image(
             fuzz_target=fuzz_target,
             experiment_dir=experiment_dir,
             profile_cpu=profile_cpu,
+            image=prework_image_for(entry) if getattr(config, "PHASE2_SANDBOX", True)
+            else None,
         )
         optimization_ready, replay_rejection = _reject_if_no_replay_speedup(
             project=project, cve=entry["cve"],

@@ -21,7 +21,7 @@ RSS_LIMIT_MB = 3072
 MAX_FAILED_TRIALS = 3  # If more than this many trials fail, exclude CVE
 
 # Machine resources
-TOTAL_CORES = 40
+TOTAL_CORES = 80
 RESERVED_CORES = 4
 USABLE_CORES = TOTAL_CORES - RESERVED_CORES  # 36
 PHASE2_MAX_PARALLEL = 4
@@ -75,6 +75,45 @@ PHASE2_MUTATION_SKIP_SIZING = os.environ.get("PHASE2_MUTATION_SKIP_SIZING", "1")
 # immune to the coverage-gradient divergence that makes live exec/s misleading.
 PHASE2_REPLAY_REPEATS = 3
 
+# Restart the baseline arm's trials on this cadence, resuming from their own
+# queue (AFL_AUTORESUME). 0 = never restart, the historical behaviour.
+#
+# Controls for a confound: the online arm is stopped and relaunched at every
+# accepted fold, the baseline never was, so restart effects were attributed to
+# optimization. A restart loses AFL's in-memory dedup bitmap (inflating raw
+# crash-artifact counts) and re-calibrates the queue.
+BASELINE_RESTART_INTERVAL_SECS = int(
+    os.environ.get("BASELINE_RESTART_INTERVAL_SECS", "0"))
+# Which arm the cadence applies to. "baseline" by default; "optimized" or a
+# nonsense value simply means the baseline is never restarted.
+BASELINE_RESTART_ARM = os.environ.get("BASELINE_RESTART_ARM", "baseline")
+
+# Wall-clock budget for ONE replay pass (one binary, one repeat). 0 disables the
+# time budget and falls back to PHASE2_REPLAY_MAX_UNITS alone.
+#
+# Sized automatically rather than as a unit count, because the right count is a
+# property of the TARGET, not of the corpus: at assimp's ~53 exec/s a 22.8k-unit
+# pass takes 21.6 min (measured), while PcapPlusPlus at ~3230 exec/s does the
+# same work in 1.2 min. A fixed unit cap would either throttle the fast target
+# for nothing or leave the slow one unbounded. _replay_unit_cap converts this
+# budget into units using the target's own measured replay rate.
+PHASE2_REPLAY_BUDGET_SECS = int(os.environ.get("PHASE2_REPLAY_BUDGET_SECS", "180"))
+
+# Hard upper bound on units the replay gate times, per pass. 0 = no manual cap
+# (the budget above still applies). Set this to pin a count and ignore the clock.
+#
+# Round cost is set by how fast the TARGET runs, not by its source size: assimp
+# manages ~53 exec/s where PcapPlusPlus manages ~3230, so an identical ~22.8k
+# unit snapshot x PHASE2_REPLAY_REPEATS x 2 binaries costs assimp ~43 min a round
+# and PcapPlusPlus ~40 s. Over b5 that was the difference between 4 rounds in 24h
+# and 8. Sizing this by the slowest target's throughput -- units ~= budget_secs *
+# exec/s / repeats -- bounds the gate for slow targets and binds on nobody else.
+#
+# A capped snapshot is a SAMPLE, so run_replay_speedup marks the measurement
+# partial: the comparison becomes rate-normalised and the fold must clear
+# PHASE2_MIN_REPLAY_SPEEDUP_PARTIAL rather than the usual margin.
+PHASE2_REPLAY_MAX_UNITS = int(os.environ.get("PHASE2_REPLAY_MAX_UNITS", "0"))
+
 # Wall-clock cap for each crash-filter container in build_corpus.py (bulk replay
 # and, if needed, the per-unit pass). Previously only a getattr fallback.
 PHASE2_CRASH_FILTER_TIMEOUT_SECS = int(
@@ -100,8 +139,30 @@ PHASE2_CORPUS_N_MIN = int(os.environ.get("PHASE2_CORPUS_N_MIN", "200"))
 # Wall-clock cap on a single optimizer (claude/codex) invocation. A hung agent
 # (e.g. waiting on an inner Docker step that never returns) is killed and
 # recorded as timed-out instead of wedging the phase-2 worker indefinitely.
-PHASE2_OPTIMIZER_TIMEOUT_SECS = int(
-    os.environ.get("PHASE2_OPTIMIZER_TIMEOUT_SECS", "18000")  # 5 hours
+# 0 (or negative) means NO limit: let the optimizer run to completion. A round
+# that overruns the swap interval simply delays the next one -- run_optimizer_loop
+# waits the interval BETWEEN rounds, so the interval is a floor, not a schedule,
+# and the next round harvests whatever mutations the trials have accumulated by
+# then. Killing the session instead discards the whole round, including folds it
+# had already validated, because the diff is only saved once the agent returns.
+def _int_env(name: str, default: int) -> int:
+    """int() an env var, tolerating empty/garbage rather than dying at import.
+
+    `FOO= python3 ...` sets an EMPTY string, not an unset variable, so a bare
+    int(os.environ.get(...)) raises ValueError before any logging exists and the
+    run dies with a bare traceback from config import.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return default
+
+
+PHASE2_OPTIMIZER_TIMEOUT_SECS = _int_env(
+    "PHASE2_OPTIMIZER_TIMEOUT_SECS", 18000  # 5 hours; <=0 disables the cap
 )
 
 # Strict throughput gate: an accepted optimization MUST measurably speed up the
@@ -187,7 +248,10 @@ ONLINE_ENABLED = os.environ.get("ONLINE_ENABLED", "0") == "1"
 ONLINE_SWAP_INTERVAL_SECS = int(os.environ.get("ONLINE_SWAP_INTERVAL_SECS", "3600"))
 # Stop attempting new rounds after this many consecutive rounds produce no accepted
 # fold; fuzzing continues to the end of the budget regardless.
-ONLINE_CONVERGENCE_K = int(os.environ.get("ONLINE_CONVERGENCE_K", "2"))
+# 0 (the default) never stops early -- rounds run until the trials terminate. A
+# stretch of rejects does not predict the next round: the optimizer profiles a
+# corpus that is still growing, so a foldable hotspot can appear late.
+ONLINE_CONVERGENCE_K = int(os.environ.get("ONLINE_CONVERGENCE_K", "0"))
 # Cores pinned to the 20 fuzzing trials vs the disjoint pool reserved for the
 # optimizer's docker work, so optimization does not steal (and bias) trial cycles.
 ONLINE_TRIAL_CORES = os.environ.get("ONLINE_TRIAL_CORES", "4-23")

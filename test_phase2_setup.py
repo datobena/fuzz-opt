@@ -1,3 +1,4 @@
+import pathlib
 import json
 import os
 import subprocess
@@ -1370,6 +1371,15 @@ def test_prebuild_sets_flag_and_runs_both_scripts_on_success(monkeypatch, tmp_pa
     ran = []
     def fake_run(cmd, **kw):
         ran.append(cmd[1])
+        # Stand in for what replay_fuzzer_profile.py writes. Without a report
+        # naming the target the prebuild now refuses the round -- a profile with
+        # no target frames means the binary never ran (base-runner cannot load a
+        # libc++ target), and perf exits 0 having sampled ld.so instead.
+        if "replay_fuzzer_profile.py" in cmd[1]:
+            prof = pathlib.Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
+            (prof / "profile_once").mkdir(parents=True, exist_ok=True)
+            (prof / "profile_once" / "flat.txt").write_text(
+                "# comment\n    15.70%  demo_fuzz  demo_fuzzer  [.] xmlParseDoc\n")
         return _proc(returncode=0)
     monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
 
@@ -1378,6 +1388,55 @@ def test_prebuild_sets_flag_and_runs_both_scripts_on_success(monkeypatch, tmp_pa
     assert env.get("FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS") == "1"
     assert any("build_corpus.py" in c for c in ran)
     assert any("replay_fuzzer_profile.py" in c for c in ran)
+
+
+def test_prebuild_refuses_a_profile_with_no_target_symbols(monkeypatch, tmp_path):
+    """The silent failure this guards: base-runner cannot load a target linked
+    against the pinned LLVM's libc++, so it dies at exit 127 before main -- but
+    `perf record` still exits 0 and writes a profile of the dynamic loader and
+    the timing loop. Everything reports success and the optimizer gets a hotspot
+    list with no target frames in it."""
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_MUTATION_REQUIRED", False)
+    env = _prebuild_env(tmp_path)
+    seq = iter([False, True])
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: next(seq, True))
+
+    def fake_run(cmd, **kw):
+        if "replay_fuzzer_profile.py" in cmd[1]:
+            prof = pathlib.Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
+            (prof / "profile_once").mkdir(parents=True, exist_ok=True)
+            (prof / "profile_once" / "flat.txt").write_text(
+                "# comment\n    13.60%  date  ld-2.31.so  [.] _dl_rtld_di_serinfo\n")
+        return _proc(returncode=0)
+    monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
+
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is False
+
+
+def test_prebuild_profiles_in_the_prework_image_not_base_runner(monkeypatch, tmp_path):
+    """The skill's scripts default to base-runner; the benchmark must point them
+    at the image the binary was built in."""
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_MUTATION_REQUIRED", False)
+    env = _prebuild_env(tmp_path)
+    env["PHASE2_PREWORK_IMAGE"] = "bench-aflpp/demo-arvo-1"
+    seq = iter([False, True])
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: next(seq, True))
+
+    envs = []
+    def fake_run(cmd, **kw):
+        envs.append((kw.get("env") or {}).get("FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"))
+        if "replay_fuzzer_profile.py" in cmd[1]:
+            prof = pathlib.Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
+            (prof / "profile_once").mkdir(parents=True, exist_ok=True)
+            (prof / "profile_once" / "flat.txt").write_text(
+                "    9.9%  demo  demo_fuzzer  [.] parse\n")
+        return _proc(returncode=0)
+    monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
+
+    phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer")
+    assert envs and all(e == "bench-aflpp/demo-arvo-1" for e in envs)
 
 
 def test_prebuild_idempotent_when_corpus_already_present(monkeypatch, tmp_path):

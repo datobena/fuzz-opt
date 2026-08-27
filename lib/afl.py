@@ -88,14 +88,27 @@ def collect_crashes(crashes_dir: str | Path) -> list[dict]:
     field is not an artifact and is skipped.
     """
     crashes_dir = Path(crashes_dir)
-    if not crashes_dir.is_dir():
-        return []
+    # AFL++ ARCHIVES this directory on every resume: it renames it to
+    # crashes.<timestamp> and starts a fresh one. The online arm relaunches on
+    # every hot swap, so reading only crashes/ returns just what was found since
+    # the LAST swap -- while the baseline arm, which never relaunches, keeps
+    # everything. That is a systematic bias against the optimized arm on the one
+    # measurement this benchmark exists to compare: one trial's first crash read
+    # as 21.4h when the artifact was actually written at 8.6 minutes.
+    search = [crashes_dir] + sorted(
+        p for p in crashes_dir.parent.glob(crashes_dir.name + ".*") if p.is_dir()
+    ) if crashes_dir.parent.is_dir() else [crashes_dir]
     out: list[dict] = []
-    for entry in crashes_dir.iterdir():
-        if not entry.is_file():
+    seen: set[str] = set()
+    for d in search:
+        if not d.is_dir():
             continue
-        ts = crash_time_secs(entry.name)
-        if ts is None:
-            continue
-        out.append({"timestamp_s": round(ts, 3), "artifact": entry.name})
+        for entry in d.iterdir():
+            if not entry.is_file():
+                continue
+            ts = crash_time_secs(entry.name)
+            if ts is None or entry.name in seen:
+                continue
+            seen.add(entry.name)
+            out.append({"timestamp_s": round(ts, 3), "artifact": entry.name})
     return sorted(out, key=lambda c: c["timestamp_s"])

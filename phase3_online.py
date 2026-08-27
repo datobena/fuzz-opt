@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import threading
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +32,11 @@ from pathlib import Path
 import config
 import phase2_setup
 import phase3_runner
-from lib import crash_classify, docker_util
+from prework.prework_build import prework_image_for
+from lib import afl
+from lib import corpus as corpus_util
+from lib import tracked_git
+from lib import cpu_ledger, crash_classify, docker_util
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +67,6 @@ def classify_exit(*, swap_requested: bool, found_bug: bool,
     """Classify why an online trial's container exited.
 
     Priority (most-terminal first):
-      - ``bug_found``   : a real target bug reproduced (under AFL the run continues, so it
-                          exits at the first crash) — terminal, never relaunch.
       - ``budget_done`` : the time budget is exhausted — terminal. This also wins over
                           a pending swap: a swap requested with no time left must not
                           relaunch.
@@ -71,9 +74,22 @@ def classify_exit(*, swap_requested: bool, found_bug: bool,
                           park on relaunch_ready, then relaunch with the remaining time.
       - ``dead``        : a genuine early death (OOM/startup) with time left — relaunch
                           immediately with the remaining time.
+
+    Finding the bug is NOT terminal. AFL keeps fuzzing past a crash, and running
+    the full budget either way is the entire reason this benchmark left
+    libFuzzer: under libFuzzer a trial died at its first crash, truncating every
+    measurement at the event being measured. A ``bug_found`` state here would
+    reimpose exactly that, and asymmetrically -- the baseline arm runs
+    ``-V {duration}`` (phase3_runner) and never stops early, so the two arms
+    would no longer be comparable on anything but time-to-bug.
+
+    This branch was unreachable until ``classify_crash`` learned AFL's artifact
+    naming: before that, ``trial_found_bug`` was False for every online trial and
+    all nine ran the full budget. Fixing the classifier woke it up and truncated
+    b3r3's yara arm at 2.7-12.6h against a 24h baseline. ``found_bug`` is kept in
+    the signature so the caller's intent stays legible, and deliberately does not
+    affect the result.
     """
-    if found_bug:
-        return "bug_found"
     if elapsed >= duration:
         return "budget_done"
     if swap_requested:
@@ -331,7 +347,7 @@ def select_snapshot_trial(trials, corpus_count_fn):
 # Per-round env (reuse phase-2 with the corpus + replay-baseline overrides)
 # ---------------------------------------------------------------------------
 def build_round_env(*, experiment_dir, diff_dir, opt_bin_dir, snapshot_dir,
-                    entry, previous_best_bin) -> dict:
+                    entry, previous_best_bin, profile_cpu: int | None = None) -> dict:
     """Env for one online round.
 
     Reuse phase-2's env builder but override the profiling corpus to the live
@@ -346,10 +362,18 @@ def build_round_env(*, experiment_dir, diff_dir, opt_bin_dir, snapshot_dir,
     round-over-round (it is what timed out round 3 at 140k files on the first 8h run).
     The reservoir alone is both what we want (a bounded, time-weighted sample of what
     the fuzzer actually executes) and constant-size regardless of corpus growth.
+
+    Pinning: ``profile_cpu`` must be threaded through, not left to default.
+    _make_phase2_profile_env falls back to RESERVED_CORES-1, which is a single
+    fixed core for every project -- so two targets running concurrently would
+    profile on the SAME core while their own ONLINE_PROFILE_CPU sat idle, and
+    the timing-sensitive work each round depends on would be measured under
+    contention from the other project.
     """
     env = phase2_setup._make_phase2_profile_env(
         experiment_dir, diff_dir, opt_bin_dir,
         corpus_dir=snapshot_dir, entry=entry, baseline_out_dir=previous_best_bin,
+        profile_cpu=profile_cpu,
     )
     # Reservoir-only: turn OFF the uncapped guaranteed queue pass (reservoir stays on
     # via its own default). Only affects online rounds; offline phase-2 is unchanged.
@@ -370,10 +394,11 @@ def _commit_and_tag(source_tree, tag: str) -> None:
     """Commit the current (accepted) source state and (re)tag it as the new best."""
     cwd = str(source_tree)
     env = {**os.environ, **_GIT_ENV}
-    subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
-    subprocess.run(["git", "commit", "-m", f"online {tag}", "--allow-empty"],
+    g = tracked_git.git_cmd(source_tree)
+    subprocess.run(g + ["add", "-A"], cwd=cwd, capture_output=True)
+    subprocess.run(g + ["commit", "-m", f"online {tag}", "--allow-empty"],
                    cwd=cwd, capture_output=True, env=env)
-    subprocess.run(["git", "tag", "-f", tag], cwd=cwd, capture_output=True)
+    subprocess.run(g + ["tag", "-f", tag], cwd=cwd, capture_output=True)
 
 
 def _revert_source_tree(source_tree, tag: str) -> None:
@@ -383,8 +408,9 @@ def _revert_source_tree(source_tree, tag: str) -> None:
     rejected / bug-removing / non-speedup edit (the highest-severity correctness risk).
     """
     cwd = str(source_tree)
-    subprocess.run(["git", "reset", "--hard", tag], cwd=cwd, capture_output=True)
-    subprocess.run(["git", "clean", "-fd"], cwd=cwd, capture_output=True)
+    g = tracked_git.git_cmd(source_tree)
+    subprocess.run(g + ["reset", "--hard", tag], cwd=cwd, capture_output=True)
+    subprocess.run(g + ["clean", "-fd"], cwd=cwd, capture_output=True)
 
 
 def apply_round_outcome(accepted: bool, *, source_tree, iter_n: int, opt_bin_dir,
@@ -435,23 +461,41 @@ def run_optimizer_loop(*, run_round_fn, hot_swap_fn, convergence_k: int,
     Each iteration: wait the minimum inter-swap fuzz interval, stop if every online
     trial is already terminal, else run one round; on an accepted round hot-swap and
     reset the no-improvement counter, on a rejected round increment it and stop after
-    ``convergence_k`` consecutive rejects. Returns the number of rounds attempted.
+    ``convergence_k`` consecutive MEASURED rejects (infrastructure failures do not
+    count -- see below). Returns the number of rounds attempted.
     Fuzzing continues to the end of the budget regardless (driven by the caller).
+
+    ``convergence_k <= 0`` disables early stopping entirely: rounds keep running
+    until the trials terminate, however many consecutive rejects accumulate. A
+    run of rejects is weak evidence that the NEXT round will also reject -- the
+    optimizer profiles a corpus that keeps growing, so a hotspot worth folding
+    can surface on round 7 after six barren ones. Stopping early converts "found
+    nothing yet" into "found nothing", and the online arm quietly finishes the
+    campaign as a second baseline.
     """
     consecutive = 0
     iter_n = 0
+    converge = convergence_k > 0
     while True:
         wait_fn()
         if all_terminal_fn():
             break
         iter_n += 1
-        accepted, new_bin = run_round_fn(iter_n)
+        result = run_round_fn(iter_n)
+        # A round may report a third element: whether its outcome is EVIDENCE
+        # about the target (the optimizer measured and found no speedup) rather
+        # than an infrastructure failure (a revoked credential, a dead broker, an
+        # empty snapshot). Only evidence counts toward convergence -- otherwise a
+        # transient outage three rounds running ends optimization for the whole
+        # campaign and the online arm silently becomes a second baseline.
+        accepted, new_bin, *rest = result
+        measured = rest[0] if rest else True
         if accepted:
             hot_swap_fn(new_bin)
             consecutive = 0
-        else:
+        elif measured:
             consecutive += 1
-            if consecutive >= convergence_k:
+            if converge and consecutive >= convergence_k:
                 break
     return iter_n
 
@@ -473,6 +517,8 @@ def _build_online_trials(entry: dict):
     vs optimized offset). All 20 trials are pinned round-robin across ONLINE_TRIAL_CORES.
     """
     project, cve = entry["project"], entry["cve"]
+    # Carries the prework image tag onto every trial; see phase3_runner.Trial.
+    local_id = int(entry.get("local_id") or 0)
     trial_cores = parse_cpu_range(getattr(config, "ONLINE_TRIAL_CORES", "4-23"))
     baseline, online = [], []
     for tid in range(config.NUM_TRIALS):
@@ -480,9 +526,9 @@ def _build_online_trials(entry: dict):
                   + config.BASELINE_SEED_OFFSET)
         o_seed = (config.BASE_SEED + tid * config.SEED_MULTIPLIER
                   + config.OPTIMIZED_SEED_OFFSET)
-        baseline.append(phase3_runner.Trial(project=project, cve=cve,
+        baseline.append(phase3_runner.Trial(project=project, cve=cve, local_id=local_id,
                                              variant="baseline", trial_id=tid, seed=b_seed))
-        o = phase3_runner.Trial(project=project, cve=cve,
+        o = phase3_runner.Trial(project=project, cve=cve, local_id=local_id,
                                 variant="optimized", trial_id=tid, seed=o_seed)
         # Online trials carry the mutation-dump shim so rounds reuse mutations the
         # fuzzer already executed instead of re-fuzzing to regenerate them.
@@ -505,7 +551,8 @@ def _is_n132_entry(entry: dict) -> bool:
     return "n132/arvo" in str(entry.get("image") or "")
 
 
-def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = None):
+def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = None,
+                            profile_cpu: int | None = None):
     """Return (rebuild_fn, wrapper_env_fn) closures for this entry's backend.
 
     Under PHASE2_SANDBOX (the default) both closures go through the pinned prework
@@ -513,6 +560,14 @@ def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = 
     clients. Leaving the legacy branches in place would silently rebuild each
     online round with `arvo compile` -- i.e. FUZZING_ENGINE=libfuzzer -- so every
     hot-swapped binary would be a libFuzzer build dropped into an AFL campaign.
+
+    ``profile_cpu`` pins the rebuild to the optimizer's core. Without it the
+    rebuild ran UNPINNED, and OSS-Fuzz `compile` runs the project's build.sh with
+    `make -j$(nproc)` -- so every round briefly saturated all 80 CPUs, including
+    the cores running the very trials the round is measured against. The broker
+    already pins the agent's own builds to one core (sandbox/broker.py); this
+    makes the harness-side rebuild match, and it is also what lets the rebuild be
+    charged as core-seconds rather than a number nobody can reconstruct.
 
     Legacy (PHASE2_SANDBOX=0): n132/arvo image -> ``arvo compile`` on the bundled
     image; classic ARVO (a bare ``local_id``, e.g. selinux) -> rebuild via
@@ -524,9 +579,18 @@ def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = 
         from sandbox.session import build_sandbox_validation_env
 
         def rebuild_fn(source_root, out_bin_dir):
+            # source_root is the extracted /src ROOT (it holds build.sh, the
+            # harness .cc, and the project dir side by side), but the image mounts
+            # this over $SRC/<project> -- so passing it verbatim buries the tree
+            # one level deep and build.sh compiles the copy baked into the image
+            # instead of the optimizer's edits. The legacy branches below take the
+            # root by design; only this one remounts. phase 2 resolves it the same
+            # way (setup_cve_arvo_image's build_fn).
             return rebuild_with_prework_image(
-                entry=entry, source_dir=str(source_root),
-                out_dir=out_bin_dir, capture_log=True)
+                entry=entry,
+                source_dir=str(phase2_setup._find_project_source(
+                    Path(source_root), entry["project"])),
+                out_dir=out_bin_dir, capture_log=True, cpu=profile_cpu)
 
         def wrapper_env_fn(source_root, state_dir):
             from prework.prework_build import prework_image_for
@@ -645,15 +709,16 @@ def _parse_profile_ranks(profile_dir) -> dict:
 
 def _git_init_baseline(tree):
     env = {**os.environ, **_GIT_ENV}
-    subprocess.run(["git", "init"], cwd=str(tree), capture_output=True)
-    subprocess.run(["git", "add", "-A"], cwd=str(tree), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "online baseline", "--allow-empty"],
+    g = tracked_git.git_cmd(tree)
+    subprocess.run(g + ["init", "-q"], cwd=str(tree), capture_output=True)
+    subprocess.run(g + ["add", "-A"], cwd=str(tree), capture_output=True)
+    subprocess.run(g + ["commit", "-m", "online baseline", "--allow-empty"],
                    cwd=str(tree), capture_output=True, env=env)
 
 
 def _write_cumulative_diff(tree, out_path):
-    r = subprocess.run(["git", "diff", "iter_00", "HEAD"], cwd=str(tree),
-                       capture_output=True, text=True)
+    r = subprocess.run(tracked_git.git_cmd(tree) + ["diff", "iter_00", "HEAD"],
+                       cwd=str(tree), capture_output=True, text=True)
     with open(out_path, "w") as f:
         f.write(r.stdout or "")
 
@@ -678,6 +743,32 @@ def _record_ledger(ctx: RoundContext, iter_n, diff_dir, outcome, speedup):
     _write_json(ctx.ledger_path, ctx.ledger)
 
 
+def _round_produced_evidence(diff_dir: str, build_ok: bool) -> bool:
+    """True if this round's failure is informative about the target.
+
+    ``build_ok`` alone conflates "the optimizer ran and kept nothing" with "the
+    optimizer never ran". The saved agent report separates them: a session that
+    died on authentication or was killed carries the marker, one that simply
+    found no qualifying fold does not.
+    """
+    if build_ok:
+        return True                        # ran, changed something, gate judged it
+    try:
+        reports = sorted(Path(diff_dir).glob("agent_attempt_*.txt"))
+        if not reports:
+            return False                   # no report at all -> never got going
+        text = reports[-1].read_text(errors="replace")
+    except OSError:
+        return False
+    if "[timed_out] True" in text:
+        return False
+    if phase2_setup._is_auth_failure(text, ""):
+        return False
+    if "[ok] False" in text and "NO source changes" not in text:
+        return False                       # session failed for some other reason
+    return True                            # ran to completion, kept nothing
+
+
 def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     """One online optimization round on the persistent cumulative source tree.
 
@@ -687,6 +778,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     the next round never builds on a rejected edit.
     """
     ctx.iter_n = iter_n
+    cpu_ledger.set_round(project=ctx.project, iter_n=iter_n)
     iter_dir = os.path.join(ctx.online_dir, f"iter_{iter_n:02d}")
     diff_dir = os.path.join(iter_dir, "source_diff")
     opt_bin_dir = os.path.join(iter_dir, "bin")
@@ -698,7 +790,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         ctx.online_trials, lambda t: _corpus_file_count(ctx.experiment_id, t))
     src_corpus = phase3_runner.get_live_corpus_dir(ctx.experiment_id, chosen)
     snap_dir = os.path.join(iter_dir, "corpus_snapshot")
-    meta = snapshot_live_corpus(src_corpus, snap_dir, now=time.time())
+    with cpu_ledger.timed("corpus_snapshot", cores=1) as _info:
+        meta = snapshot_live_corpus(src_corpus, snap_dir, now=time.time())
+        _info["files"] = meta["file_count"]
     meta["trial_id"] = chosen.trial_id
     _write_json(os.path.join(iter_dir, "corpus_snapshot_meta.json"), meta)
     logger.info("online round %d: snapshot trial_%02d -> %d files (%d skipped in-flight)",
@@ -706,7 +800,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     if meta["file_count"] == 0:
         logger.warning("online iter %d: empty corpus snapshot; skipping round", iter_n)
         _record_ledger(ctx, iter_n, diff_dir, "build-failed", None)
-        return (False, None)
+        return (False, None, False)      # nothing was measured
 
     # 1b. Harvest the mutations the live trials already executed, and re-arm the
     # shim for the next round. This is what removes the redundant re-fuzz: phase 2
@@ -723,11 +817,18 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             for t in ctx.online_trials
         ]
         harvest_dir = os.path.join(iter_dir, "live_mutations")
-        ready = request_mutation_dump(dump_dirs)
-        n = collect_round_mutations(
-            ready, harvest_dir,
-            cap=int(getattr(config, "PHASE2_MUTATION_CAP", 20000)),
-            seed=config.BASE_SEED + iter_n)
+        # Timed as one stage: the dump request blocks until every trial has
+        # FLUSHED its batch to disk, so this is also the barrier that guarantees
+        # the profiling corpus below is built from mutations that are already
+        # written -- not from whatever happened to be on disk when the round woke.
+        with cpu_ledger.timed("mutation_harvest", cores=1) as _info:
+            ready = request_mutation_dump(dump_dirs)
+            n = collect_round_mutations(
+                ready, harvest_dir,
+                cap=int(getattr(config, "PHASE2_MUTATION_CAP", 20000)),
+                seed=config.BASE_SEED + iter_n)
+            _info["trials_ready"] = len(ready)
+            _info["mutations"] = n
         logger.info("online round %d: %d/%d trials delivered a batch, %d mutations",
                     iter_n, len(ready), len(dump_dirs), n)
         _write_json(os.path.join(iter_dir, "live_mutation_meta.json"),
@@ -745,7 +846,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         experiment_dir=ctx.experiment_dir, diff_dir=diff_dir,
         opt_bin_dir=os.path.join(iter_dir, "validation_out"),
         snapshot_dir=snap_dir, entry=ctx.entry,
-        previous_best_bin=ctx.previous_best_bin)
+        previous_best_bin=ctx.previous_best_bin, profile_cpu=ctx.profile_cpu)
     env.update(ctx.wrapper_env_fn(ctx.source_root, os.path.join(iter_dir, "validation")))
     if live_mutations:
         # Hand phase 2 the already-captured mutations; its own capture step sees
@@ -756,7 +857,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     ledger_summary = build_ledger_summary(ctx.ledger, ctx.last_profile)
 
     def build_fn():
-        return ctx.rebuild_fn(ctx.source_root, opt_bin_dir)
+        # Pinned to ctx.profile_cpu by _online_target_strategy, so one core.
+        with cpu_ledger.timed("rebuild", cores=1):
+            return ctx.rebuild_fn(ctx.source_root, opt_bin_dir)
 
     try:
         build_ok = phase2_setup.optimize_and_build(
@@ -769,7 +872,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             False, source_tree=ctx.source_tree, iter_n=iter_n, opt_bin_dir=opt_bin_dir,
             previous_best_bin=ctx.previous_best_bin, prev_tag=ctx.prev_tag)
         _record_ledger(ctx, iter_n, diff_dir, "build-failed", None)
-        return (False, None)
+        return (False, None, False)      # nothing was measured
 
     # refresh the parsed profile (used to record attempt ranks + next round's re-open)
     ctx.last_profile = _parse_profile_ranks(os.path.join(diff_dir, "profiles", "profile_once"))
@@ -780,21 +883,29 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
 
     opt_crashes = False
     if optimization_ready and ctx.poc_path:
-        opt_crashes = phase2_setup.verify_poc_crash(opt_bin_dir, ctx.fuzz_target, ctx.poc_path)
+        with cpu_ledger.timed("poc_verify", cores=1):
+            opt_crashes = phase2_setup.verify_poc_crash(
+                opt_bin_dir, ctx.fuzz_target, ctx.poc_path, cpu=ctx.profile_cpu,
+                image=prework_image_for(ctx.entry))
 
     opt_rej = None
     replay = None
     if optimization_ready:
-        optimization_ready, opt_rej = phase2_setup._reject_if_optimization_removed_bug(
-            project=ctx.project, cve=ctx.entry["cve"],
-            optimization_ready=optimization_ready,
-            baseline_reproduced=bool(ctx.poc_path), opt_crashes=opt_crashes,
-            baseline_bin_dir=ctx.previous_best_bin, optimized_bin_dir=opt_bin_dir)
+        with cpu_ledger.timed("bug_survival_check", cores=1):
+            optimization_ready, opt_rej = phase2_setup._reject_if_optimization_removed_bug(
+                project=ctx.project, cve=ctx.entry["cve"],
+                optimization_ready=optimization_ready,
+                baseline_reproduced=bool(ctx.poc_path), opt_crashes=opt_crashes,
+                baseline_bin_dir=ctx.previous_best_bin, optimized_bin_dir=opt_bin_dir)
     if optimization_ready:
-        replay = phase2_setup.run_replay_speedup(
-            diff_output_dir=diff_dir, baseline_bin_dir=ctx.previous_best_bin,
-            optimized_bin_dir=opt_bin_dir, fuzz_target=ctx.fuzz_target,
-            experiment_dir=ctx.experiment_dir, profile_cpu=ctx.profile_cpu)
+        # The replay gate times both binaries on ctx.profile_cpu, one core each,
+        # run sequentially -- so its core-seconds are its wall-seconds.
+        with cpu_ledger.timed("replay_gate", cores=1):
+            replay = phase2_setup.run_replay_speedup(
+                diff_output_dir=diff_dir, baseline_bin_dir=ctx.previous_best_bin,
+                optimized_bin_dir=opt_bin_dir, fuzz_target=ctx.fuzz_target,
+                experiment_dir=ctx.experiment_dir, profile_cpu=ctx.profile_cpu,
+                image=prework_image_for(ctx.entry))
         optimization_ready, replay_rej = phase2_setup._reject_if_no_replay_speedup(
             project=ctx.project, cve=ctx.entry["cve"],
             optimization_ready=optimization_ready, replay=replay,
@@ -810,9 +921,33 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     else:
         outcome = "rejected-no-speedup"
     speedup = replay.get("replay_speedup") if replay else None
-    logger.info("online round %d: outcome=%s speedup=%s applied=%s built=%s",
-                iter_n, outcome, speedup, opt_applied, build_ok)
+    # Bug survival belongs on the round line, not only in a WARNING and
+    # setup_metadata.json. Survival is measured rather than enforced, so a fold
+    # that DELETED the target bug is still reported outcome=kept -- and anyone
+    # reading the log (or a progress report built from it) would see a healthy
+    # accepted round with no hint the binary can no longer reproduce the PoC.
+    # bug_survived is None when there was no PoC to check or the round never got
+    # far enough to try, so "unknown" never masquerades as "survived".
+    if not ctx.poc_path:
+        bug_survived = "no-poc"
+    elif not optimization_ready and outcome == "build-failed":
+        bug_survived = "unchecked"
+    else:
+        bug_survived = "yes" if opt_crashes else "NO"
+    logger.info(
+        "online round %d: outcome=%s speedup=%s applied=%s built=%s "
+        "poc_reproduces=%s",
+        iter_n, outcome, speedup, opt_applied, build_ok, bug_survived)
+    if bug_survived == "NO":
+        logger.warning(
+            "online round %d: the optimized binary NO LONGER reproduces the PoC "
+            "-- the fold removed the target bug. Recorded, not reverted; any "
+            "bug-finding number from this round onward is about a binary that "
+            "no longer contains the bug.", iter_n)
     _record_ledger(ctx, iter_n, diff_dir, outcome, speedup)
+    # Refresh after every round, so a campaign inspected mid-flight (or killed)
+    # still has an up-to-date cpu_cost.json rather than only a raw JSONL.
+    _write_cpu_cost_summary(ctx)
 
     phase2_setup._save_setup_metadata(
         ctx.entry, iter_dir, ctx.experiment_id, opt_applied, poc_path=ctx.poc_path,
@@ -826,8 +961,18 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     if optimization_ready:
         ctx.prev_tag = f"iter_{iter_n:02d}"
         _write_cumulative_diff(ctx.source_tree, os.path.join(diff_dir, "cumulative.diff"))
-        return (True, opt_bin_dir)
-    return (False, None)
+        return (True, opt_bin_dir, True)
+    # Did this round tell us something about the TARGET, or only about the
+    # plumbing? A gate rejection and a genuine "the agent found nothing worth
+    # keeping" are both evidence of diminishing headroom and should count toward
+    # convergence. A session that could not run at all -- revoked credential,
+    # dead broker, timeout -- says nothing about the target, and counting it
+    # ended optimization for a whole campaign after three transient outages.
+    #
+    # _round_produced_evidence reads the agent report the round just saved, so
+    # the distinction is drawn from what actually happened rather than from a
+    # boolean that conflates the two.
+    return (False, None, _round_produced_evidence(diff_dir, build_ok))
 
 
 def hot_swap(ctx: RoundContext, state: OnlineState, new_bin_dir):
@@ -860,10 +1005,11 @@ def hot_swap(ctx: RoundContext, state: OnlineState, new_bin_dir):
 
 def _finalize_online_trial(trial, experiment_id, duration, overall_start, crash_times):
     dirs = phase3_runner.get_trial_dirs(experiment_id, trial)
-    logs = docker_util.get_container_logs(trial.container_id) or ""
     os.makedirs(dirs["base"], exist_ok=True)
-    with open(dirs["log"], "w") as f:
-        f.write(logs)
+    # Streamed, not buffered: all nine online trials finalize within the same
+    # few minutes, so buffering these logs multiplies by nine (see
+    # docker_util.write_container_logs).
+    docker_util.write_container_logs(trial.container_id, dirs["log"])
     # parse_fuzzer_stats now reads AFL's structured output tree, not console
     # text -- passing `logs` here silently produced empty stats for every
     # online trial.
@@ -888,23 +1034,40 @@ def _monitor_online_trial(trial, experiment_id, duration, state: OnlineState):
     """Bespoke monitor: distinguishes budget/bug/swap/early-death on container exit and
     relaunches (preserving corpus) for swap/dead, finalizes for bug/budget."""
     dirs = phase3_runner.get_trial_dirs(experiment_id, trial)
-    crashes_dir = dirs["crashes"]
+    # AFL writes crashes to <afl_out>/default/crashes as "id:...,sig:06,...,time:MS".
+    # dirs["crashes"] is the libFuzzer-era artifact dir and stays empty forever,
+    # and the old prefix filter ("crash-"/"oom-"/"timeout-") is libFuzzer naming,
+    # so this monitor could never see a crash. The baseline arm uses
+    # phase3_runner.monitor_trial, which reads the AFL location -- so the two arms
+    # disagreed and ONLY the online arm's time-to-bug was censored. That is the
+    # measurement the whole benchmark exists to compare, and the failure direction
+    # made optimization look like it destroyed bug-finding.
+    afl_crashes_dir = os.path.join(
+        dirs.get("afl_out") or os.path.join(dirs["base"], "afl_out"),
+        "default", "crashes")
     rec = state.trials[trial.trial_id]
     overall_start = rec["overall_start"]
     crash_times = rec["crash_times"]
     seen = rec["seen_crashes"]
 
     def scan():
-        if not os.path.isdir(crashes_dir):
-            return
-        for fn in os.listdir(crashes_dir):
-            if fn in seen or not fn.startswith(("crash-", "oom-", "timeout-")):
+        # AFL's `time:` is already CAMPAIGN-cumulative across relaunches: with
+        # AFL_AUTORESUME it restores the previous run_time rather than restarting
+        # at zero. Verified on this campaign -- an online trial relaunched at
+        # 07:46 reported run_time 25976s (7.2h) at 11:56, matching the
+        # never-relaunched baseline's 26096s to within the swap downtime. So no
+        # per-session offset is applied; adding one would overstate every online
+        # crash by hours, which is the same bias as censoring, just inverted.
+        for entry in afl.collect_crashes(afl_crashes_dir):
+            fn = entry["artifact"]
+            if fn in seen:
                 continue
             seen.add(fn)
             crash_times.append({
-                "timestamp_s": round(time.time() - overall_start, 2),
+                "timestamp_s": entry["timestamp_s"],
                 "artifact": fn,
-                "crash_type": phase3_runner.classify_crash(os.path.join(crashes_dir, fn)),
+                "crash_type": phase3_runner.classify_crash(
+                    os.path.join(afl_crashes_dir, fn)),
             })
 
     while True:
@@ -916,7 +1079,7 @@ def _monitor_online_trial(trial, experiment_id, duration, state: OnlineState):
         elapsed = time.time() - overall_start
         cause = classify_exit(swap_requested=state.swap_barrier.is_set(),
                               found_bug=found_bug, elapsed=elapsed, duration=duration)
-        if cause in ("bug_found", "budget_done"):
+        if cause == "budget_done":
             rec["state"] = cause
             _finalize_online_trial(trial, experiment_id, duration, overall_start, crash_times)
             return
@@ -992,6 +1155,105 @@ def _extract_online_target(entry, source_tree_root, baseline_bin_dir, poc_dir,
     return crashed, poc_path, issue, source_tree_root
 
 
+def _stage_online_seed_corpus(experiment_dir: str, bin_dir: str,
+                              fuzz_target: str) -> int:
+    """Unpack the target's bundled seed corpus into the layout phase 3 reads.
+
+    The zip only exists for projects whose build.sh produces one (wolfssl and
+    selinux here; libxml2 and libavc ship a dictionary instead), so the 1-byte
+    fallback is a legitimate outcome rather than an error -- but an EMPTY
+    directory is not: AFL aborts at startup on an empty -i.
+
+    Deliberately reads the zip out of the extracted /out rather than going through
+    phase2_setup.download_seed_corpus, whose ARVO branch needs the legacy arvo
+    module and whose build branch needs an oss-fuzz checkout. Neither exists on a
+    machine brought up by bootstrap_server.py; both would silently return zero
+    seeds and leave the fallback as the only input.
+
+    Returns the number of seed files staged.
+    """
+    corpus_root = os.path.join(experiment_dir, "seed_corpus")
+    build_dir = os.path.join(corpus_root, "build")
+    merged_dir = os.path.join(corpus_root, "merged")
+    os.makedirs(build_dir, exist_ok=True)
+
+    seed_zip = os.path.join(bin_dir, f"{fuzz_target}_seed_corpus.zip")
+    if os.path.isfile(seed_zip):
+        try:
+            with zipfile.ZipFile(seed_zip) as zf:
+                zf.extractall(build_dir)
+        except (zipfile.BadZipFile, OSError) as e:
+            logger.warning("online: could not unpack %s: %s", seed_zip, e)
+
+    staged = sum(len(files) for _r, _d, files in os.walk(build_dir))
+    if staged:
+        corpus_util.merge_corpus_dirs([build_dir], merged_dir)
+    corpus_util.ensure_fallback_seed(merged_dir)
+    logger.info("online: seed corpus for %s: %d bundled file(s)%s",
+                fuzz_target, staged, "" if staged else " (using 1-byte fallback)")
+    return staged
+
+
+def _build_afl_baseline(*, entry: dict, project_src_dir: str, baseline_bin_dir: str,
+                        fuzz_target: str, poc_path: str | None,
+                        profile_cpu: int | None) -> bool:
+    """Replace the extracted historical /out with a pinned AFL++ build of it.
+
+    Compiles the unmodified source in the prework image, which also drops
+    afl-fuzz and afl-showmap into the bin dir (OSS-Fuzz's compile_afl copies
+    ``afl-*`` into $OUT) -- the trials and the replay gate both run those from
+    the mounted /out.
+
+    Re-verifies the PoC afterwards. The `arvo` verdict from extraction only
+    proves the bug is in the HISTORICAL binary; this proves it survived the
+    toolchain change, which is the binary the campaign actually measures. A
+    target that fails here is excluded rather than patched around.
+    """
+    from prework.prework_build import rebuild_with_prework_image
+
+    project = entry["project"]
+    # Wipe first: `compile` writes into a bind-mounted /out without clearing it,
+    # so surviving libFuzzer siblings would sit next to the AFL build looking
+    # equally legitimate to anything that globs the directory.
+    shutil.rmtree(baseline_bin_dir, ignore_errors=True)
+    os.makedirs(baseline_bin_dir, exist_ok=True)
+
+    # counts=False: this build produces the binary BOTH arms start from, before
+    # any fuzzing begins. It is setup, not a cost the online arm pays and the
+    # baseline does not, so charging it as optimization CPU would overstate the
+    # very number the coverage plot is meant to show. Still recorded, because
+    # "how long before trials start" is worth being able to reconstruct.
+    with cpu_ledger.timed("baseline_afl_build", cores=1, counts=False) as info:
+        built = rebuild_with_prework_image(
+            entry=entry, source_dir=project_src_dir, out_dir=baseline_bin_dir,
+            capture_log=True, cpu=profile_cpu)
+        ok, log = built if isinstance(built, tuple) else (built, "")
+        info["ok"] = bool(ok)
+    if not ok:
+        logger.error("online: AFL baseline build failed for %s: %s",
+                     project, log[-600:])
+        return False
+    if not os.path.isfile(os.path.join(baseline_bin_dir, fuzz_target)):
+        logger.error("online: AFL baseline build produced no /out/%s for %s",
+                     fuzz_target, project)
+        return False
+
+    if poc_path and os.path.isfile(poc_path):
+        if not phase2_setup.verify_poc_crash(baseline_bin_dir, fuzz_target,
+                                             poc_path, cpu=profile_cpu,
+                                             image=prework_image_for(entry)):
+            logger.error("online: PoC does not reproduce on the AFL baseline for "
+                         "%s -- excluding this target", project)
+            return False
+        logger.info("online: AFL baseline reproduces the PoC for %s", project)
+
+    # This build happens BEFORE the tree is git-initialised, so without a clean
+    # its objects would land in the iter_00 commit and every later `git diff
+    # iter_00 HEAD` would carry object-file churn alongside the optimizer's edits.
+    phase2_setup._clean_build_artifacts(project_src_dir)
+    return True
+
+
 def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> bool:
     """Top-level online-optimization run for ONE target (LOCAL backend).
 
@@ -1018,6 +1280,19 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     optimized_bin_dir = os.path.join(experiment_dir, "optimized", "bin")
     poc_dir = os.path.join(experiment_dir, "poc")
 
+    _pcpu = os.environ.get("ONLINE_PROFILE_CPU") or getattr(config, "ONLINE_PROFILE_CPU", "")
+    profile_cpu = int(_pcpu) if str(_pcpu).strip() else max(
+        int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
+
+    # Point every CPU-ledger writer at one file for this target. Set in the
+    # environment (not passed down) because the broker serves the sandboxed agent
+    # from a separate host process and phase 2 runs several layers below here;
+    # both inherit it. Set before the baseline build rather than beside the
+    # RoundContext below, because recording starts at the first thing worth
+    # recording -- a ledger that only opens after setup silently drops it.
+    cpu_ledger.set_ledger_path(os.path.join(online_dir, "cpu_ledger.jsonl"))
+    cpu_ledger.set_round(project=project, iter_n=0)
+
     # 1. extract baseline bin + editable source + poc (n132 image OR classic gcr-ARVO)
     if os.path.isdir(source_tree_root):
         shutil.rmtree(source_tree_root, ignore_errors=True)
@@ -1032,6 +1307,42 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
         logger.error("online: baseline did not reproduce for %s", entry["cve"])
         return False
 
+    project_src_dir = str(phase2_setup._find_project_source(Path(source_root), project))
+
+    # 1a. Delete the repositories the extracted tree ships, before anything reads
+    # it. Two independent reasons, either sufficient:
+    #   * LEAK. /work/src is bind-mounted writable into the agent. libxml2's tree
+    #     carries origin/master 2308 commits PAST the vulnerable revision -- the
+    #     fix itself -- plus CVE-named tags; wolfssl's is 619 MB / 22364 commits.
+    #     The egress proxy blocks the network so the agent cannot look the bug up;
+    #     leaving this in hands it `git diff HEAD origin/master` instead.
+    #   * BUILD. wolfssl's autogen.sh sets WARNINGS="all,error" when it sees a
+    #     .git, and clang 18 warns where clang 12 did not, so every rebuild fails.
+    # Applied to the source ROOT: wolfssl's build copies sibling checkouts
+    # (wolfssh, wolf-ssl-ssh-fuzzers, fuzzing-headers) into its build dir.
+    tracked_git.strip_vcs_metadata(source_root)
+
+    # 1b. Seeds, harvested from the extracted /out BEFORE the AFL rebuild replaces
+    # it. Nothing else stages a seed corpus on this path, and AFL refuses to start
+    # on an empty -i directory, so without this every trial dies at calibration.
+    _stage_online_seed_corpus(experiment_dir, baseline_bin_dir, fuzz_target)
+
+    # 1c. Rebuild the UNMODIFIED source through the pinned prework image.
+    #
+    # The extracted /out is the historical ARVO build: libFuzzer-instrumented,
+    # built by whatever clang that target shipped, and carrying no afl-fuzz. The
+    # trials run `/out/afl-fuzz -- /out/<target>` out of this very directory, so
+    # keeping it would mean the baseline arm could not start at all -- and if it
+    # somehow did, it would be measuring a different engine and a different
+    # compiler from the online arm, which rebuilds through the prework image every
+    # round. Both arms must come out of the same pinned AFL++ v5.02c / LLVM 18
+    # toolchain or the comparison means nothing.
+    if not _build_afl_baseline(entry=entry, project_src_dir=project_src_dir,
+                               baseline_bin_dir=baseline_bin_dir,
+                               fuzz_target=fuzz_target, poc_path=poc_path,
+                               profile_cpu=profile_cpu):
+        return False
+
     # 2. iteration 0 = original baseline; seed the LIVE shared binary from it
     os.makedirs(optimized_bin_dir, exist_ok=True)
     shutil.copytree(baseline_bin_dir, optimized_bin_dir, dirs_exist_ok=True)
@@ -1040,14 +1351,11 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     shutil.copytree(baseline_bin_dir, iter0_bin, dirs_exist_ok=True)
 
     # 3. persistent cumulative source tree: git init + tag iter_00
-    project_src_dir = str(phase2_setup._find_project_source(Path(source_root), project))
     _git_init_baseline(project_src_dir)
     _commit_and_tag(project_src_dir, "iter_00")
 
-    rebuild_fn, wrapper_env_fn = _online_target_strategy(entry, fuzz_target, issue=issue)
-    _pcpu = os.environ.get("ONLINE_PROFILE_CPU") or getattr(config, "ONLINE_PROFILE_CPU", "")
-    profile_cpu = int(_pcpu) if str(_pcpu).strip() else max(
-        int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
+    rebuild_fn, wrapper_env_fn = _online_target_strategy(
+        entry, fuzz_target, issue=issue, profile_cpu=profile_cpu)
 
     ctx = RoundContext(
         entry=entry, experiment_id=experiment_id, experiment_dir=experiment_dir,
@@ -1093,5 +1401,30 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     for _ in as_completed(futures):
         pass
     executor.shutdown(wait=True)
+    _write_cpu_cost_summary(ctx)
     logger.info("online: run complete for %s (%d rounds attempted)", entry["cve"], ctx.iter_n)
     return True
+
+
+def _write_cpu_cost_summary(ctx: RoundContext) -> dict | None:
+    """Roll the raw ledger up into cpu_cost.json beside it.
+
+    Written at campaign end, and again after every round so a run inspected (or
+    killed) mid-campaign still has a readable summary. ``trial_cores`` is the
+    online arm's core count, which is what converts core-seconds into the
+    fuzzing wall-clock a coverage plot needs.
+    """
+    path = cpu_ledger.ledger_path()
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        summary = cpu_ledger.summarize(
+            cpu_ledger.load(path), trial_cores=len(ctx.online_trials) or None)
+        summary["project"] = ctx.project
+        summary["cve"] = ctx.entry.get("cve")
+        summary["profile_cpu"] = ctx.profile_cpu
+        _write_json(os.path.join(ctx.online_dir, "cpu_cost.json"), summary)
+        return summary
+    except Exception as e:  # noqa: BLE001 - accounting must never kill a run
+        logger.warning("cpu cost summary failed: %s", e)
+        return None

@@ -42,6 +42,8 @@ def _run(cmd, **kw):
 
 
 def _image_exists(image: str) -> bool:
+    if not shutil.which("docker"):
+        return False
     return _run(["docker", "image", "inspect", image]).returncode == 0
 
 
@@ -49,9 +51,12 @@ def check_prereqs() -> list[tuple[str, str, str]]:
     rows = []
     for tool in ("docker", "git", "python3"):
         rows.append((tool, OK if shutil.which(tool) else MISSING, ""))
-    d = _run(["docker", "info"])
-    rows.append(("docker daemon", OK if d.returncode == 0 else FAIL,
-                 "" if d.returncode == 0 else "cannot talk to the daemon"))
+    if not shutil.which("docker"):
+        rows.append(("docker daemon", MISSING, "docker is not installed"))
+    else:
+        d = _run(["docker", "info"])
+        rows.append(("docker daemon", OK if d.returncode == 0 else FAIL,
+                     "" if d.returncode == 0 else "cannot talk to the daemon"))
 
     cores = os.cpu_count() or 0
     import config
@@ -66,6 +71,40 @@ def check_prereqs() -> list[tuple[str, str, str]]:
         (egress.CREDENTIAL_STORE / "claude.json").is_file()
     rows.append(("optimizer credential", OK if have_cred else MISSING,
                  "" if have_cred else "run `claude` once to log in (Max plan is fine)"))
+
+    # The store SHADOWS the host credential: seed_store never re-seeds once a
+    # file exists, so a stub left there (a test that forgot to redirect it, a
+    # truncated write) silently authenticates nothing for the rest of the
+    # machine's life. The agent then exits "Not logged in" and the round is
+    # recorded as "no changes made" -- a real-looking negative result.
+    stub = []
+    for backend in egress.CREDENTIAL_FILES:
+        stored = egress.CREDENTIAL_STORE / f"{backend}.json"
+        if stored.is_file() and stored.stat().st_size < 200:
+            stub.append(str(stored))
+    rows.append((
+        "credential store is not a stub",
+        OK if not stub else FAIL,
+        "" if not stub else
+        f"{', '.join(stub)} is implausibly small; delete it and it re-seeds from "
+        "the host credential on the next run",
+    ))
+
+    # The optimization skill is NOT in this repo -- it lives in the agent's skill
+    # tree. Without it phase 2 cannot load replay_timing.py, so run_replay_speedup
+    # returns None and the gate rejects EVERY round: a campaign that burns its
+    # full budget and accepts nothing. Silent because run_replay_speedup catches
+    # its own failures by design, which is exactly why it is checked up front.
+    scripts = Path(getattr(config, "PHASE2_SKILL_SCRIPTS_DIR", ""))
+    needed = ("replay_timing.py", "build_corpus.py", "replay_fuzzer_profile.py")
+    missing = [n for n in needed if not (scripts / n).is_file()]
+    rows.append((
+        f"optimizer skill ({config.PHASE2_OPTIMIZER_SKILL})",
+        OK if not missing else MISSING,
+        "" if not missing else
+        f"missing {', '.join(missing)} under {scripts}; copy the skill tree from "
+        "a machine that has it -- it is not carried in this repo",
+    ))
     return rows
 
 

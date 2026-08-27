@@ -161,14 +161,54 @@ def wait_for_container(container_id: str, timeout: Optional[int] = None) -> int:
         return -1
 
 
-def get_container_logs(container_id: str) -> str:
-    """Get logs from a container."""
-    result = subprocess.run(
+def write_container_logs(container_id: str, dest_path: str) -> int:
+    """Stream a container's combined output straight to dest_path.
+
+    Returns the number of bytes written.
+
+    Never materializes the log in memory. A 24h AFL++ campaign writes several
+    GB to the console, and capturing that through a pipe costs three live
+    copies (communicate() joins the chunks, text=True decodes them, and
+    stdout + stderr concatenates the result). Nine trials finalizing at once
+    put 239 GiB behind that arithmetic and OOM-killed the Aug 10 run; the
+    kernel had 716 MB left when it fired. Handing docker an fd keeps the whole
+    thing at O(1) regardless of campaign length.
+    """
+    os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+    with open(dest_path, "wb") as f:
+        subprocess.run(
+            ["docker", "logs", container_id],
+            stdout=f,
+            stderr=subprocess.STDOUT,
+        )
+    try:
+        return os.path.getsize(dest_path)
+    except OSError:
+        return 0
+
+
+def get_container_logs(container_id: str, max_bytes: int = 1 << 20) -> str:
+    """Return at most max_bytes of a container's combined output.
+
+    Bounded on purpose: the unbounded version of this call is what exhausted
+    memory on Aug 10. Use write_container_logs() when the full log has to be
+    kept; use this only for probes where a truncated head is enough.
+    """
+    proc = subprocess.Popen(
         ["docker", "logs", container_id],
-        capture_output=True,
-        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
-    return result.stdout + result.stderr
+    try:
+        data = proc.stdout.read(max_bytes) or b""
+    finally:
+        proc.stdout.close()
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return data.decode("utf-8", errors="replace")
 
 
 def inspect_container_state(container_id: str) -> dict:
