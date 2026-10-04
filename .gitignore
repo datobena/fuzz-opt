@@ -44,3 +44,18 @@ manifest.json.bak-*
 
 # `results` is a symlink to machine-local bulk storage on this host
 results
+
+# Line-coverage replay artifacts (11 GB) and the FuzzBench AFL smoke tree (281 MB)
+.linecov/
+.fb_afl_test/
+
+# Per-project run-marker PID files
+.online_*.pid
+
+# Ad-hoc pre-change snapshots taken while editing (`.<file>.pre-<change>`)
+.*.pre-*
+*.bak
+*.cold-bak
+
+# FuzzBench seed testcases are corpus data, not target definitions
+prework/fuzzbench/*/testcases/
