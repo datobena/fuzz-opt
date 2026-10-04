@@ -133,7 +133,8 @@ def run_sandboxed_optimizer(
     *, source_dir: str, profile_dir: str, out_dir: str, corpus_dir: str,
     image: str, fuzz_target: str, project: str, prompt: str,
     cpu: int = 0, timeout: int | None = None, audit_log: str = "",
-    base_env: dict | None = None, harness: str = "",
+    base_env: dict | None = None, harness: str = "", model: str = "",
+    effort: str = "",
 ) -> dict:
     """Run one optimizer session confined to a container.
 
@@ -199,11 +200,17 @@ def run_sandboxed_optimizer(
     # The optimizer skill, if it is installed on this host. Derived from the same
     # config the benchmark loads replay_timing.py from, so the agent and the
     # replay gate can never end up on different versions of the methodology.
+    # Empty per-run dir for the CLI's session transcript. Created before the
+    # run so the bind mount does not have docker create it root-owned.
+    transcripts_dir = session_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+
     skill_dir, skill_name = _optimizer_skill_dir()
     cmd = build_agent_docker_command(
         image=AGENT_IMAGE, src=source_dir, profile=profile_dir, tools=tools,
         sock=sock_path, network=network, env=env,
         skill=skill_dir, skill_name=skill_name, harness=harness,
+        transcripts=str(transcripts_dir),
     )
     # Subscription OAuth: the credential is a FILE, mounted as a writable copy so
     # the CLI can refresh a short-lived access token without touching the host's.
@@ -233,6 +240,19 @@ def run_sandboxed_optimizer(
     # the only place this can be closed (leak-inventory item 5's sibling).
     cmd += ["claude", "-p", prompt, "--dangerously-skip-permissions",
             "--disallowedTools", "WebSearch", "WebFetch"]
+    # Pin the model here or the CLI resolves its own account default inside
+    # the container. This is the ONLY optimizer path that runs in production
+    # (PHASE2_SANDBOX defaults on); the --model flag in phase2_setup lives on
+    # the unconfined debug path, so without this the provenance record claims
+    # a pin that never reached the CLI, and a model-comparison experiment
+    # would silently run every arm on the same default.
+    if model:
+        cmd += ["--model", model]
+    # Effort is a real CLI flag (low|medium|high|xhigh|max). Pin it: on GSO the
+    # same model scored 33.33 at default and 41.18 at high, a swing bigger than
+    # a model generation, so leaving it unset makes runs incomparable.
+    if effort:
+        cmd += ["--effort", effort]
 
     logger.info("launching sandboxed optimizer for %s", project)
     try:
@@ -244,10 +264,18 @@ def run_sandboxed_optimizer(
             "stdout": r.stdout or "",
             "stderr": r.stderr or "",
             "timed_out": False,
+            "transcripts": sorted(str(f) for f in transcripts_dir.rglob("*.jsonl")),
+            "model_requested": model or "",
+            "effort_requested": effort or "",
         }
     except subprocess.TimeoutExpired:
         logger.warning("sandboxed optimizer timed out after %ss", timeout)
-        return {"ok": False, "stdout": "", "stderr": "", "timed_out": True}
+        return {
+            "ok": False, "stdout": "", "stderr": "", "timed_out": True,
+            "transcripts": sorted(str(f) for f in transcripts_dir.rglob("*.jsonl")),
+            "model_requested": model or "",
+            "effort_requested": effort or "",
+        }
     finally:
         # Fold any token refresh the session performed back into the store.
         # Skipping this means re-seeding from a stale credential next time, which

@@ -40,6 +40,9 @@ SOCK_MOUNT = "/run/broker.sock"
 # ~/.claude itself, which holds transcripts from prior runs on these targets.
 AGENT_HOME = "/home/agent"
 SKILLS_MOUNT = f"{AGENT_HOME}/.claude/skills"
+# The CLI writes one session JSONL per run under here: every assistant turn,
+# every tool_use and tool_result, and the model that served each turn.
+TRANSCRIPTS_MOUNT = f"{AGENT_HOME}/.claude/projects"
 HARNESS_MOUNT = f"{WORK_ROOT}/harness"
 
 # Only the variables the optimizer skill actually reads. Anything absent here is
@@ -101,7 +104,7 @@ def build_agent_env(base: dict) -> dict:
 def build_agent_docker_command(
     *, image: str, src: str, profile: str, tools: str, sock: str, network: str,
     env: dict, memory: str = "8g", cpus: str = "", skill: str = "",
-    skill_name: str = "", harness: str = "",
+    skill_name: str = "", harness: str = "", transcripts: str = "",
 ) -> list[str]:
     """`docker run` for the agent container. No socket, no host filesystem.
 
@@ -140,6 +143,16 @@ def build_agent_docker_command(
     if skill:
         name = skill_name or PurePosixPath(skill).name
         cmd += ["-v", f"{skill}:{SKILLS_MOUNT}/{name}:ro"]
+    if transcripts:
+        # Writable: this is where the CLI persists the session transcript,
+        # the only record of what the agent actually thought and ran --
+        # stdout carries just its closing summary.
+        #
+        # Mounted as an EMPTY per-run directory, never the host's
+        # ~/.claude/projects, which holds transcripts from prior runs naming
+        # these very bugs (leak-inventory item 10). Nothing prior is visible
+        # to the agent; only this run's record travels back out.
+        cmd += ["-v", f"{transcripts}:{TRANSCRIPTS_MOUNT}"]
     if harness:
         # OSS-Fuzz keeps the harness NEXT TO the project dir, not inside it, so
         # it falls outside the /work/src mount. Read-only: the prompt forbids

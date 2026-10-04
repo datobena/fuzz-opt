@@ -250,6 +250,36 @@ REFRESH_CMD = os.environ.get("SANDBOX_CREDENTIAL_REFRESH_CMD", 'claude -p "ok"')
 STAMP_REMAINING_SECS = int(os.environ.get("SANDBOX_REFRESH_STAMP_SECS", "60"))
 
 
+def _access_token(path) -> str:
+    """The access token STRING, or "" when absent/blank/unreadable."""
+    from pathlib import Path as _P
+    try:
+        blob = json.loads(_P(path).read_text())
+    except Exception:                                     # noqa: BLE001
+        return ""
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict) and "accessToken" in holder:
+            return str(holder.get("accessToken") or "")
+    return ""
+
+
+def _set_access_token(path, token: str) -> bool:
+    """Restore the access token STRING, preserving the rest of the file."""
+    from pathlib import Path as _P
+    path = _P(path)
+    try:
+        blob = json.loads(path.read_text())
+    except Exception:                                     # noqa: BLE001
+        return False
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict) and "accessToken" in holder:
+            holder["accessToken"] = token
+            path.write_text(json.dumps(blob))
+            os.chmod(path, 0o600)
+            return True
+    return False
+
+
 def access_token_remaining_secs(path) -> float:
     """Seconds of life left in a credential's ACCESS token; 0.0 if unreadable.
 
@@ -261,6 +291,17 @@ def access_token_remaining_secs(path) -> float:
         blob = json.loads(_P(path).read_text())
     except Exception:                                     # noqa: BLE001
         return 0.0
+    # A BLANK access token has no life left, however healthy expiresAt looks.
+    # A CLI whose refresh is rejected rewrites accessToken to "" and leaves the
+    # rest of the file intact, so the clock keeps reporting hours of life on a
+    # credential that authenticates nothing. That is what stranded all ten
+    # optimizers in online-24h-c1: every freshness check passed, every session
+    # got an empty token, and the only symptom was "Not logged in" 10x.
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict) and "accessToken" in holder:
+            if not str(holder.get("accessToken") or ""):
+                return 0.0
+            break
     for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
         if isinstance(holder, dict) and holder.get("expiresAt"):
             try:
@@ -268,6 +309,52 @@ def access_token_remaining_secs(path) -> float:
             except (TypeError, ValueError):
                 pass
     return 0.0
+
+
+def refresh_token_remaining_secs(path) -> float:
+    """Seconds of life left in a credential's REFRESH token; 0.0 if unreadable.
+
+    The companion to access_token_remaining_secs, and the one nothing checked.
+    The access token is short-lived by design and is refreshed transparently --
+    but ONLY while the refresh token is alive. Once the refresh token expires,
+    the CLI's startup refresh is rejected, it declares "Not logged in" and blanks
+    its own copy of the access token, even though that access token had not yet
+    expired.
+
+    That is not hypothetical: campaign online-24h-c1 launched at 22:06 with a
+    refresh token due to expire at 00:08. Preflight passed (the ACCESS token was
+    healthy), the 20 fuzzing trials ran fine for the full budget, and every one
+    of the 10 optimizers failed its first round at 00:24 -- 16 minutes after the
+    refresh token died. A campaign in that state still produces a complete-looking
+    result set in which the optimized arm never received a single optimization.
+    """
+    from pathlib import Path as _P
+    try:
+        blob = json.loads(_P(path).read_text())
+    except Exception:                                     # noqa: BLE001
+        return 0.0
+    for holder in (blob, blob.get("claudeAiOauth") or {}, blob.get("tokens") or {}):
+        if isinstance(holder, dict) and holder.get("refreshTokenExpiresAt"):
+            try:
+                return max(0.0, int(holder["refreshTokenExpiresAt"]) / 1000.0 - time.time())
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
+def credential_outlives(seconds: float) -> tuple[bool, float]:
+    """(ok, refresh_seconds_left) for the credential a campaign would actually use.
+
+    Checks the freshest of host and store, because stage_credentials seeds from
+    whichever is newer before every session.
+    """
+    from pathlib import Path as _P
+    best = 0.0
+    for cand in [p for p, _ in CREDENTIAL_FILES.values()] + \
+                [CREDENTIAL_STORE / f"{b}.json" for b in CREDENTIAL_FILES]:
+        if _P(cand).is_file():
+            best = max(best, refresh_token_remaining_secs(cand))
+    return (best >= seconds, best)
 
 
 # Sessions currently holding a staged access token. A refresh REVOKES the token
@@ -371,6 +458,14 @@ def _force_refresh_via_stamp(host_path) -> bool:
     """
     from pathlib import Path as _P
     original = None
+    # Capture the TOKEN too, not just the clock. A rejected refresh blanks
+    # accessToken in place; restoring only expiresAt then writes back an EMPTY
+    # token wearing a healthy future expiry -- a credential that passes every
+    # check downstream and authenticates nothing. That is exactly how
+    # online-24h-c1 lost all ten optimizers, and it also destroyed the
+    # operator's own host login, which this function's docstring promises it
+    # will not do.
+    original_token = _access_token(host_path)
     try:
         blob = json.loads(_P(host_path).read_text())
         for holder in (blob, blob.get("claudeAiOauth") or {},
@@ -394,6 +489,17 @@ def _force_refresh_via_stamp(host_path) -> bool:
 
     if access_token_remaining_secs(host_path) > STAMP_REMAINING_SECS + 30:
         return True
+    # Put the credential back EXACTLY as it was -- token first, then clock.
+    # Order matters only for readability; both must be restored or the "failed
+    # refresh writes nothing" guarantee is false.
+    if original_token and not _access_token(host_path):
+        _set_access_token(host_path, original_token)
+        logger.warning(
+            "the refresh attempt blanked the access token (the refresh token is "
+            "expired or revoked); restored the original token, which still has "
+            "%.2fh left. Run `claude` on the host to re-authenticate -- once "
+            "that access token expires there is no way to renew it.",
+            max(0.0, original / 1000.0 - time.time()) / 3600)
     _set_expires_at(host_path, original)      # put the clock back exactly
     return False
 

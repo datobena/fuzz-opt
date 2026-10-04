@@ -87,6 +87,11 @@ def _build_command(ctx: BrokerContext) -> list[str]:
         # synchronously. See phase3_runner for the full reasoning.
         "--ulimit", "core=0",
         "-e", "FUZZING_ENGINE=afl",
+        # FuzzBench build.sh scripts read $FUZZER_LIB (OSS-Fuzz exposes it as
+        # $LIB_FUZZING_ENGINE = /usr/lib/libFuzzingEngine.a for afl). Harmless for
+        # ARVO targets, which don't reference it.
+        "-e", "FUZZER_LIB=/usr/lib/libFuzzingEngine.a",
+        "-e", "FUZZER=afl",
         # Exclude the optimizer's INSERTED helpers from coverage instrumentation.
         # A coverage-guided fuzzer biases mutation toward inputs that reach new
         # edges, so helpers the skill adds shift the gradient away from the code
@@ -127,7 +132,17 @@ def _replay_command(ctx: BrokerContext) -> list[str]:
         "-v", f"{Path(ctx.corpus_dir).absolute()}:/corpus:ro",
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
         "export AFL_NO_AFFINITY=1 AFL_SKIP_CPUFREQ=1 "
-        "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 ASAN_OPTIONS=detect_leaks=0; "
+        "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 "
+        # symbolize=0: a sanitizer finding otherwise spawns llvm-symbolizer to
+        # turn addresses into file:line by parsing the binary's DWARF. Measured
+        # at 42-52% of a replay pass on assimp and PcapPlusPlus -- work no source
+        # fold can reduce, which dilutes every speedup ratio and adds variance
+        # (its cost scales with how many reports fire). Execution is unchanged:
+        # same code runs, same bugs detected, reports just carry raw addresses.
+        # Must stay identical to the profiler's env (replay_fuzzer_profile.py) or
+        # the hotspot ranking and this gate describe different workloads.
+        "ASAN_OPTIONS=detect_leaks=0:symbolize=0 "
+        "UBSAN_OPTIONS=symbolize=0 MSAN_OPTIONS=symbolize=0; "
         # -C (collect-coverage) is REQUIRED with -i <dir>. Without it afl-showmap
         # treats -o as a DIRECTORY to write one bitmap per input into, so
         # `-o /dev/null` aborts instantly with

@@ -90,6 +90,30 @@ def check_prereqs() -> list[tuple[str, str, str]]:
         "the host credential on the next run",
     ))
 
+    # The REFRESH token must outlive the campaign, not just the access token.
+    # The access token is short-lived and refreshed transparently -- but only
+    # while the refresh token is alive. When it dies mid-campaign the CLI's
+    # startup refresh is rejected, it reports "Not logged in" and blanks its own
+    # access token, and EVERY optimizer round fails from that moment on while
+    # the fuzzing trials keep running to the full budget. The result set looks
+    # complete; the optimized arm simply never got an optimization.
+    #
+    # online-24h-c1 launched with 2.0h of refresh token left on a 24h budget and
+    # lost all 10 optimizers at 00:08. Checked here because nothing else looks:
+    # access_token_remaining_secs reads expiresAt only, by design.
+    want_secs = float(os.environ.get("PREFLIGHT_CAMPAIGN_SECS",
+                                     getattr(config, "TRIAL_DURATION_SECS", 86400)))
+    cred_ok, refresh_left = egress.credential_outlives(want_secs)
+    rows.append((
+        "refresh token outlives the campaign",
+        OK if cred_ok else FAIL,
+        "" if cred_ok else
+        f"only {refresh_left/3600:.1f}h of refresh-token life left but the "
+        f"campaign needs {want_secs/3600:.1f}h; run `claude` on the host to "
+        f"re-authenticate BEFORE launching, or every optimizer round will fail "
+        f"once it expires while the trials keep fuzzing",
+    ))
+
     # The optimization skill is NOT in this repo -- it lives in the agent's skill
     # tree. Without it phase 2 cannot load replay_timing.py, so run_replay_speedup
     # returns None and the gate rejects EVERY round: a campaign that burns its
