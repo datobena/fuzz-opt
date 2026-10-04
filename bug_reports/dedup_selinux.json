@@ -1,0 +1,136 @@
+{
+  "selinux-CVE-2021-36085": {
+    "baseline": {
+      "artifacts_raw": 14,
+      "poc_crash": 13,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 1,
+      "unique_by_content": 13,
+      "unique_bugs_1frame": 1,
+      "unique_bugs_3frame": 1,
+      "bugs": [
+        {
+          "signature": "heap-use-after-free:cil_tree_children_destroy",
+          "artifacts": 13,
+          "trials": 2,
+          "first_seen_s": 7811.269,
+          "per_trial_first_s": {
+            "trial_00": 30095.299,
+            "trial_08": 7811.269
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-use-after-free:cil_tree_children_destroy<-cil_resolve_ast<-cil_compile",
+          "artifacts": 13,
+          "trials": 2,
+          "first_seen_s": 7811.269,
+          "per_trial_first_s": {
+            "trial_00": 30095.299,
+            "trial_08": 7811.269
+          }
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 170,
+      "poc_crash": 132,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 38,
+      "unique_by_content": 127,
+      "unique_bugs_1frame": 3,
+      "unique_bugs_3frame": 3,
+      "bugs": [
+        {
+          "signature": "heap-use-after-free:cil_tree_children_destroy",
+          "artifacts": 105,
+          "trials": 7,
+          "first_seen_s": 20437.848,
+          "per_trial_first_s": {
+            "trial_00": 26745.86,
+            "trial_01": 80917.07,
+            "trial_02": 20437.848,
+            "trial_03": 40156.757,
+            "trial_04": 26125.501,
+            "trial_05": 28064.299,
+            "trial_07": 22485.767
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:cil_post_fc_fill_data",
+          "artifacts": 26,
+          "trials": 9,
+          "first_seen_s": 12875.746,
+          "per_trial_first_s": {
+            "trial_00": 30789.056,
+            "trial_01": 21824.702,
+            "trial_02": 29167.999,
+            "trial_03": 12875.746,
+            "trial_04": 45535.404,
+            "trial_05": 39080.808,
+            "trial_06": 28839.254,
+            "trial_07": 28793.728,
+            "trial_08": 31244.022
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:cil_classorder_to_policydb",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 77303.665,
+          "per_trial_first_s": {
+            "trial_01": 77303.665
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-use-after-free:cil_tree_children_destroy<-cil_resolve_ast<-cil_compile",
+          "artifacts": 105,
+          "trials": 7,
+          "first_seen_s": 20437.848,
+          "per_trial_first_s": {
+            "trial_00": 26745.86,
+            "trial_01": 80917.07,
+            "trial_02": 20437.848,
+            "trial_03": 40156.757,
+            "trial_04": 26125.501,
+            "trial_05": 28064.299,
+            "trial_07": 22485.767
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:cil_post_fc_fill_data<-cil_post_filecon_compare<-qsort_r",
+          "artifacts": 26,
+          "trials": 9,
+          "first_seen_s": 12875.746,
+          "per_trial_first_s": {
+            "trial_00": 30789.056,
+            "trial_01": 21824.702,
+            "trial_02": 29167.999,
+            "trial_03": 12875.746,
+            "trial_04": 45535.404,
+            "trial_05": 39080.808,
+            "trial_06": 28839.254,
+            "trial_07": 28793.728,
+            "trial_08": 31244.022
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:cil_classorder_to_policydb<-__cil_policydb_init<-cil_binary_create_allocated_pdb",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 77303.665,
+          "per_trial_first_s": {
+            "trial_01": 77303.665
+          }
+        }
+      ]
+    }
+  }
+}

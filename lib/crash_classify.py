@@ -45,14 +45,41 @@ Two tiers of classification:
 from __future__ import annotations
 
 import os
+import logging
 import re
+import tempfile
+import shutil
 import subprocess
 
 # sha1("") — the empty input. libFuzzer writes crash-<this> at shutdown as a
 # boundary artifact on some targets; it is never a real find.
 EMPTY_INPUT_SHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
+logger = logging.getLogger(__name__)
+
 RUNNER_IMAGE = "gcr.io/oss-fuzz-base/base-runner"
+
+# Exit codes that mean the TOOLING failed, not the target. 125 = docker usage
+# error (bad -v spec, unknown flag); 126 = not executable; 127 = command or
+# shared library not found.
+_INFRA_EXIT_CODES = (125, 126, 127)
+
+# Replay options. alloc_dealloc_mismatch is OFF because our rebuilt targets link
+# libc++/libc++abi DYNAMICALLY while the upstream ARVO builds link them
+# statically. Dynamically there are two copies of the exception-teardown code:
+# libc++.so.1 allocates std::runtime_error's message with `operator new` and
+# libc++abi.so.1 frees it with `free`, so ASan reports alloc-dealloc-mismatch on
+# every caught C++ exception. It is a property of our linkage, not of the target
+# -- verified on assimp, where disabling this single option reconciles our build
+# with the upstream reference on 3042/3042 artifacts. OSS-Fuzz's own runner
+# (/bin/arvo) disables it for the same reason.
+ASAN_REPLAY_OPTIONS = "detect_leaks=0:alloc_dealloc_mismatch=0"
+
+# A sanitizer abort that produced no SUMMARY line (truncated output, or a
+# non-ASan abort such as an assertion). Distinguishes a real abort from a docker
+# failure, which prints neither.
+_SANITIZER_ABORT_RE = re.compile(
+    r"ERROR: \w*Sanitizer|libFuzzer: deadly signal|AddressSanitizer:DEADLYSIGNAL")
 
 
 # --------------------------------------------------------------------------- #
@@ -173,23 +200,43 @@ def verify_crash_reproduces(
     """
     if not (os.path.isfile(artifact_path) and os.path.isdir(out_dir)):
         return False, ""
-    cmd = [
-        "docker", "run", "--rm", "--privileged",
-        "-v", f"{os.path.abspath(out_dir)}:/out:ro",
-        "-v", f"{os.path.abspath(artifact_path)}:/testcase:ro",
-        image, "/bin/bash", "-lc",
-        f"export ASAN_OPTIONS=detect_leaks=0; /out/{fuzz_target} /testcase",
-    ]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return False, "timeout"
+    # Stage the artifact under a neutral name. AFL writes `id:000000,sig:06,...`
+    # and archives crash dirs as `crashes.<ts>` with colons in the timestamp;
+    # docker parses colons in a -v spec as field separators, so mounting either
+    # the file OR its parent fails with "too many colons", exit 125 -- before the
+    # container is even created. Mounting a clean temp dir is the only safe form.
+    with tempfile.TemporaryDirectory(prefix="verifycrash-") as _tmp:
+        staged = os.path.join(_tmp, "testcase")
+        shutil.copyfile(artifact_path, staged)
+        cmd = [
+            "docker", "run", "--rm", "--privileged",
+            "-v", f"{os.path.abspath(out_dir)}:/out:ro",
+            "-v", f"{_tmp}:/tc:ro",
+            image, "/bin/bash", "-lc",
+            f"export ASAN_OPTIONS={ASAN_REPLAY_OPTIONS}; /out/{fuzz_target} /tc/testcase",
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               errors="replace", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, "timeout"
     blob = (r.stdout or "") + (r.stderr or "")
     m = _SUMMARY_RE.search(blob)
     detected = m.group(1).strip() if m else ""
-    # A sanitizer crash exits non-zero and prints a SUMMARY line.
-    crashed = bool(detected) or r.returncode not in (0, None)
+    # A non-zero exit is NOT evidence of a crash: this subprocess is `docker`,
+    # not the target. Docker's own usage errors (125), a missing image (125/127),
+    # and a binary that cannot load its shared libs (127 -- base-runner has no
+    # libc++.so.1, which every rebuilt target needs) all exit non-zero without
+    # ever running the input. Treating those as "reproduced" made this function
+    # return True for ANY artifact, which is worse than returning nothing: it is
+    # the gold-standard tier, so it silently rubber-stamped whatever it was fed.
+    # Fail CLOSED -- require positive evidence the sanitizer fired.
+    if r.returncode in _INFRA_EXIT_CODES and not detected:
+        logger.warning(
+            "verify_crash_reproduces: infrastructure failure (exit %s), not a crash: %s",
+            r.returncode, blob.strip().splitlines()[0][:160] if blob.strip() else "no output")
+        return False, ""
+    crashed = bool(detected) or _SANITIZER_ABORT_RE.search(blob) is not None
     if not crashed:
         return False, detected
     if expected_signature:

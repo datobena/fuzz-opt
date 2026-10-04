@@ -1,0 +1,226 @@
+{
+  "assimp-arvo-24463": {
+    "baseline": {
+      "artifacts_raw": 3042,
+      "poc_crash": 58,
+      "assert_aborts": 933,
+      "assert_trials": 9,
+      "assert_sites": {
+        "RemoveRedundantMaterials.cpp:175": 933
+      },
+      "non_reproducing": 2051,
+      "unique_by_content": 44,
+      "unique_bugs_1frame": 3,
+      "unique_bugs_3frame": 3,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:Assimp::IOStreamBuffer",
+          "artifacts": 49,
+          "trials": 9,
+          "first_seen_s": 5.333,
+          "per_trial_first_s": {
+            "trial_00": 12.606,
+            "trial_01": 5.393,
+            "trial_02": 5.443,
+            "trial_03": 10840.886,
+            "trial_04": 17.621,
+            "trial_05": 10.687,
+            "trial_06": 5.58,
+            "trial_07": 5.333,
+            "trial_08": 10796.467
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileImporter::createVertexArray",
+          "artifacts": 5,
+          "trials": 3,
+          "first_seen_s": 6617.898,
+          "per_trial_first_s": {
+            "trial_05": 10327.935,
+            "trial_07": 6617.898,
+            "trial_08": 8788.243
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileParser::getFace",
+          "artifacts": 4,
+          "trials": 1,
+          "first_seen_s": 2369.369,
+          "per_trial_first_s": {
+            "trial_02": 2369.369
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-buffer-overflow:Assimp::IOStreamBuffer<-Assimp::ObjFileParser::parseFile<-Assimp::ObjFileParser::ObjFileParser",
+          "artifacts": 49,
+          "trials": 9,
+          "first_seen_s": 5.333,
+          "per_trial_first_s": {
+            "trial_00": 12.606,
+            "trial_01": 5.393,
+            "trial_02": 5.443,
+            "trial_03": 10840.886,
+            "trial_04": 17.621,
+            "trial_05": 10.687,
+            "trial_06": 5.58,
+            "trial_07": 5.333,
+            "trial_08": 10796.467
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileImporter::createVertexArray<-Assimp::ObjFileImporter::createTopology<-Assimp::ObjFileImporter::createNodes",
+          "artifacts": 5,
+          "trials": 3,
+          "first_seen_s": 6617.898,
+          "per_trial_first_s": {
+            "trial_05": 10327.935,
+            "trial_07": 6617.898,
+            "trial_08": 8788.243
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileParser::getFace<-Assimp::ObjFileParser::parseFile<-Assimp::ObjFileParser::ObjFileParser",
+          "artifacts": 4,
+          "trials": 1,
+          "first_seen_s": 2369.369,
+          "per_trial_first_s": {
+            "trial_02": 2369.369
+          }
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 5079,
+      "poc_crash": 81,
+      "assert_aborts": 1204,
+      "assert_trials": 9,
+      "assert_sites": {
+        "RemoveRedundantMaterials.cpp:175": 1204
+      },
+      "non_reproducing": 3794,
+      "unique_by_content": 81,
+      "unique_bugs_1frame": 4,
+      "unique_bugs_3frame": 4,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileImporter::createVertexArray",
+          "artifacts": 45,
+          "trials": 9,
+          "first_seen_s": 3417.405,
+          "per_trial_first_s": {
+            "trial_00": 9149.759,
+            "trial_01": 7079.152,
+            "trial_02": 8505.653,
+            "trial_03": 40054.781,
+            "trial_04": 34723.047,
+            "trial_05": 11648.09,
+            "trial_06": 34796.308,
+            "trial_07": 3417.405,
+            "trial_08": 39284.031
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::IOStreamBuffer",
+          "artifacts": 23,
+          "trials": 9,
+          "first_seen_s": 1.163,
+          "per_trial_first_s": {
+            "trial_00": 1.163,
+            "trial_01": 6.711,
+            "trial_02": 18880.195,
+            "trial_03": 3.758,
+            "trial_04": 18887.208,
+            "trial_05": 34822.144,
+            "trial_06": 35271.064,
+            "trial_07": 4.359,
+            "trial_08": 103.887
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileParser::getFace",
+          "artifacts": 8,
+          "trials": 5,
+          "first_seen_s": 4901.264,
+          "per_trial_first_s": {
+            "trial_02": 53926.562,
+            "trial_03": 36359.848,
+            "trial_04": 4901.264,
+            "trial_06": 65409.81,
+            "trial_08": 47493.469
+          }
+        },
+        {
+          "signature": "heap-use-after-free:Assimp::ObjFileImporter::createVertexArray",
+          "artifacts": 5,
+          "trials": 2,
+          "first_seen_s": 14482.239,
+          "per_trial_first_s": {
+            "trial_02": 14482.239,
+            "trial_04": 34723.27
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileImporter::createVertexArray<-Assimp::ObjFileImporter::createTopology<-Assimp::ObjFileImporter::createNodes",
+          "artifacts": 45,
+          "trials": 9,
+          "first_seen_s": 3417.405,
+          "per_trial_first_s": {
+            "trial_00": 9149.759,
+            "trial_01": 7079.152,
+            "trial_02": 8505.653,
+            "trial_03": 40054.781,
+            "trial_04": 34723.047,
+            "trial_05": 11648.09,
+            "trial_06": 34796.308,
+            "trial_07": 3417.405,
+            "trial_08": 39284.031
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::IOStreamBuffer<-Assimp::ObjFileParser::parseFile<-Assimp::ObjFileParser::ObjFileParser",
+          "artifacts": 23,
+          "trials": 9,
+          "first_seen_s": 1.163,
+          "per_trial_first_s": {
+            "trial_00": 1.163,
+            "trial_01": 6.711,
+            "trial_02": 18880.195,
+            "trial_03": 3.758,
+            "trial_04": 18887.208,
+            "trial_05": 34822.144,
+            "trial_06": 35271.064,
+            "trial_07": 4.359,
+            "trial_08": 103.887
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:Assimp::ObjFileParser::getFace<-Assimp::ObjFileParser::parseFile<-Assimp::ObjFileParser::ObjFileParser",
+          "artifacts": 8,
+          "trials": 5,
+          "first_seen_s": 4901.264,
+          "per_trial_first_s": {
+            "trial_02": 53926.562,
+            "trial_03": 36359.848,
+            "trial_04": 4901.264,
+            "trial_06": 65409.81,
+            "trial_08": 47493.469
+          }
+        },
+        {
+          "signature": "heap-use-after-free:Assimp::ObjFileImporter::createVertexArray<-Assimp::ObjFileImporter::createTopology<-Assimp::ObjFileImporter::createNodes",
+          "artifacts": 5,
+          "trials": 2,
+          "first_seen_s": 14482.239,
+          "per_trial_first_s": {
+            "trial_02": 14482.239,
+            "trial_04": 34723.27
+          }
+        }
+      ]
+    }
+  }
+}

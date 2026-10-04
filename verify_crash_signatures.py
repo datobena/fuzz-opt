@@ -40,8 +40,9 @@ from lib import afl, crash_classify
 from prework.prework_build import prework_image_for
 
 _ASAN = re.compile(r"ERROR: AddressSanitizer: ([a-z-]+)")
-_FRAME = re.compile(r"#\d+ 0x[0-9a-f]+ in ([A-Za-z_][A-Za-z0-9_]*)")
-_RUNTIME = ("__asan", "__sanitizer", "__interceptor", "__lsan")
+_FRAME = re.compile(r"#\d+ 0x[0-9a-f]+ in ([A-Za-z_][A-Za-z0-9_:]*)")
+_RUNTIME = ("__asan", "__sanitizer", "__interceptor", "__lsan", "operator new",
+            "malloc", "free", "realloc", "calloc")
 
 
 def signature(out: str) -> str | None:
@@ -70,7 +71,16 @@ def replay(image: str, bin_dir: Path, fuzz_target: str, testcase: Path,
         staged = Path(tmp) / "tc"
         shutil.copyfile(testcase, staged)
         cmd = ["docker", "run", "--rm", "--privileged", "--cpuset-cpus", str(cpu),
-               "-e", "ASAN_OPTIONS=detect_leaks=0",
+               # alloc_dealloc_mismatch OFF: our targets link libc++/libc++abi
+               # DYNAMICALLY while upstream ARVO links them statically. With two
+               # copies of the teardown code, libc++.so.1 allocates
+               # std::runtime_error's message with `operator new` and
+               # libc++abi.so.1 frees it with `free`, so EVERY caught C++
+               # exception reports alloc-dealloc-mismatch. It is a property of
+               # our linkage, not the target: disabling this one option
+               # reconciles our assimp build with the upstream reference on
+               # 3042/3042 artifacts, and OSS-Fuzz's own runner disables it too.
+               "-e", "ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0",
                "-v", f"{bin_dir.absolute()}:/out:ro",
                "-v", f"{staged}:/tc:ro",
                "--entrypoint", "/bin/bash", image, "-lc",
@@ -81,6 +91,24 @@ def replay(image: str, bin_dir: Path, fuzz_target: str, testcase: Path,
         except subprocess.TimeoutExpired:
             return ""
     return (r.stdout or "") + (r.stderr or "")
+
+
+def trial_online_dir(campaign_online: Path, trial_name: str) -> Path:
+    """This trial's own online dir, or the campaign one for legacy layouts.
+
+    Under the per-trial-optimizer design each optimized trial has its own
+    optimizer, its own swap timeline and its own iter_NN/bin snapshots at
+    ``optimized/online/trials/trial_XX``. Reading the campaign-level dir there
+    would resolve a crash against ANOTHER optimizer's binary -- silently, and
+    producing exactly the mislabelled "does not reproduce" verdicts that the
+    live_binary field exists to prevent.
+    """
+    m = re.search(r"trial_(\d+)", str(trial_name))
+    if m:
+        d = Path(campaign_online) / "trials" / f"trial_{int(m.group(1)):02d}"
+        if d.is_dir():
+            return d
+    return Path(campaign_online)
 
 
 def live_binary(online_dir: Path, trial_start: float, crash_t: float,
@@ -167,8 +195,10 @@ def main() -> int:
                     if path is None:
                         continue
                     if arm == "optimized":
-                        b, label = live_binary(online_dir, meta.get("start_time", 0),
-                                               a["timestamp_s"], baseline_bin)
+                        b, label = live_binary(
+                            trial_online_dir(online_dir, trial.name),
+                            meta.get("start_time", 0),
+                            a["timestamp_s"], baseline_bin)
                     else:
                         b, label = baseline_bin, "baseline"
                     sig = signature(replay(image, b, fuzz_target, path, args.cpu))

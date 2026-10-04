@@ -23,8 +23,12 @@ import argparse
 import collections
 import json
 import os
+import re
+from pathlib import Path
+import glob
 
 import config
+from prework.prework_build import prework_image_for
 import phase3_k8s as p3
 from lib import crash_classify as cc
 
@@ -49,6 +53,29 @@ def _trial_records(exp):
         project, variant = parts[0], parts[1]
         cutoff = r.get("max_total_time") or config.TRIAL_DURATION_SECS
         yield project, variant, name, r.get("crash_times") or [], cutoff, exp_dir
+
+
+def _locate_artifact(trial_dir: str, name: str) -> str | None:
+    """Absolute path of one crash artifact under either crash layout."""
+    p = os.path.join(trial_dir, "crashes", name)
+    if os.path.isfile(p):
+        return p
+    base = os.path.join(trial_dir, "afl_out", "default")
+    for d in sorted(glob.glob(os.path.join(base, "crashes*"))):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _target_image(project: str) -> str:
+    """Prework image for a project, falling back to the base runner."""
+    try:
+        entry = next(e for e in json.loads(Path(config.MANIFEST_PATH).read_text())
+                     if e["project"] == project)
+        return prework_image_for(entry)
+    except Exception:  # noqa: BLE001 - a verification tool must not die on lookup
+        return cc.RUNNER_IMAGE
 
 
 def _find_trial_dir(exp_dir, project, variant, trial_name):
@@ -96,19 +123,40 @@ def main():
             tdir, key = _find_trial_dir(exp_dir, project, variant, name)
             if not tdir:
                 continue
-            out_dir = os.path.join(exp_dir, key, variant, "bin")
+            # Per-trial design: each optimized trial owns bin_<tid>; only the
+            # baseline arm still shares one bin. Falling back to the shared path
+            # keeps legacy (b1..b6) experiments readable.
+            # Trial id comes from the trial NAME ("<proj>-<cve>-<variant>-trial_07"),
+            # the only identifier available on this path.
+            _m = re.search(r"trial_(\d+)$", name)
+            out_dir = ""
+            if _m:
+                out_dir = os.path.join(exp_dir, key, variant, f"bin_{int(_m.group(1)):02d}")
+            if not out_dir or not os.path.isdir(out_dir):
+                out_dir = os.path.join(exp_dir, key, variant, "bin")
             # verify the earliest real-crash artifact
             cands = sorted((e for e in cts if cc.is_target_bug_find(e, cutoff)),
                            key=lambda e: e["timestamp_s"])
             if not cands:
                 continue
             gold[k]["candidates"] += 1
-            art = os.path.join(tdir, "crashes", cands[0]["artifact"])
+            # AFL writes crashes under afl_out/default/crashes, and ARCHIVES that
+            # dir to crashes.<ts> on every resume -- the libFuzzer-era
+            # <trial>/crashes/ path is empty for every AFL run, so this silently
+            # verified nothing. Search both layouts.
+            art = _locate_artifact(tdir, cands[0]["artifact"])
+            if not art:
+                gold[k]["no_repro"] += 1
+                continue
             # expected_signature=None -> returns (crashed_at_all, detected_signature);
             # we bucket the match ourselves so non-repro vs wrong-signature are distinct.
+            # The target's own prework image, NOT base-runner: every rebuilt
+            # binary links libc++.so.1 dynamically and base-runner does not ship
+            # it, so the binary fails to load (exit 127) and nothing is verified.
             crashed, detected = cc.verify_crash_reproduces(
                 art, out_dir, ftgt.get(project, ""),
-                expected_signature=None, timeout=a.timeout)
+                expected_signature=None, timeout=a.timeout,
+                image=_target_image(project))
             if not crashed:
                 gold[k]["no_repro"] += 1
                 continue

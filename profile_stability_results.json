@@ -1,0 +1,439 @@
+{
+  "libxml2": {
+    "pool": 4133,
+    "ladder": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      4133
+    ],
+    "epsilon": 0.1,
+    "repeats": 3,
+    "curve": [
+      {
+        "n": 1,
+        "tv_median": 0.8990289461371698,
+        "tv_all": [
+          0.899,
+          0.8583,
+          0.9682
+        ],
+        "topk_overlap_median": 0.1,
+        "spearman_median": -0.5,
+        "secs": 63.5
+      },
+      {
+        "n": 2,
+        "tv_median": 0.9299516908212561,
+        "tv_all": [
+          0.7606,
+          0.9898,
+          0.93
+        ],
+        "topk_overlap_median": 0.1,
+        "spearman_median": 0.5,
+        "secs": 30.8
+      },
+      {
+        "n": 4,
+        "tv_median": 0.8944778578170174,
+        "tv_all": [
+          0.8945,
+          0.8943,
+          0.9106
+        ],
+        "topk_overlap_median": 0.2,
+        "spearman_median": -0.5,
+        "secs": 42.0
+      },
+      {
+        "n": 8,
+        "tv_median": 0.8321716515866382,
+        "tv_all": [
+          0.8531,
+          0.8322,
+          0.8094
+        ],
+        "topk_overlap_median": 0.2,
+        "spearman_median": 0.1786,
+        "secs": 68.3
+      },
+      {
+        "n": 16,
+        "tv_median": 0.8648731281116159,
+        "tv_all": [
+          0.8434,
+          0.9313,
+          0.8649
+        ],
+        "topk_overlap_median": 0.1,
+        "spearman_median": -0.5,
+        "secs": 39.7
+      },
+      {
+        "n": 32,
+        "tv_median": 0.8580299921376745,
+        "tv_all": [
+          0.8258,
+          0.858,
+          0.8816
+        ],
+        "topk_overlap_median": 0.1,
+        "spearman_median": -0.5,
+        "secs": 33.6
+      },
+      {
+        "n": 64,
+        "tv_median": 0.8570898982721531,
+        "tv_all": [
+          0.8489,
+          0.9411,
+          0.8571
+        ],
+        "topk_overlap_median": 0.1,
+        "spearman_median": -0.2,
+        "secs": 35.8
+      },
+      {
+        "n": 128,
+        "tv_median": 0.8742000069645489,
+        "tv_all": [
+          0.8742,
+          0.8681,
+          0.9257
+        ],
+        "topk_overlap_median": 0.1,
+        "spearman_median": -0.5,
+        "secs": 35.9
+      },
+      {
+        "n": 256,
+        "tv_median": 0.8800386119489628,
+        "tv_all": [
+          0.88,
+          0.8359,
+          0.8886
+        ],
+        "topk_overlap_median": 0.1,
+        "spearman_median": -0.5,
+        "secs": 38.7
+      },
+      {
+        "n": 512,
+        "tv_median": 0.7267228091279232,
+        "tv_all": [
+          0.7267,
+          0.8826,
+          0.34
+        ],
+        "topk_overlap_median": 0.3,
+        "spearman_median": 0.4524,
+        "secs": 144.5
+      },
+      {
+        "n": 1024,
+        "tv_median": 0.4057332322635646,
+        "tv_all": [
+          0.4057,
+          0.7285,
+          0.3652
+        ],
+        "topk_overlap_median": 0.5,
+        "spearman_median": 1.0,
+        "secs": 92.9
+      },
+      {
+        "n": 2048,
+        "tv_median": 0.33266159155900327,
+        "tv_all": [
+          0.3327,
+          0.3526,
+          0.233
+        ],
+        "topk_overlap_median": 0.5,
+        "spearman_median": 1.0,
+        "secs": 104.1
+      },
+      {
+        "n": 2304,
+        "tv_median": 0.34488417383916714,
+        "tv_all": [
+          0.2232,
+          0.3449,
+          0.8292
+        ],
+        "topk_overlap_median": 0.5,
+        "spearman_median": 1.0,
+        "secs": null,
+        "refine": true
+      },
+      {
+        "n": 2560,
+        "tv_median": 0.041770278413389456,
+        "tv_all": [
+          0.2272,
+          0.0315,
+          0.0418
+        ],
+        "topk_overlap_median": 1.0,
+        "spearman_median": 0.9795,
+        "secs": null,
+        "refine": true
+      },
+      {
+        "n": 3072,
+        "tv_median": 0.03453718053410679,
+        "tv_all": [
+          0.0345,
+          0.0343,
+          0.2132
+        ],
+        "topk_overlap_median": 1.0,
+        "spearman_median": 0.9977,
+        "secs": null,
+        "refine": true
+      },
+      {
+        "n": 4096,
+        "tv_median": 0.01586141995225656,
+        "tv_all": [
+          0.0159,
+          0.0279,
+          0.0074
+        ],
+        "topk_overlap_median": 1.0,
+        "spearman_median": 0.9913,
+        "secs": 79.5
+      },
+      {
+        "n": 4133,
+        "tv_median": 0.009845768730045834,
+        "tv_all": [
+          0.0058,
+          0.029,
+          0.0098
+        ],
+        "topk_overlap_median": 1.0,
+        "spearman_median": 0.9913,
+        "secs": 76.1
+      }
+    ],
+    "n_star": 2560,
+    "reference_top": [
+      [
+        "xmlStrncat",
+        22.74
+      ],
+      [
+        "xmlStrdup",
+        8.63
+      ],
+      [
+        "xmlStrlen",
+        6.86
+      ],
+      [
+        "xmlStringLenDecodeEntities",
+        3.87
+      ],
+      [
+        "xmlStringCurrentChar",
+        3.79
+      ],
+      [
+        "xmlHashLookup3",
+        1.17
+      ],
+      [
+        "xmlParseStringName",
+        1.12
+      ],
+      [
+        "xmlStrEqual",
+        0.89
+      ],
+      [
+        "xmlIsNameChar",
+        0.89
+      ],
+      [
+        "xmlStrchr",
+        0.73
+      ]
+    ],
+    "fuzz_target": "libxml2_xml_read_memory_fuzzer"
+  },
+  "yara": {
+    "pool": 378,
+    "ladder": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128,
+      256,
+      378
+    ],
+    "epsilon": 0.1,
+    "repeats": 3,
+    "curve": [
+      {
+        "n": 1,
+        "tv_median": 0.10188085156139078,
+        "tv_all": [
+          0.2098,
+          0.061,
+          0.1019
+        ],
+        "topk_overlap_median": 0.8333333333333334,
+        "spearman_median": 0.9,
+        "secs": 21.5
+      },
+      {
+        "n": 2,
+        "tv_median": 0.08919023702975411,
+        "tv_all": [
+          0.0892,
+          0.1029,
+          0.0757
+        ],
+        "topk_overlap_median": 0.6666666666666666,
+        "spearman_median": 1.0,
+        "secs": 21.4
+      },
+      {
+        "n": 4,
+        "tv_median": 0.08231058878824044,
+        "tv_all": [
+          0.0823,
+          0.091,
+          0.0397
+        ],
+        "topk_overlap_median": 0.8,
+        "spearman_median": 0.9,
+        "secs": 21.0
+      },
+      {
+        "n": 8,
+        "tv_median": 0.04596627401539718,
+        "tv_all": [
+          0.0565,
+          0.046,
+          0.0245
+        ],
+        "topk_overlap_median": 0.8333333333333334,
+        "spearman_median": 1.0,
+        "secs": 22.8
+      },
+      {
+        "n": 16,
+        "tv_median": 0.061950537487613186,
+        "tv_all": [
+          0.062,
+          0.0691,
+          0.0517
+        ],
+        "topk_overlap_median": 0.6666666666666666,
+        "spearman_median": 1.0,
+        "secs": 21.9
+      },
+      {
+        "n": 32,
+        "tv_median": 0.02199888105043469,
+        "tv_all": [
+          0.0142,
+          0.0322,
+          0.022
+        ],
+        "topk_overlap_median": 1.0,
+        "spearman_median": 1.0,
+        "secs": 21.9
+      },
+      {
+        "n": 64,
+        "tv_median": 0.023851590106007122,
+        "tv_all": [
+          0.0239,
+          0.0155,
+          0.0269
+        ],
+        "topk_overlap_median": 0.8333333333333334,
+        "spearman_median": 1.0,
+        "secs": 21.1
+      },
+      {
+        "n": 128,
+        "tv_median": 0.02688181380959645,
+        "tv_all": [
+          0.0269,
+          0.0344,
+          0.0055
+        ],
+        "topk_overlap_median": 1.0,
+        "spearman_median": 1.0,
+        "secs": 21.9
+      },
+      {
+        "n": 256,
+        "tv_median": 0.029363847605015852,
+        "tv_all": [
+          0.0268,
+          0.0316,
+          0.0294
+        ],
+        "topk_overlap_median": 0.8333333333333334,
+        "spearman_median": 1.0,
+        "secs": 21.1
+      },
+      {
+        "n": 378,
+        "tv_median": 0.007193023492931761,
+        "tv_all": [
+          0.0087,
+          0.0028,
+          0.0072
+        ],
+        "topk_overlap_median": 1.0,
+        "spearman_median": 1.0,
+        "secs": 22.5
+      }
+    ],
+    "n_star": 2,
+    "reference_top": [
+      [
+        "_yr_object_lookup",
+        9.56
+      ],
+      [
+        "yr_object_create",
+        6.52
+      ],
+      [
+        "_yr_rules_scan_mem_block",
+        4.79
+      ],
+      [
+        "yr_object_function_create",
+        0.93
+      ],
+      [
+        "yr_object_copy",
+        0.58
+      ]
+    ],
+    "fuzz_target": "pe_fuzzer"
+  }
+}

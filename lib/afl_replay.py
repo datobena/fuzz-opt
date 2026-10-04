@@ -89,6 +89,15 @@ def measure_binary(
 
     return {
         "median_time_s": statistics.median(times),
+        # Keep the raw repeats, not just the median. The spread across repeats is
+        # the target's own measurement noise, and a fold accepted at 1.03x when
+        # the noise floor is wider than that is not a measured improvement --
+        # PcapPlusPlus's optimizer discovered a 6.6% build-to-build spread by
+        # hand, which retroactively explained two campaigns of null results.
+        # A few floats per round; nothing else can reconstruct this later.
+        "time_spread_pct": (round(100.0 * (max(times) - min(times))
+                                  / statistics.median(times), 3)
+                            if times and statistics.median(times) else None),
         "executed_units": units,
         "partial": False,
         "times_s": times,

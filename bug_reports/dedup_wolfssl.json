@@ -1,0 +1,98 @@
+{
+  "wolfssl-arvo-26567": {
+    "baseline": {
+      "artifacts_raw": 4,
+      "poc_crash": 4,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 0,
+      "unique_by_content": 4,
+      "unique_bugs_1frame": 1,
+      "unique_bugs_3frame": 1,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:RsaPad_PSS",
+          "artifacts": 4,
+          "trials": 4,
+          "first_seen_s": 308.166,
+          "per_trial_first_s": {
+            "trial_00": 308.166,
+            "trial_02": 45492.421,
+            "trial_07": 5594.513,
+            "trial_08": 4615.161
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-buffer-overflow:RsaPad_PSS<-wc_RsaPad_ex<-RsaPublicEncryptEx",
+          "artifacts": 4,
+          "trials": 4,
+          "first_seen_s": 308.166,
+          "per_trial_first_s": {
+            "trial_00": 308.166,
+            "trial_02": 45492.421,
+            "trial_07": 5594.513,
+            "trial_08": 4615.161
+          }
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 20,
+      "poc_crash": 16,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 4,
+      "unique_by_content": 16,
+      "unique_bugs_1frame": 2,
+      "unique_bugs_3frame": 2,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:RsaPad_PSS",
+          "artifacts": 14,
+          "trials": 2,
+          "first_seen_s": 515.2,
+          "per_trial_first_s": {
+            "trial_01": 7832.781,
+            "trial_07": 515.2
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:fp_div",
+          "artifacts": 2,
+          "trials": 2,
+          "first_seen_s": 76511.494,
+          "per_trial_first_s": {
+            "trial_02": 76962.322,
+            "trial_08": 76511.494
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-buffer-overflow:RsaPad_PSS<-wc_RsaPad_ex<-RsaPublicEncryptEx",
+          "artifacts": 14,
+          "trials": 2,
+          "first_seen_s": 515.2,
+          "per_trial_first_s": {
+            "trial_01": 7832.781,
+            "trial_07": 515.2
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:fp_div<-fp_invmod_slow<-fp_invmod",
+          "artifacts": 2,
+          "trials": 2,
+          "first_seen_s": 76511.494,
+          "per_trial_first_s": {
+            "trial_02": 76962.322,
+            "trial_08": 76511.494
+          }
+        }
+      ]
+    }
+  }
+}

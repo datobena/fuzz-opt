@@ -130,8 +130,10 @@ def main() -> int:
                     if p is None:
                         continue
                     if arm == "optimized":
-                        own, _ = V.live_binary(online, meta.get("start_time", 0),
-                                               a["timestamp_s"], base_bin)
+                        own, _ = V.live_binary(
+                            V.trial_online_dir(online, trial.name),
+                            meta.get("start_time", 0),
+                            a["timestamp_s"], base_bin)
                         other = base_bin
                     else:
                         own, other = base_bin, final_opt

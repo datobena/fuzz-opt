@@ -1,0 +1,2519 @@
+{
+  "PcapPlusPlus-arvo-22232": {
+    "baseline": {
+      "artifacts_raw": 16958,
+      "poc_crash": 16957,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 1,
+      "unique_by_content": 14318,
+      "unique_bugs_1frame": 31,
+      "unique_bugs_3frame": 53,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:pcpp::tbp_my_own_strnlen",
+          "artifacts": 10748,
+          "trials": 9,
+          "first_seen_s": 295.07,
+          "per_trial_first_s": {
+            "trial_00": 2020.817,
+            "trial_01": 1666.292,
+            "trial_02": 2196.12,
+            "trial_03": 2305.47,
+            "trial_04": 295.07,
+            "trial_05": 3161.971,
+            "trial_06": 2494.255,
+            "trial_07": 494.816,
+            "trial_08": 2027.089
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::DnsResource::getDataLength",
+          "artifacts": 1124,
+          "trials": 9,
+          "first_seen_s": 3.996,
+          "per_trial_first_s": {
+            "trial_00": 3.996,
+            "trial_01": 16.358,
+            "trial_02": 25.334,
+            "trial_03": 27.596,
+            "trial_04": 17.404,
+            "trial_05": 20.921,
+            "trial_06": 50.238,
+            "trial_07": 7.147,
+            "trial_08": 14.326
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::getSessionIDLength",
+          "artifacts": 747,
+          "trials": 9,
+          "first_seen_s": 123.848,
+          "per_trial_first_s": {
+            "trial_00": 971.118,
+            "trial_01": 983.194,
+            "trial_02": 123.848,
+            "trial_03": 634.229,
+            "trial_04": 4818.885,
+            "trial_05": 178.993,
+            "trial_06": 5170.879,
+            "trial_07": 1349.148,
+            "trial_08": 205.155
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Extension::getExtensionLen",
+          "artifacts": 541,
+          "trials": 9,
+          "first_seen_s": 1.853,
+          "per_trial_first_s": {
+            "trial_00": 1.853,
+            "trial_01": 8.93,
+            "trial_02": 9.36,
+            "trial_03": 117.374,
+            "trial_04": 2.113,
+            "trial_05": 9.302,
+            "trial_06": 4.303,
+            "trial_07": 3.405,
+            "trial_08": 3.128
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::NullLoopbackLayer::getFamily",
+          "artifacts": 524,
+          "trials": 9,
+          "first_seen_s": 0.077,
+          "per_trial_first_s": {
+            "trial_00": 0.08,
+            "trial_01": 0.162,
+            "trial_02": 0.077,
+            "trial_03": 0.157,
+            "trial_04": 0.104,
+            "trial_05": 0.177,
+            "trial_06": 0.213,
+            "trial_07": 0.15,
+            "trial_08": 0.346
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 422,
+          "trials": 9,
+          "first_seen_s": 3.041,
+          "per_trial_first_s": {
+            "trial_00": 153.67,
+            "trial_01": 23.145,
+            "trial_02": 197.518,
+            "trial_03": 99.715,
+            "trial_04": 3.041,
+            "trial_05": 9.44,
+            "trial_06": 6.569,
+            "trial_07": 4.745,
+            "trial_08": 100.353
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::isDataValid",
+          "artifacts": 360,
+          "trials": 9,
+          "first_seen_s": 63.709,
+          "per_trial_first_s": {
+            "trial_00": 202.079,
+            "trial_01": 63.709,
+            "trial_02": 112.859,
+            "trial_03": 140.415,
+            "trial_04": 213.531,
+            "trial_05": 100.87,
+            "trial_06": 67.044,
+            "trial_07": 90.689,
+            "trial_08": 186.22
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLCertificateRequestMessage::SSLCertificateRequestMessage",
+          "artifacts": 339,
+          "trials": 9,
+          "first_seen_s": 171.09,
+          "per_trial_first_s": {
+            "trial_00": 985.41,
+            "trial_01": 986.174,
+            "trial_02": 171.09,
+            "trial_03": 647.416,
+            "trial_04": 4674.389,
+            "trial_05": 184.656,
+            "trial_06": 5273.903,
+            "trial_07": 1353.804,
+            "trial_08": 223.159
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName",
+          "artifacts": 259,
+          "trials": 9,
+          "first_seen_s": 134.042,
+          "per_trial_first_s": {
+            "trial_00": 246.577,
+            "trial_01": 512.778,
+            "trial_02": 651.078,
+            "trial_03": 293.256,
+            "trial_04": 598.795,
+            "trial_05": 305.086,
+            "trial_06": 606.645,
+            "trial_07": 1064.169,
+            "trial_08": 134.042
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength",
+          "artifacts": 207,
+          "trials": 9,
+          "first_seen_s": 134.041,
+          "per_trial_first_s": {
+            "trial_00": 993.009,
+            "trial_01": 1002.078,
+            "trial_02": 134.041,
+            "trial_03": 629.777,
+            "trial_04": 4748.629,
+            "trial_05": 182.551,
+            "trial_06": 5189.774,
+            "trial_07": 1406.602,
+            "trial_08": 234.692
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::getSessionIDLength",
+          "artifacts": 204,
+          "trials": 9,
+          "first_seen_s": 155.328,
+          "per_trial_first_s": {
+            "trial_00": 973.93,
+            "trial_01": 987.371,
+            "trial_02": 155.328,
+            "trial_03": 635.514,
+            "trial_04": 4685.361,
+            "trial_05": 292.239,
+            "trial_06": 5410.912,
+            "trial_07": 1354.162,
+            "trial_08": 245.421
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField",
+          "artifacts": 195,
+          "trials": 9,
+          "first_seen_s": 509.687,
+          "per_trial_first_s": {
+            "trial_00": 2029.802,
+            "trial_01": 1780.765,
+            "trial_02": 2310.034,
+            "trial_03": 2626.032,
+            "trial_04": 2407.587,
+            "trial_05": 3211.048,
+            "trial_06": 3124.125,
+            "trial_07": 509.687,
+            "trial_08": 2075.491
+          }
+        },
+        {
+          "signature": "requested:operator",
+          "artifacts": 185,
+          "trials": 5,
+          "first_seen_s": 8232.384,
+          "per_trial_first_s": {
+            "trial_01": 20418.481,
+            "trial_02": 43108.952,
+            "trial_03": 31521.211,
+            "trial_04": 8232.384,
+            "trial_06": 14453.718
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getSrcIpAddress",
+          "artifacts": 172,
+          "trials": 9,
+          "first_seen_s": 10.677,
+          "per_trial_first_s": {
+            "trial_00": 1182.18,
+            "trial_01": 213.955,
+            "trial_02": 29.656,
+            "trial_03": 142.298,
+            "trial_04": 10.677,
+            "trial_05": 17.241,
+            "trial_06": 143.738,
+            "trial_07": 118.761,
+            "trial_08": 1280.435
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getDstIpAddress",
+          "artifacts": 171,
+          "trials": 9,
+          "first_seen_s": 12.218,
+          "per_trial_first_s": {
+            "trial_00": 102.162,
+            "trial_01": 70.701,
+            "trial_02": 32.497,
+            "trial_03": 99.132,
+            "trial_04": 12.218,
+            "trial_05": 501.965,
+            "trial_06": 243.402,
+            "trial_07": 90.541,
+            "trial_08": 329.014
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::RadiusLayer::isDataValid",
+          "artifacts": 147,
+          "trials": 9,
+          "first_seen_s": 793.435,
+          "per_trial_first_s": {
+            "trial_00": 1477.45,
+            "trial_01": 969.641,
+            "trial_02": 1450.763,
+            "trial_03": 1782.722,
+            "trial_04": 793.435,
+            "trial_05": 2902.953,
+            "trial_06": 1576.849,
+            "trial_07": 2062.337,
+            "trial_08": 3150.079
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck",
+          "artifacts": 124,
+          "trials": 8,
+          "first_seen_s": 4184.803,
+          "per_trial_first_s": {
+            "trial_00": 4184.803,
+            "trial_01": 17921.369,
+            "trial_02": 13257.859,
+            "trial_03": 9685.024,
+            "trial_04": 10774.699,
+            "trial_05": 16593.436,
+            "trial_06": 4711.416,
+            "trial_07": 19598.403
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen",
+          "artifacts": 93,
+          "trials": 9,
+          "first_seen_s": 64.089,
+          "per_trial_first_s": {
+            "trial_00": 112.729,
+            "trial_01": 159.995,
+            "trial_02": 1081.925,
+            "trial_03": 100.322,
+            "trial_04": 2197.532,
+            "trial_05": 154.203,
+            "trial_06": 69.866,
+            "trial_07": 64.089,
+            "trial_08": 546.603
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::SSLServerHelloMessage",
+          "artifacts": 78,
+          "trials": 8,
+          "first_seen_s": 154.788,
+          "per_trial_first_s": {
+            "trial_00": 11281.714,
+            "trial_01": 1117.933,
+            "trial_02": 154.788,
+            "trial_03": 54669.936,
+            "trial_05": 217.049,
+            "trial_06": 28521.8,
+            "trial_07": 1352.266,
+            "trial_08": 312.365
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6AuthenticationHeader::getExtensionLen",
+          "artifacts": 72,
+          "trials": 8,
+          "first_seen_s": 2.284,
+          "per_trial_first_s": {
+            "trial_01": 12281.025,
+            "trial_02": 26448.564,
+            "trial_03": 11301.3,
+            "trial_04": 264.702,
+            "trial_05": 12043.841,
+            "trial_06": 11942.462,
+            "trial_07": 240.303,
+            "trial_08": 2.284
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::getHeaderLen",
+          "artifacts": 45,
+          "trials": 7,
+          "first_seen_s": 406.048,
+          "per_trial_first_s": {
+            "trial_00": 2704.857,
+            "trial_01": 406.048,
+            "trial_02": 624.407,
+            "trial_04": 24628.467,
+            "trial_05": 1363.739,
+            "trial_06": 70364.159,
+            "trial_07": 5476.504
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:strlen",
+          "artifacts": 43,
+          "trials": 5,
+          "first_seen_s": 465.373,
+          "per_trial_first_s": {
+            "trial_00": 594.6,
+            "trial_01": 682.782,
+            "trial_02": 655.033,
+            "trial_05": 465.373,
+            "trial_07": 1029.9
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getHeaderLen",
+          "artifacts": 43,
+          "trials": 9,
+          "first_seen_s": 240.395,
+          "per_trial_first_s": {
+            "trial_00": 248.407,
+            "trial_01": 240.395,
+            "trial_02": 13709.845,
+            "trial_03": 28239.627,
+            "trial_04": 1716.145,
+            "trial_05": 481.828,
+            "trial_06": 349.093,
+            "trial_07": 692.888,
+            "trial_08": 4059.419
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::SSLClientHelloMessage",
+          "artifacts": 36,
+          "trials": 8,
+          "first_seen_s": 184.189,
+          "per_trial_first_s": {
+            "trial_00": 1066.349,
+            "trial_01": 1437.808,
+            "trial_02": 10929.794,
+            "trial_03": 645.56,
+            "trial_05": 184.189,
+            "trial_06": 10427.801,
+            "trial_07": 32463.679,
+            "trial_08": 234.361
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket",
+          "artifacts": 27,
+          "trials": 9,
+          "first_seen_s": 10.209,
+          "per_trial_first_s": {
+            "trial_00": 21560.421,
+            "trial_01": 35649.574,
+            "trial_02": 337.889,
+            "trial_03": 20.47,
+            "trial_04": 10.209,
+            "trial_05": 32408.392,
+            "trial_06": 13.892,
+            "trial_07": 32490.21,
+            "trial_08": 295.345
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::GtpExtension::getTotalLength",
+          "artifacts": 23,
+          "trials": 6,
+          "first_seen_s": 1370.365,
+          "per_trial_first_s": {
+            "trial_00": 25823.311,
+            "trial_01": 1370.365,
+            "trial_04": 16597.095,
+            "trial_05": 12890.987,
+            "trial_06": 70715.241,
+            "trial_07": 6174.61
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IgmpLayer::getIGMPVerFromData",
+          "artifacts": 15,
+          "trials": 6,
+          "first_seen_s": 125.589,
+          "per_trial_first_s": {
+            "trial_00": 408.892,
+            "trial_01": 36652.062,
+            "trial_03": 125.589,
+            "trial_04": 435.813,
+            "trial_05": 289.684,
+            "trial_07": 202.163
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getMessageType",
+          "artifacts": 6,
+          "trials": 1,
+          "first_seen_s": 38940.064,
+          "per_trial_first_s": {
+            "trial_01": 38940.064
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getFragmentFlags",
+          "artifacts": 5,
+          "trials": 2,
+          "first_seen_s": 4991.582,
+          "per_trial_first_s": {
+            "trial_00": 45870.972,
+            "trial_08": 4991.582
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLLayer::IsSSLMessage",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 45258.16,
+          "per_trial_first_s": {
+            "trial_07": 45258.16
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::parseNextLayer",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 68544.71,
+          "per_trial_first_s": {
+            "trial_07": 68544.71
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-buffer-overflow:pcpp::tbp_my_own_strnlen<-pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields",
+          "artifacts": 10748,
+          "trials": 9,
+          "first_seen_s": 295.07,
+          "per_trial_first_s": {
+            "trial_00": 2020.817,
+            "trial_01": 1666.292,
+            "trial_02": 2196.12,
+            "trial_03": 2305.47,
+            "trial_04": 295.07,
+            "trial_05": 3161.971,
+            "trial_06": 2494.255,
+            "trial_07": 494.816,
+            "trial_08": 2027.089
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::DnsResource::getDataLength<-pcpp::DnsResource::getSize<-pcpp::DnsLayer::parseResources",
+          "artifacts": 1124,
+          "trials": 9,
+          "first_seen_s": 3.996,
+          "per_trial_first_s": {
+            "trial_00": 3.996,
+            "trial_01": 16.358,
+            "trial_02": 25.334,
+            "trial_03": 27.596,
+            "trial_04": 17.404,
+            "trial_05": 20.921,
+            "trial_06": 50.238,
+            "trial_07": 7.147,
+            "trial_08": 14.326
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::getSessionIDLength<-pcpp::SSLClientHelloMessage::SSLClientHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage",
+          "artifacts": 747,
+          "trials": 9,
+          "first_seen_s": 123.848,
+          "per_trial_first_s": {
+            "trial_00": 971.118,
+            "trial_01": 983.194,
+            "trial_02": 123.848,
+            "trial_03": 634.229,
+            "trial_04": 4818.885,
+            "trial_05": 178.993,
+            "trial_06": 5170.879,
+            "trial_07": 1349.148,
+            "trial_08": 205.155
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Extension::getExtensionLen<-pcpp::IPv6Layer::parseExtensions<-pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 541,
+          "trials": 9,
+          "first_seen_s": 1.853,
+          "per_trial_first_s": {
+            "trial_00": 1.853,
+            "trial_01": 8.93,
+            "trial_02": 9.36,
+            "trial_03": 117.374,
+            "trial_04": 2.113,
+            "trial_05": 9.302,
+            "trial_06": 4.303,
+            "trial_07": 3.405,
+            "trial_08": 3.128
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::NullLoopbackLayer::getFamily<-pcpp::NullLoopbackLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 524,
+          "trials": 9,
+          "first_seen_s": 0.077,
+          "per_trial_first_s": {
+            "trial_00": 0.08,
+            "trial_01": 0.162,
+            "trial_02": 0.077,
+            "trial_03": 0.157,
+            "trial_04": 0.104,
+            "trial_05": 0.177,
+            "trial_06": 0.213,
+            "trial_07": 0.15,
+            "trial_08": 0.346
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::isDataValid<-pcpp::IcmpLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 360,
+          "trials": 9,
+          "first_seen_s": 63.709,
+          "per_trial_first_s": {
+            "trial_00": 202.079,
+            "trial_01": 63.709,
+            "trial_02": 112.859,
+            "trial_03": 140.415,
+            "trial_04": 213.531,
+            "trial_05": 100.87,
+            "trial_06": 67.044,
+            "trial_07": 90.689,
+            "trial_08": 186.22
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLCertificateRequestMessage::SSLCertificateRequestMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage<-pcpp::SSLHandshakeLayer::SSLHandshakeLayer",
+          "artifacts": 339,
+          "trials": 9,
+          "first_seen_s": 171.09,
+          "per_trial_first_s": {
+            "trial_00": 985.41,
+            "trial_01": 986.174,
+            "trial_02": 171.09,
+            "trial_03": 647.416,
+            "trial_04": 4674.389,
+            "trial_05": 184.656,
+            "trial_06": 5273.903,
+            "trial_07": 1353.804,
+            "trial_08": 223.159
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::getSessionIDLength<-pcpp::SSLServerHelloMessage::SSLServerHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage",
+          "artifacts": 204,
+          "trials": 9,
+          "first_seen_s": 155.328,
+          "per_trial_first_s": {
+            "trial_00": 973.93,
+            "trial_01": 987.371,
+            "trial_02": 155.328,
+            "trial_03": 635.514,
+            "trial_04": 4685.361,
+            "trial_05": 292.239,
+            "trial_06": 5410.912,
+            "trial_07": 1354.162,
+            "trial_08": 245.421
+          }
+        },
+        {
+          "signature": "requested:operator<-void<-std::__1::__libcpp_allocate",
+          "artifacts": 185,
+          "trials": 5,
+          "first_seen_s": 8232.384,
+          "per_trial_first_s": {
+            "trial_01": 20418.481,
+            "trial_02": 43108.952,
+            "trial_03": 31521.211,
+            "trial_04": 8232.384,
+            "trial_06": 14453.718
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getSrcIpAddress<-LLVMFuzzerTestOneInput<-ExecuteFilesOnyByOne",
+          "artifacts": 172,
+          "trials": 9,
+          "first_seen_s": 10.677,
+          "per_trial_first_s": {
+            "trial_00": 1182.18,
+            "trial_01": 213.955,
+            "trial_02": 29.656,
+            "trial_03": 142.298,
+            "trial_04": 10.677,
+            "trial_05": 17.241,
+            "trial_06": 143.738,
+            "trial_07": 118.761,
+            "trial_08": 1280.435
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getDstIpAddress<-LLVMFuzzerTestOneInput<-ExecuteFilesOnyByOne",
+          "artifacts": 171,
+          "trials": 9,
+          "first_seen_s": 12.218,
+          "per_trial_first_s": {
+            "trial_00": 102.162,
+            "trial_01": 70.701,
+            "trial_02": 32.497,
+            "trial_03": 99.132,
+            "trial_04": 12.218,
+            "trial_05": 501.965,
+            "trial_06": 243.402,
+            "trial_07": 90.541,
+            "trial_08": 329.014
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::IDnsResource<-pcpp::DnsQuery::DnsQuery",
+          "artifacts": 165,
+          "trials": 9,
+          "first_seen_s": 246.577,
+          "per_trial_first_s": {
+            "trial_00": 246.577,
+            "trial_01": 532.722,
+            "trial_02": 651.078,
+            "trial_03": 293.256,
+            "trial_04": 598.795,
+            "trial_05": 867.13,
+            "trial_06": 849.404,
+            "trial_07": 1064.169,
+            "trial_08": 835.298
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::RadiusLayer::isDataValid<-pcpp::UdpLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 147,
+          "trials": 9,
+          "first_seen_s": 793.435,
+          "per_trial_first_s": {
+            "trial_00": 1477.45,
+            "trial_01": 969.641,
+            "trial_02": 1450.763,
+            "trial_03": 1782.722,
+            "trial_04": 793.435,
+            "trial_05": 2902.953,
+            "trial_06": 1576.849,
+            "trial_07": 2062.337,
+            "trial_08": 3150.079
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength<-pcpp::SSLExtension::getTotalLength<-pcpp::SSLClientHelloMessage::SSLClientHelloMessage",
+          "artifacts": 120,
+          "trials": 9,
+          "first_seen_s": 134.041,
+          "per_trial_first_s": {
+            "trial_00": 1030.875,
+            "trial_01": 1002.078,
+            "trial_02": 134.041,
+            "trial_03": 629.777,
+            "trial_04": 4748.629,
+            "trial_05": 182.551,
+            "trial_06": 5471.523,
+            "trial_07": 1406.602,
+            "trial_08": 234.692
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::SipResponseLayer::SipResponseLayer",
+          "artifacts": 117,
+          "trials": 9,
+          "first_seen_s": 509.687,
+          "per_trial_first_s": {
+            "trial_00": 72477.312,
+            "trial_01": 1780.765,
+            "trial_02": 2310.034,
+            "trial_03": 2626.032,
+            "trial_04": 2407.587,
+            "trial_05": 3211.048,
+            "trial_06": 3124.125,
+            "trial_07": 509.687,
+            "trial_08": 2075.491
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength<-pcpp::SSLExtension::getTotalLength<-pcpp::SSLServerHelloMessage::SSLServerHelloMessage",
+          "artifacts": 87,
+          "trials": 9,
+          "first_seen_s": 156.033,
+          "per_trial_first_s": {
+            "trial_00": 993.009,
+            "trial_01": 1047.565,
+            "trial_02": 156.033,
+            "trial_03": 1201.753,
+            "trial_04": 11395.728,
+            "trial_05": 184.098,
+            "trial_06": 5189.774,
+            "trial_07": 1502.268,
+            "trial_08": 245.538
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck<-strstr<-pcpp::SipRequestFirstLine::parseVersion",
+          "artifacts": 85,
+          "trials": 8,
+          "first_seen_s": 5129.246,
+          "per_trial_first_s": {
+            "trial_00": 5129.246,
+            "trial_01": 67072.222,
+            "trial_02": 13257.859,
+            "trial_03": 9685.024,
+            "trial_04": 13816.244,
+            "trial_05": 16593.436,
+            "trial_06": 13311.509,
+            "trial_07": 19862.815
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::NullLoopbackLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 83,
+          "trials": 9,
+          "first_seen_s": 157.988,
+          "per_trial_first_s": {
+            "trial_00": 478.118,
+            "trial_01": 157.988,
+            "trial_02": 12791.105,
+            "trial_03": 202.173,
+            "trial_04": 1927.506,
+            "trial_05": 574.799,
+            "trial_06": 201.103,
+            "trial_07": 266.318,
+            "trial_08": 405.932
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::SSLServerHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage<-pcpp::SSLHandshakeLayer::SSLHandshakeLayer",
+          "artifacts": 78,
+          "trials": 8,
+          "first_seen_s": 154.788,
+          "per_trial_first_s": {
+            "trial_00": 11281.714,
+            "trial_01": 1117.933,
+            "trial_02": 154.788,
+            "trial_03": 54669.936,
+            "trial_05": 217.049,
+            "trial_06": 28521.8,
+            "trial_07": 1352.266,
+            "trial_08": 312.365
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6AuthenticationHeader::getExtensionLen<-pcpp::IPv6Layer::parseExtensions<-pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 72,
+          "trials": 8,
+          "first_seen_s": 2.284,
+          "per_trial_first_s": {
+            "trial_01": 12281.025,
+            "trial_02": 26448.564,
+            "trial_03": 11301.3,
+            "trial_04": 264.702,
+            "trial_05": 12043.841,
+            "trial_06": 11942.462,
+            "trial_07": 240.303,
+            "trial_08": 2.284
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::GreLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 63,
+          "trials": 9,
+          "first_seen_s": 96.983,
+          "per_trial_first_s": {
+            "trial_00": 2439.402,
+            "trial_01": 185.458,
+            "trial_02": 1028.808,
+            "trial_03": 509.141,
+            "trial_04": 96.983,
+            "trial_05": 890.89,
+            "trial_06": 37922.762,
+            "trial_07": 189.059,
+            "trial_08": 333.023
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::GtpV1Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 63,
+          "trials": 7,
+          "first_seen_s": 359.101,
+          "per_trial_first_s": {
+            "trial_00": 2808.3,
+            "trial_01": 434.769,
+            "trial_02": 777.992,
+            "trial_04": 16352.773,
+            "trial_05": 359.101,
+            "trial_06": 1279.686,
+            "trial_07": 5058.685
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::EthLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 61,
+          "trials": 9,
+          "first_seen_s": 3.041,
+          "per_trial_first_s": {
+            "trial_00": 153.67,
+            "trial_01": 23.145,
+            "trial_02": 1701.572,
+            "trial_03": 99.715,
+            "trial_04": 3.041,
+            "trial_05": 9.44,
+            "trial_06": 6.569,
+            "trial_07": 4.745,
+            "trial_08": 100.353
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen<-pcpp::PPPoEDiscoveryLayer::PPPoEDiscoveryLayer<-pcpp::EthLayer::parseNextLayer",
+          "artifacts": 61,
+          "trials": 9,
+          "first_seen_s": 64.089,
+          "per_trial_first_s": {
+            "trial_00": 112.729,
+            "trial_01": 159.995,
+            "trial_02": 40717.461,
+            "trial_03": 100.322,
+            "trial_04": 2197.532,
+            "trial_05": 154.203,
+            "trial_06": 69.866,
+            "trial_07": 64.089,
+            "trial_08": 546.603
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::HttpResponseLayer::HttpResponseLayer",
+          "artifacts": 61,
+          "trials": 3,
+          "first_seen_s": 2273.424,
+          "per_trial_first_s": {
+            "trial_02": 3140.784,
+            "trial_03": 22950.186,
+            "trial_07": 2273.424
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::MplsLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 55,
+          "trials": 9,
+          "first_seen_s": 85.259,
+          "per_trial_first_s": {
+            "trial_00": 2392.296,
+            "trial_01": 85.259,
+            "trial_02": 197.518,
+            "trial_03": 111.384,
+            "trial_04": 25669.133,
+            "trial_05": 100.056,
+            "trial_06": 258.136,
+            "trial_07": 33139.522,
+            "trial_08": 3618.765
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::getHeaderLen<-pcpp::GtpV1Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 45,
+          "trials": 7,
+          "first_seen_s": 406.048,
+          "per_trial_first_s": {
+            "trial_00": 2704.857,
+            "trial_01": 406.048,
+            "trial_02": 624.407,
+            "trial_04": 24628.467,
+            "trial_05": 1363.739,
+            "trial_06": 70364.159,
+            "trial_07": 5476.504
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:strlen<-std::__1::basic_string<-pcpp::IDnsResource::IDnsResource",
+          "artifacts": 43,
+          "trials": 5,
+          "first_seen_s": 465.373,
+          "per_trial_first_s": {
+            "trial_00": 594.6,
+            "trial_01": 682.782,
+            "trial_02": 655.033,
+            "trial_05": 465.373,
+            "trial_07": 1029.9
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getHeaderLen<-pcpp::IcmpLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 43,
+          "trials": 9,
+          "first_seen_s": 240.395,
+          "per_trial_first_s": {
+            "trial_00": 248.407,
+            "trial_01": 240.395,
+            "trial_02": 13709.845,
+            "trial_03": 28239.627,
+            "trial_04": 1716.145,
+            "trial_05": 481.828,
+            "trial_06": 349.093,
+            "trial_07": 692.888,
+            "trial_08": 4059.419
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck<-strstr<-pcpp::HttpRequestFirstLine::parseVersion",
+          "artifacts": 39,
+          "trials": 6,
+          "first_seen_s": 4184.803,
+          "per_trial_first_s": {
+            "trial_00": 4184.803,
+            "trial_01": 17921.369,
+            "trial_04": 10774.699,
+            "trial_05": 57957.14,
+            "trial_06": 4711.416,
+            "trial_07": 19598.403
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::IDnsResource<-pcpp::DnsResource::DnsResource",
+          "artifacts": 37,
+          "trials": 9,
+          "first_seen_s": 305.086,
+          "per_trial_first_s": {
+            "trial_00": 10935.143,
+            "trial_01": 11506.568,
+            "trial_02": 33191.266,
+            "trial_03": 11242.032,
+            "trial_04": 53873.008,
+            "trial_05": 305.086,
+            "trial_06": 10850.096,
+            "trial_07": 54285.18,
+            "trial_08": 75684.048
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::SSLClientHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage<-pcpp::SSLHandshakeLayer::SSLHandshakeLayer",
+          "artifacts": 36,
+          "trials": 8,
+          "first_seen_s": 184.189,
+          "per_trial_first_s": {
+            "trial_00": 1066.349,
+            "trial_01": 1437.808,
+            "trial_02": 10929.794,
+            "trial_03": 645.56,
+            "trial_05": 184.189,
+            "trial_06": 10427.801,
+            "trial_07": 32463.679,
+            "trial_08": 234.361
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::IDnsResource",
+          "artifacts": 34,
+          "trials": 7,
+          "first_seen_s": 415.882,
+          "per_trial_first_s": {
+            "trial_01": 512.778,
+            "trial_03": 415.882,
+            "trial_04": 32596.167,
+            "trial_05": 79332.17,
+            "trial_06": 606.645,
+            "trial_07": 33563.133,
+            "trial_08": 65468.784
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::IPv6Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 29,
+          "trials": 9,
+          "first_seen_s": 256.433,
+          "per_trial_first_s": {
+            "trial_00": 12915.248,
+            "trial_01": 3276.472,
+            "trial_02": 1359.267,
+            "trial_03": 36089.111,
+            "trial_04": 20554.602,
+            "trial_05": 256.433,
+            "trial_06": 274.521,
+            "trial_07": 301.297,
+            "trial_08": 57518.983
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket<-pcpp::IPv4Layer::IPv4Layer<-pcpp::Packet::createFirstLayer",
+          "artifacts": 23,
+          "trials": 8,
+          "first_seen_s": 10.209,
+          "per_trial_first_s": {
+            "trial_00": 21560.421,
+            "trial_02": 21742.932,
+            "trial_03": 20.47,
+            "trial_04": 10.209,
+            "trial_05": 32408.392,
+            "trial_06": 13.892,
+            "trial_07": 32490.21,
+            "trial_08": 295.345
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::GtpExtension::getTotalLength<-pcpp::GtpV1Layer::getHeaderLen<-pcpp::GtpV1Layer::parseNextLayer",
+          "artifacts": 23,
+          "trials": 6,
+          "first_seen_s": 1370.365,
+          "per_trial_first_s": {
+            "trial_00": 25823.311,
+            "trial_01": 1370.365,
+            "trial_04": 16597.095,
+            "trial_05": 12890.987,
+            "trial_06": 70715.241,
+            "trial_07": 6174.61
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::decodeName",
+          "artifacts": 23,
+          "trials": 4,
+          "first_seen_s": 134.042,
+          "per_trial_first_s": {
+            "trial_02": 11678.74,
+            "trial_04": 11014.519,
+            "trial_06": 10921.462,
+            "trial_08": 134.042
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen<-pcpp::PPPoEDiscoveryLayer::PPPoEDiscoveryLayer<-pcpp::VlanLayer::parseNextLayer",
+          "artifacts": 22,
+          "trials": 9,
+          "first_seen_s": 526.958,
+          "per_trial_first_s": {
+            "trial_00": 526.958,
+            "trial_01": 12827.13,
+            "trial_02": 1081.925,
+            "trial_03": 13779.622,
+            "trial_04": 24304.915,
+            "trial_05": 2225.685,
+            "trial_06": 76128.339,
+            "trial_07": 3213.56,
+            "trial_08": 14804.343
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::VlanLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 20,
+          "trials": 6,
+          "first_seen_s": 1705.119,
+          "per_trial_first_s": {
+            "trial_00": 1705.119,
+            "trial_01": 24831.96,
+            "trial_04": 13538.238,
+            "trial_05": 23294.998,
+            "trial_07": 13040.815,
+            "trial_08": 74367.725
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::PPPoESessionLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 20,
+          "trials": 7,
+          "first_seen_s": 1805.448,
+          "per_trial_first_s": {
+            "trial_02": 16284.866,
+            "trial_03": 1805.448,
+            "trial_04": 27037.074,
+            "trial_05": 16088.925,
+            "trial_06": 47996.624,
+            "trial_07": 3254.677,
+            "trial_08": 17937.017
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IgmpLayer::getIGMPVerFromData<-pcpp::IPv4Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 15,
+          "trials": 6,
+          "first_seen_s": 125.589,
+          "per_trial_first_s": {
+            "trial_00": 408.892,
+            "trial_01": 36652.062,
+            "trial_03": 125.589,
+            "trial_04": 435.813,
+            "trial_05": 289.684,
+            "trial_07": 202.163
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::HttpRequestLayer::HttpRequestLayer",
+          "artifacts": 13,
+          "trials": 3,
+          "first_seen_s": 2029.802,
+          "per_trial_first_s": {
+            "trial_00": 2029.802,
+            "trial_04": 11566.393,
+            "trial_08": 52792.313
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::IPv4Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 13,
+          "trials": 4,
+          "first_seen_s": 168.108,
+          "per_trial_first_s": {
+            "trial_01": 168.108,
+            "trial_02": 38622.865,
+            "trial_03": 52121.536,
+            "trial_07": 63780.576
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen<-pcpp::PPPoEDiscoveryLayer::PPPoEDiscoveryLayer<-pcpp::SllLayer::parseNextLayer",
+          "artifacts": 10,
+          "trials": 5,
+          "first_seen_s": 1879.068,
+          "per_trial_first_s": {
+            "trial_02": 12925.232,
+            "trial_04": 22547.411,
+            "trial_05": 24224.505,
+            "trial_07": 36441.505,
+            "trial_08": 1879.068
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::SllLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 7,
+          "trials": 5,
+          "first_seen_s": 20817.612,
+          "per_trial_first_s": {
+            "trial_00": 20817.612,
+            "trial_01": 22286.214,
+            "trial_02": 69257.97,
+            "trial_05": 26379.261,
+            "trial_07": 61015.063
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::Packet::createFirstLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 7,
+          "trials": 5,
+          "first_seen_s": 13753.464,
+          "per_trial_first_s": {
+            "trial_00": 32687.875,
+            "trial_01": 13753.464,
+            "trial_04": 22016.361,
+            "trial_05": 43921.41,
+            "trial_08": 66605.154
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getMessageType<-pcpp::IcmpLayer::getHeaderLen<-pcpp::IcmpLayer::parseNextLayer",
+          "artifacts": 6,
+          "trials": 1,
+          "first_seen_s": 38940.064,
+          "per_trial_first_s": {
+            "trial_01": 38940.064
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getFragmentFlags<-pcpp::IPv4Layer::isFragment<-pcpp::IPv4Layer::parseNextLayer",
+          "artifacts": 5,
+          "trials": 2,
+          "first_seen_s": 4991.582,
+          "per_trial_first_s": {
+            "trial_00": 45870.972,
+            "trial_08": 4991.582
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket<-pcpp::IPv4Layer::IPv4Layer<-pcpp::IPv4Layer::parseNextLayer",
+          "artifacts": 4,
+          "trials": 3,
+          "first_seen_s": 337.889,
+          "per_trial_first_s": {
+            "trial_00": 78649.532,
+            "trial_01": 35649.574,
+            "trial_02": 337.889
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::SipRequestLayer::SipRequestLayer",
+          "artifacts": 4,
+          "trials": 3,
+          "first_seen_s": 40825.419,
+          "per_trial_first_s": {
+            "trial_02": 55301.084,
+            "trial_05": 65062.055,
+            "trial_08": 40825.419
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::PPP_PPTPLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 60224.773,
+          "per_trial_first_s": {
+            "trial_01": 60224.773
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLLayer::IsSSLMessage<-pcpp::SSLLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 45258.16,
+          "per_trial_first_s": {
+            "trial_07": 45258.16
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::parseNextLayer<-pcpp::Packet::setRawPacket<-LLVMFuzzerTestOneInput",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 68544.71,
+          "per_trial_first_s": {
+            "trial_07": 68544.71
+          }
+        }
+      ]
+    },
+    "optimized": {
+      "artifacts_raw": 6909,
+      "poc_crash": 6907,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 2,
+      "unique_by_content": 6587,
+      "unique_bugs_1frame": 30,
+      "unique_bugs_3frame": 51,
+      "bugs": [
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField",
+          "artifacts": 2570,
+          "trials": 9,
+          "first_seen_s": 460.355,
+          "per_trial_first_s": {
+            "trial_00": 645.951,
+            "trial_01": 2315.325,
+            "trial_02": 673.737,
+            "trial_03": 15933.05,
+            "trial_04": 918.026,
+            "trial_05": 460.355,
+            "trial_06": 1182.676,
+            "trial_07": 1451.336,
+            "trial_08": 542.418
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::tbp_my_own_strnlen",
+          "artifacts": 1624,
+          "trials": 9,
+          "first_seen_s": 281.042,
+          "per_trial_first_s": {
+            "trial_00": 512.268,
+            "trial_01": 1751.989,
+            "trial_02": 504.162,
+            "trial_03": 2042.54,
+            "trial_04": 909.762,
+            "trial_05": 390.539,
+            "trial_06": 1180.68,
+            "trial_07": 1449.95,
+            "trial_08": 281.042
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::DnsResource::getDataLength",
+          "artifacts": 461,
+          "trials": 9,
+          "first_seen_s": 18.028,
+          "per_trial_first_s": {
+            "trial_00": 18.028,
+            "trial_01": 26.578,
+            "trial_02": 18.925,
+            "trial_03": 20.971,
+            "trial_04": 24.297,
+            "trial_05": 28.363,
+            "trial_06": 23.476,
+            "trial_07": 28.868,
+            "trial_08": 34.848
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::getSessionIDLength",
+          "artifacts": 268,
+          "trials": 9,
+          "first_seen_s": 292.821,
+          "per_trial_first_s": {
+            "trial_00": 1966.575,
+            "trial_01": 553.891,
+            "trial_02": 394.076,
+            "trial_03": 292.821,
+            "trial_04": 337.076,
+            "trial_05": 3191.603,
+            "trial_06": 811.94,
+            "trial_07": 978.717,
+            "trial_08": 390.057
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::NullLoopbackLayer::getFamily",
+          "artifacts": 238,
+          "trials": 9,
+          "first_seen_s": 0.119,
+          "per_trial_first_s": {
+            "trial_00": 0.162,
+            "trial_01": 0.313,
+            "trial_02": 0.151,
+            "trial_03": 0.138,
+            "trial_04": 0.119,
+            "trial_05": 0.205,
+            "trial_06": 0.205,
+            "trial_07": 0.124,
+            "trial_08": 0.155
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Extension::getExtensionLen",
+          "artifacts": 216,
+          "trials": 9,
+          "first_seen_s": 0.376,
+          "per_trial_first_s": {
+            "trial_00": 81.813,
+            "trial_01": 0.376,
+            "trial_02": 70.553,
+            "trial_03": 14.68,
+            "trial_04": 15.142,
+            "trial_05": 13.793,
+            "trial_06": 14.35,
+            "trial_07": 13.781,
+            "trial_08": 95.751
+          }
+        },
+        {
+          "signature": "requested:operator",
+          "artifacts": 216,
+          "trials": 6,
+          "first_seen_s": 6779.187,
+          "per_trial_first_s": {
+            "trial_00": 28873.945,
+            "trial_02": 31696.102,
+            "trial_04": 7406.605,
+            "trial_06": 6779.187,
+            "trial_07": 25787.595,
+            "trial_08": 19254.525
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 202,
+          "trials": 9,
+          "first_seen_s": 13.848,
+          "per_trial_first_s": {
+            "trial_00": 91.119,
+            "trial_01": 14.712,
+            "trial_02": 14.699,
+            "trial_03": 14.365,
+            "trial_04": 15.562,
+            "trial_05": 96.64,
+            "trial_06": 14.395,
+            "trial_07": 13.848,
+            "trial_08": 16.631
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLCertificateRequestMessage::SSLCertificateRequestMessage",
+          "artifacts": 184,
+          "trials": 9,
+          "first_seen_s": 303.105,
+          "per_trial_first_s": {
+            "trial_00": 1380.36,
+            "trial_01": 567.368,
+            "trial_02": 381.132,
+            "trial_03": 303.105,
+            "trial_04": 317.827,
+            "trial_05": 3217.221,
+            "trial_06": 811.969,
+            "trial_07": 1003.828,
+            "trial_08": 400.672
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::isDataValid",
+          "artifacts": 132,
+          "trials": 9,
+          "first_seen_s": 66.775,
+          "per_trial_first_s": {
+            "trial_00": 89.375,
+            "trial_01": 341.983,
+            "trial_02": 69.617,
+            "trial_03": 199.157,
+            "trial_04": 110.06,
+            "trial_05": 159.486,
+            "trial_06": 86.852,
+            "trial_07": 156.938,
+            "trial_08": 66.775
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName",
+          "artifacts": 125,
+          "trials": 9,
+          "first_seen_s": 219.177,
+          "per_trial_first_s": {
+            "trial_00": 1737.755,
+            "trial_01": 754.328,
+            "trial_02": 357.145,
+            "trial_03": 975.784,
+            "trial_04": 661.674,
+            "trial_05": 994.123,
+            "trial_06": 638.781,
+            "trial_07": 219.177,
+            "trial_08": 994.583
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength",
+          "artifacts": 100,
+          "trials": 9,
+          "first_seen_s": 288.009,
+          "per_trial_first_s": {
+            "trial_00": 1590.484,
+            "trial_01": 563.061,
+            "trial_02": 402.834,
+            "trial_03": 288.009,
+            "trial_04": 347.042,
+            "trial_05": 3192.604,
+            "trial_06": 847.313,
+            "trial_07": 34952.414,
+            "trial_08": 393.541
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::getSessionIDLength",
+          "artifacts": 99,
+          "trials": 9,
+          "first_seen_s": 307.095,
+          "per_trial_first_s": {
+            "trial_00": 4510.515,
+            "trial_01": 594.355,
+            "trial_02": 395.666,
+            "trial_03": 307.095,
+            "trial_04": 374.774,
+            "trial_05": 3309.024,
+            "trial_06": 811.934,
+            "trial_07": 978.554,
+            "trial_08": 374.396
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck",
+          "artifacts": 86,
+          "trials": 9,
+          "first_seen_s": 1594.373,
+          "per_trial_first_s": {
+            "trial_00": 1594.373,
+            "trial_01": 1751.481,
+            "trial_02": 5262.469,
+            "trial_03": 36722.128,
+            "trial_04": 24921.143,
+            "trial_05": 10389.17,
+            "trial_06": 34571.206,
+            "trial_07": 17632.397,
+            "trial_08": 9864.81
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getDstIpAddress",
+          "artifacts": 82,
+          "trials": 9,
+          "first_seen_s": 18.661,
+          "per_trial_first_s": {
+            "trial_00": 192.438,
+            "trial_01": 21.076,
+            "trial_02": 100.414,
+            "trial_03": 87.492,
+            "trial_04": 394.881,
+            "trial_05": 140.638,
+            "trial_06": 192.682,
+            "trial_07": 18.661,
+            "trial_08": 19.422
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::RadiusLayer::isDataValid",
+          "artifacts": 73,
+          "trials": 9,
+          "first_seen_s": 249.418,
+          "per_trial_first_s": {
+            "trial_00": 4720.896,
+            "trial_01": 249.418,
+            "trial_02": 16591.355,
+            "trial_03": 4784.058,
+            "trial_04": 400.591,
+            "trial_05": 1790.59,
+            "trial_06": 2510.377,
+            "trial_07": 1707.4,
+            "trial_08": 1894.152
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getSrcIpAddress",
+          "artifacts": 70,
+          "trials": 9,
+          "first_seen_s": 27.764,
+          "per_trial_first_s": {
+            "trial_00": 54.08,
+            "trial_01": 148.793,
+            "trial_02": 27.764,
+            "trial_03": 83.946,
+            "trial_04": 105.962,
+            "trial_05": 15613.13,
+            "trial_06": 115.639,
+            "trial_07": 404.893,
+            "trial_08": 609.447
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen",
+          "artifacts": 35,
+          "trials": 9,
+          "first_seen_s": 83.492,
+          "per_trial_first_s": {
+            "trial_00": 159.491,
+            "trial_01": 105.64,
+            "trial_02": 108.462,
+            "trial_03": 190.89,
+            "trial_04": 458.464,
+            "trial_05": 4963.558,
+            "trial_06": 190.346,
+            "trial_07": 83.492,
+            "trial_08": 469.926
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket",
+          "artifacts": 23,
+          "trials": 9,
+          "first_seen_s": 20.126,
+          "per_trial_first_s": {
+            "trial_00": 149.581,
+            "trial_01": 20.126,
+            "trial_02": 82886.67,
+            "trial_03": 80.093,
+            "trial_04": 99.162,
+            "trial_05": 255.872,
+            "trial_06": 83246.889,
+            "trial_07": 82287.042,
+            "trial_08": 34334.694
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getHeaderLen",
+          "artifacts": 19,
+          "trials": 9,
+          "first_seen_s": 61.237,
+          "per_trial_first_s": {
+            "trial_00": 227.09,
+            "trial_01": 1081.969,
+            "trial_02": 4882.299,
+            "trial_03": 259.646,
+            "trial_04": 3817.26,
+            "trial_05": 61.237,
+            "trial_06": 46860.096,
+            "trial_07": 3571.407,
+            "trial_08": 339.156
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::getHeaderLen",
+          "artifacts": 16,
+          "trials": 8,
+          "first_seen_s": 825.638,
+          "per_trial_first_s": {
+            "trial_00": 25822.338,
+            "trial_01": 70674.891,
+            "trial_02": 6229.015,
+            "trial_03": 825.638,
+            "trial_05": 4531.712,
+            "trial_06": 1052.075,
+            "trial_07": 5409.045,
+            "trial_08": 1008.827
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::GtpExtension::getTotalLength",
+          "artifacts": 15,
+          "trials": 7,
+          "first_seen_s": 510.415,
+          "per_trial_first_s": {
+            "trial_02": 5937.519,
+            "trial_03": 510.415,
+            "trial_04": 518.968,
+            "trial_05": 4581.937,
+            "trial_06": 689.765,
+            "trial_07": 21254.478,
+            "trial_08": 43282.433
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::SSLServerHelloMessage",
+          "artifacts": 12,
+          "trials": 5,
+          "first_seen_s": 994.954,
+          "per_trial_first_s": {
+            "trial_00": 2305.735,
+            "trial_02": 35641.842,
+            "trial_04": 34603.072,
+            "trial_05": 34456.611,
+            "trial_07": 994.954
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::SSLClientHelloMessage",
+          "artifacts": 11,
+          "trials": 6,
+          "first_seen_s": 411.54,
+          "per_trial_first_s": {
+            "trial_00": 1763.28,
+            "trial_01": 625.05,
+            "trial_05": 3218.237,
+            "trial_06": 958.916,
+            "trial_07": 35120.972,
+            "trial_08": 411.54
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6AuthenticationHeader::getExtensionLen",
+          "artifacts": 11,
+          "trials": 5,
+          "first_seen_s": 1468.803,
+          "per_trial_first_s": {
+            "trial_00": 34773.271,
+            "trial_01": 83511.128,
+            "trial_04": 34413.643,
+            "trial_05": 35240.823,
+            "trial_06": 1468.803
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getFragmentFlags",
+          "artifacts": 7,
+          "trials": 5,
+          "first_seen_s": 167.232,
+          "per_trial_first_s": {
+            "trial_00": 167.232,
+            "trial_01": 10165.753,
+            "trial_04": 8617.771,
+            "trial_07": 901.99,
+            "trial_08": 45880.2
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IgmpLayer::getIGMPVerFromData",
+          "artifacts": 5,
+          "trials": 5,
+          "first_seen_s": 9.473,
+          "per_trial_first_s": {
+            "trial_00": 5211.185,
+            "trial_02": 162.55,
+            "trial_05": 9.473,
+            "trial_06": 85.751,
+            "trial_08": 36969.255
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:strlen",
+          "artifacts": 3,
+          "trials": 3,
+          "first_seen_s": 1059.849,
+          "per_trial_first_s": {
+            "trial_03": 1059.849,
+            "trial_05": 83455.838,
+            "trial_08": 34844.515
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SipRequestFirstLine::parseVersion",
+          "artifacts": 3,
+          "trials": 2,
+          "first_seen_s": 78914.445,
+          "per_trial_first_s": {
+            "trial_06": 83210.818,
+            "trial_08": 78914.445
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::parseNextLayer",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 37714.849,
+          "per_trial_first_s": {
+            "trial_07": 37714.849
+          }
+        }
+      ],
+      "bugs_3frame": [
+        {
+          "signature": "heap-buffer-overflow:pcpp::tbp_my_own_strnlen<-pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields",
+          "artifacts": 1624,
+          "trials": 9,
+          "first_seen_s": 281.042,
+          "per_trial_first_s": {
+            "trial_00": 512.268,
+            "trial_01": 1751.989,
+            "trial_02": 504.162,
+            "trial_03": 2042.54,
+            "trial_04": 909.762,
+            "trial_05": 390.539,
+            "trial_06": 1180.68,
+            "trial_07": 1449.95,
+            "trial_08": 281.042
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::SipResponseLayer::SipResponseLayer",
+          "artifacts": 1260,
+          "trials": 9,
+          "first_seen_s": 460.355,
+          "per_trial_first_s": {
+            "trial_00": 645.951,
+            "trial_01": 6330.078,
+            "trial_02": 34420.332,
+            "trial_03": 24228.714,
+            "trial_04": 1520.432,
+            "trial_05": 460.355,
+            "trial_06": 34488.188,
+            "trial_07": 9872.755,
+            "trial_08": 34457.847
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::HttpResponseLayer::HttpResponseLayer",
+          "artifacts": 955,
+          "trials": 8,
+          "first_seen_s": 1182.676,
+          "per_trial_first_s": {
+            "trial_00": 39406.355,
+            "trial_01": 8144.722,
+            "trial_02": 36079.813,
+            "trial_03": 17992.499,
+            "trial_04": 37469.185,
+            "trial_05": 47896.59,
+            "trial_06": 1182.676,
+            "trial_08": 34430.758
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::DnsResource::getDataLength<-pcpp::DnsResource::getSize<-pcpp::DnsLayer::parseResources",
+          "artifacts": 461,
+          "trials": 9,
+          "first_seen_s": 18.028,
+          "per_trial_first_s": {
+            "trial_00": 18.028,
+            "trial_01": 26.578,
+            "trial_02": 18.925,
+            "trial_03": 20.971,
+            "trial_04": 24.297,
+            "trial_05": 28.363,
+            "trial_06": 23.476,
+            "trial_07": 28.868,
+            "trial_08": 34.848
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::getSessionIDLength<-pcpp::SSLClientHelloMessage::SSLClientHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage",
+          "artifacts": 268,
+          "trials": 9,
+          "first_seen_s": 292.821,
+          "per_trial_first_s": {
+            "trial_00": 1966.575,
+            "trial_01": 553.891,
+            "trial_02": 394.076,
+            "trial_03": 292.821,
+            "trial_04": 337.076,
+            "trial_05": 3191.603,
+            "trial_06": 811.94,
+            "trial_07": 978.717,
+            "trial_08": 390.057
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::NullLoopbackLayer::getFamily<-pcpp::NullLoopbackLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 238,
+          "trials": 9,
+          "first_seen_s": 0.119,
+          "per_trial_first_s": {
+            "trial_00": 0.162,
+            "trial_01": 0.313,
+            "trial_02": 0.151,
+            "trial_03": 0.138,
+            "trial_04": 0.119,
+            "trial_05": 0.205,
+            "trial_06": 0.205,
+            "trial_07": 0.124,
+            "trial_08": 0.155
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Extension::getExtensionLen<-pcpp::IPv6Layer::parseExtensions<-pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 216,
+          "trials": 9,
+          "first_seen_s": 0.376,
+          "per_trial_first_s": {
+            "trial_00": 81.813,
+            "trial_01": 0.376,
+            "trial_02": 70.553,
+            "trial_03": 14.68,
+            "trial_04": 15.142,
+            "trial_05": 13.793,
+            "trial_06": 14.35,
+            "trial_07": 13.781,
+            "trial_08": 95.751
+          }
+        },
+        {
+          "signature": "requested:operator<-void<-std::__1::__libcpp_allocate",
+          "artifacts": 216,
+          "trials": 6,
+          "first_seen_s": 6779.187,
+          "per_trial_first_s": {
+            "trial_00": 28873.945,
+            "trial_02": 31696.102,
+            "trial_04": 7406.605,
+            "trial_06": 6779.187,
+            "trial_07": 25787.595,
+            "trial_08": 19254.525
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::HttpRequestLayer::HttpRequestLayer",
+          "artifacts": 189,
+          "trials": 9,
+          "first_seen_s": 542.418,
+          "per_trial_first_s": {
+            "trial_00": 34662.069,
+            "trial_01": 2315.325,
+            "trial_02": 673.737,
+            "trial_03": 15933.05,
+            "trial_04": 918.026,
+            "trial_05": 36094.68,
+            "trial_06": 34797.636,
+            "trial_07": 1451.336,
+            "trial_08": 542.418
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLCertificateRequestMessage::SSLCertificateRequestMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage<-pcpp::SSLHandshakeLayer::SSLHandshakeLayer",
+          "artifacts": 184,
+          "trials": 9,
+          "first_seen_s": 303.105,
+          "per_trial_first_s": {
+            "trial_00": 1380.36,
+            "trial_01": 567.368,
+            "trial_02": 381.132,
+            "trial_03": 303.105,
+            "trial_04": 317.827,
+            "trial_05": 3217.221,
+            "trial_06": 811.969,
+            "trial_07": 1003.828,
+            "trial_08": 400.672
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::HeaderField::HeaderField<-pcpp::TextBasedProtocolMessage::parseFields<-pcpp::SipRequestLayer::SipRequestLayer",
+          "artifacts": 166,
+          "trials": 9,
+          "first_seen_s": 34406.024,
+          "per_trial_first_s": {
+            "trial_00": 34406.024,
+            "trial_01": 34989.285,
+            "trial_02": 35461.491,
+            "trial_03": 37557.214,
+            "trial_04": 34469.578,
+            "trial_05": 34415.847,
+            "trial_06": 34819.557,
+            "trial_07": 34554.211,
+            "trial_08": 34958.197
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::isDataValid<-pcpp::IcmpLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 132,
+          "trials": 9,
+          "first_seen_s": 66.775,
+          "per_trial_first_s": {
+            "trial_00": 89.375,
+            "trial_01": 341.983,
+            "trial_02": 69.617,
+            "trial_03": 199.157,
+            "trial_04": 110.06,
+            "trial_05": 159.486,
+            "trial_06": 86.852,
+            "trial_07": 156.938,
+            "trial_08": 66.775
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::getSessionIDLength<-pcpp::SSLServerHelloMessage::SSLServerHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage",
+          "artifacts": 99,
+          "trials": 9,
+          "first_seen_s": 307.095,
+          "per_trial_first_s": {
+            "trial_00": 4510.515,
+            "trial_01": 594.355,
+            "trial_02": 395.666,
+            "trial_03": 307.095,
+            "trial_04": 374.774,
+            "trial_05": 3309.024,
+            "trial_06": 811.934,
+            "trial_07": 978.554,
+            "trial_08": 374.396
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::IDnsResource<-pcpp::DnsQuery::DnsQuery",
+          "artifacts": 94,
+          "trials": 9,
+          "first_seen_s": 219.177,
+          "per_trial_first_s": {
+            "trial_00": 1737.755,
+            "trial_01": 754.328,
+            "trial_02": 357.145,
+            "trial_03": 975.784,
+            "trial_04": 661.674,
+            "trial_05": 1156.925,
+            "trial_06": 638.781,
+            "trial_07": 219.177,
+            "trial_08": 994.583
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getDstIpAddress<-LLVMFuzzerTestOneInput<-ExecuteFilesOnyByOne",
+          "artifacts": 82,
+          "trials": 9,
+          "first_seen_s": 18.661,
+          "per_trial_first_s": {
+            "trial_00": 192.438,
+            "trial_01": 21.076,
+            "trial_02": 100.414,
+            "trial_03": 87.492,
+            "trial_04": 394.881,
+            "trial_05": 140.638,
+            "trial_06": 192.682,
+            "trial_07": 18.661,
+            "trial_08": 19.422
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::RadiusLayer::isDataValid<-pcpp::UdpLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 73,
+          "trials": 9,
+          "first_seen_s": 249.418,
+          "per_trial_first_s": {
+            "trial_00": 4720.896,
+            "trial_01": 249.418,
+            "trial_02": 16591.355,
+            "trial_03": 4784.058,
+            "trial_04": 400.591,
+            "trial_05": 1790.59,
+            "trial_06": 2510.377,
+            "trial_07": 1707.4,
+            "trial_08": 1894.152
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getSrcIpAddress<-LLVMFuzzerTestOneInput<-ExecuteFilesOnyByOne",
+          "artifacts": 70,
+          "trials": 9,
+          "first_seen_s": 27.764,
+          "per_trial_first_s": {
+            "trial_00": 54.08,
+            "trial_01": 148.793,
+            "trial_02": 27.764,
+            "trial_03": 83.946,
+            "trial_04": 105.962,
+            "trial_05": 15613.13,
+            "trial_06": 115.639,
+            "trial_07": 404.893,
+            "trial_08": 609.447
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck<-strstr<-pcpp::SipRequestFirstLine::parseVersion",
+          "artifacts": 52,
+          "trials": 9,
+          "first_seen_s": 1594.373,
+          "per_trial_first_s": {
+            "trial_00": 1594.373,
+            "trial_01": 35961.085,
+            "trial_02": 5262.469,
+            "trial_03": 40667.346,
+            "trial_04": 24921.143,
+            "trial_05": 16634.188,
+            "trial_06": 35362.53,
+            "trial_07": 17632.397,
+            "trial_08": 16180.073
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength<-pcpp::SSLExtension::getTotalLength<-pcpp::SSLServerHelloMessage::SSLServerHelloMessage",
+          "artifacts": 52,
+          "trials": 9,
+          "first_seen_s": 323.334,
+          "per_trial_first_s": {
+            "trial_00": 1657.271,
+            "trial_01": 563.061,
+            "trial_02": 402.834,
+            "trial_03": 323.334,
+            "trial_04": 375.464,
+            "trial_05": 3192.604,
+            "trial_06": 856.976,
+            "trial_07": 82747.459,
+            "trial_08": 393.541
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLExtension::getLength<-pcpp::SSLExtension::getTotalLength<-pcpp::SSLClientHelloMessage::SSLClientHelloMessage",
+          "artifacts": 48,
+          "trials": 9,
+          "first_seen_s": 288.009,
+          "per_trial_first_s": {
+            "trial_00": 1590.484,
+            "trial_01": 936.425,
+            "trial_02": 405.218,
+            "trial_03": 288.009,
+            "trial_04": 347.042,
+            "trial_05": 85725.591,
+            "trial_06": 847.313,
+            "trial_07": 34952.414,
+            "trial_08": 414.196
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::NullLoopbackLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 36,
+          "trials": 8,
+          "first_seen_s": 100.353,
+          "per_trial_first_s": {
+            "trial_00": 186.179,
+            "trial_01": 172.918,
+            "trial_02": 37180.427,
+            "trial_03": 751.073,
+            "trial_04": 100.353,
+            "trial_05": 34461.781,
+            "trial_07": 252.971,
+            "trial_08": 267.513
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:StrstrCheck<-strstr<-pcpp::HttpRequestFirstLine::parseVersion",
+          "artifacts": 34,
+          "trials": 8,
+          "first_seen_s": 1751.481,
+          "per_trial_first_s": {
+            "trial_00": 36066.47,
+            "trial_01": 1751.481,
+            "trial_02": 22707.197,
+            "trial_03": 36722.128,
+            "trial_05": 10389.17,
+            "trial_06": 34571.206,
+            "trial_07": 80261.445,
+            "trial_08": 9864.81
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::EthLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 33,
+          "trials": 9,
+          "first_seen_s": 13.848,
+          "per_trial_first_s": {
+            "trial_00": 91.119,
+            "trial_01": 14.712,
+            "trial_02": 14.699,
+            "trial_03": 14.365,
+            "trial_04": 15.562,
+            "trial_05": 190.569,
+            "trial_06": 14.395,
+            "trial_07": 13.848,
+            "trial_08": 34.2
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::GreLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 27,
+          "trials": 9,
+          "first_seen_s": 141.42,
+          "per_trial_first_s": {
+            "trial_00": 6520.305,
+            "trial_01": 326.232,
+            "trial_02": 141.42,
+            "trial_03": 7645.744,
+            "trial_04": 1658.372,
+            "trial_05": 2400.588,
+            "trial_06": 15530.367,
+            "trial_07": 291.983,
+            "trial_08": 15214.699
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::MplsLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 26,
+          "trials": 9,
+          "first_seen_s": 93.688,
+          "per_trial_first_s": {
+            "trial_00": 25641.852,
+            "trial_01": 93.688,
+            "trial_02": 9790.833,
+            "trial_03": 178.245,
+            "trial_04": 271.615,
+            "trial_05": 96.64,
+            "trial_06": 11938.998,
+            "trial_07": 41009.29,
+            "trial_08": 101.565
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::IPv6Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 25,
+          "trials": 8,
+          "first_seen_s": 144.827,
+          "per_trial_first_s": {
+            "trial_00": 144.827,
+            "trial_01": 215.485,
+            "trial_02": 246.93,
+            "trial_04": 149.491,
+            "trial_05": 586.9,
+            "trial_06": 1126.317,
+            "trial_07": 380.981,
+            "trial_08": 211.923
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen<-pcpp::PPPoEDiscoveryLayer::PPPoEDiscoveryLayer<-pcpp::EthLayer::parseNextLayer",
+          "artifacts": 25,
+          "trials": 9,
+          "first_seen_s": 83.492,
+          "per_trial_first_s": {
+            "trial_00": 159.491,
+            "trial_01": 105.64,
+            "trial_02": 108.462,
+            "trial_03": 190.89,
+            "trial_04": 458.464,
+            "trial_05": 4963.558,
+            "trial_06": 190.346,
+            "trial_07": 83.492,
+            "trial_08": 469.926
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::GtpV1Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 25,
+          "trials": 7,
+          "first_seen_s": 972.855,
+          "per_trial_first_s": {
+            "trial_00": 6189.73,
+            "trial_01": 27340.839,
+            "trial_03": 54221.512,
+            "trial_04": 36883.324,
+            "trial_05": 4582.457,
+            "trial_06": 972.855,
+            "trial_07": 6501.382
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket<-pcpp::IPv4Layer::IPv4Layer<-pcpp::Packet::createFirstLayer",
+          "artifacts": 20,
+          "trials": 9,
+          "first_seen_s": 20.126,
+          "per_trial_first_s": {
+            "trial_00": 149.581,
+            "trial_01": 20.126,
+            "trial_02": 82886.67,
+            "trial_03": 80.093,
+            "trial_04": 99.162,
+            "trial_05": 255.872,
+            "trial_06": 83246.889,
+            "trial_07": 82287.042,
+            "trial_08": 34334.694
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IcmpLayer::getHeaderLen<-pcpp::IcmpLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 19,
+          "trials": 9,
+          "first_seen_s": 61.237,
+          "per_trial_first_s": {
+            "trial_00": 227.09,
+            "trial_01": 1081.969,
+            "trial_02": 4882.299,
+            "trial_03": 259.646,
+            "trial_04": 3817.26,
+            "trial_05": 61.237,
+            "trial_06": 46860.096,
+            "trial_07": 3571.407,
+            "trial_08": 339.156
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::getHeaderLen<-pcpp::GtpV1Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 16,
+          "trials": 8,
+          "first_seen_s": 825.638,
+          "per_trial_first_s": {
+            "trial_00": 25822.338,
+            "trial_01": 70674.891,
+            "trial_02": 6229.015,
+            "trial_03": 825.638,
+            "trial_05": 4531.712,
+            "trial_06": 1052.075,
+            "trial_07": 5409.045,
+            "trial_08": 1008.827
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::IDnsResource",
+          "artifacts": 15,
+          "trials": 7,
+          "first_seen_s": 666.978,
+          "per_trial_first_s": {
+            "trial_00": 34451.48,
+            "trial_01": 35448.097,
+            "trial_02": 36761.884,
+            "trial_03": 976.012,
+            "trial_04": 666.978,
+            "trial_06": 10817.493,
+            "trial_08": 84726.301
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::GtpV1Layer::GtpExtension::getTotalLength<-pcpp::GtpV1Layer::getHeaderLen<-pcpp::GtpV1Layer::parseNextLayer",
+          "artifacts": 15,
+          "trials": 7,
+          "first_seen_s": 510.415,
+          "per_trial_first_s": {
+            "trial_02": 5937.519,
+            "trial_03": 510.415,
+            "trial_04": 518.968,
+            "trial_05": 4581.937,
+            "trial_06": 689.765,
+            "trial_07": 21254.478,
+            "trial_08": 43282.433
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::PPPoESessionLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 14,
+          "trials": 8,
+          "first_seen_s": 1294.953,
+          "per_trial_first_s": {
+            "trial_00": 38746.38,
+            "trial_01": 42532.234,
+            "trial_02": 67234.915,
+            "trial_03": 4547.159,
+            "trial_05": 11127.261,
+            "trial_06": 8790.869,
+            "trial_07": 8485.703,
+            "trial_08": 1294.953
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLServerHelloMessage::SSLServerHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage<-pcpp::SSLHandshakeLayer::SSLHandshakeLayer",
+          "artifacts": 12,
+          "trials": 5,
+          "first_seen_s": 994.954,
+          "per_trial_first_s": {
+            "trial_00": 2305.735,
+            "trial_02": 35641.842,
+            "trial_04": 34603.072,
+            "trial_05": 34456.611,
+            "trial_07": 994.954
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SSLClientHelloMessage::SSLClientHelloMessage<-pcpp::SSLHandshakeMessage::createHandhakeMessage<-pcpp::SSLHandshakeLayer::SSLHandshakeLayer",
+          "artifacts": 11,
+          "trials": 6,
+          "first_seen_s": 411.54,
+          "per_trial_first_s": {
+            "trial_00": 1763.28,
+            "trial_01": 625.05,
+            "trial_05": 3218.237,
+            "trial_06": 958.916,
+            "trial_07": 35120.972,
+            "trial_08": 411.54
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6AuthenticationHeader::getExtensionLen<-pcpp::IPv6Layer::parseExtensions<-pcpp::IPv6Layer::IPv6Layer",
+          "artifacts": 11,
+          "trials": 5,
+          "first_seen_s": 1468.803,
+          "per_trial_first_s": {
+            "trial_00": 34773.271,
+            "trial_01": 83511.128,
+            "trial_04": 34413.643,
+            "trial_05": 35240.823,
+            "trial_06": 1468.803
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::IDnsResource<-pcpp::DnsResource::DnsResource",
+          "artifacts": 10,
+          "trials": 5,
+          "first_seen_s": 34450.295,
+          "per_trial_first_s": {
+            "trial_03": 35429.49,
+            "trial_04": 83005.564,
+            "trial_05": 82995.318,
+            "trial_07": 82737.018,
+            "trial_08": 34450.295
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::VlanLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 9,
+          "trials": 6,
+          "first_seen_s": 1627.476,
+          "per_trial_first_s": {
+            "trial_01": 1627.476,
+            "trial_02": 45290.793,
+            "trial_03": 38232.182,
+            "trial_05": 10016.774,
+            "trial_07": 64919.92,
+            "trial_08": 83626.397
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen<-pcpp::PPPoEDiscoveryLayer::PPPoEDiscoveryLayer<-pcpp::VlanLayer::parseNextLayer",
+          "artifacts": 8,
+          "trials": 6,
+          "first_seen_s": 1763.996,
+          "per_trial_first_s": {
+            "trial_03": 4202.741,
+            "trial_04": 4110.824,
+            "trial_05": 86018.246,
+            "trial_06": 38670.689,
+            "trial_07": 2372.228,
+            "trial_08": 1763.996
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::getFragmentFlags<-pcpp::IPv4Layer::isFragment<-pcpp::IPv4Layer::parseNextLayer",
+          "artifacts": 7,
+          "trials": 5,
+          "first_seen_s": 167.232,
+          "per_trial_first_s": {
+            "trial_00": 167.232,
+            "trial_01": 10165.753,
+            "trial_04": 8617.771,
+            "trial_07": 901.99,
+            "trial_08": 45880.2
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::decodeName<-pcpp::IDnsResource::decodeName",
+          "artifacts": 6,
+          "trials": 4,
+          "first_seen_s": 653.712,
+          "per_trial_first_s": {
+            "trial_00": 34451.458,
+            "trial_04": 35123.317,
+            "trial_05": 994.123,
+            "trial_06": 653.712
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IgmpLayer::getIGMPVerFromData<-pcpp::IPv4Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 5,
+          "trials": 5,
+          "first_seen_s": 9.473,
+          "per_trial_first_s": {
+            "trial_00": 5211.185,
+            "trial_02": 162.55,
+            "trial_05": 9.473,
+            "trial_06": 85.751,
+            "trial_08": 36969.255
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::SllLayer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 4,
+          "trials": 4,
+          "first_seen_s": 25034.703,
+          "per_trial_first_s": {
+            "trial_01": 40908.207,
+            "trial_03": 25034.703,
+            "trial_07": 74080.8,
+            "trial_08": 39316.768
+          }
+        },
+        {
+          "signature": "stack-buffer-overflow:strlen<-std::__1::basic_string<-pcpp::IDnsResource::IDnsResource",
+          "artifacts": 3,
+          "trials": 3,
+          "first_seen_s": 1059.849,
+          "per_trial_first_s": {
+            "trial_03": 1059.849,
+            "trial_05": 83455.838,
+            "trial_08": 34844.515
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::initLayerInPacket<-pcpp::IPv4Layer::IPv4Layer<-pcpp::IPv4Layer::parseNextLayer",
+          "artifacts": 3,
+          "trials": 1,
+          "first_seen_s": 6612.436,
+          "per_trial_first_s": {
+            "trial_03": 6612.436
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::SipRequestFirstLine::parseVersion<-pcpp::SipRequestFirstLine::SipRequestFirstLine<-pcpp::SipRequestLayer::SipRequestLayer",
+          "artifacts": 3,
+          "trials": 2,
+          "first_seen_s": 78914.445,
+          "per_trial_first_s": {
+            "trial_06": 83210.818,
+            "trial_08": 78914.445
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::PPPoEDiscoveryLayer::getHeaderLen<-pcpp::PPPoEDiscoveryLayer::PPPoEDiscoveryLayer<-pcpp::SllLayer::parseNextLayer",
+          "artifacts": 2,
+          "trials": 2,
+          "first_seen_s": 38155.112,
+          "per_trial_first_s": {
+            "trial_02": 38155.112,
+            "trial_06": 85469.335
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::Packet::createFirstLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 2,
+          "trials": 2,
+          "first_seen_s": 16.631,
+          "per_trial_first_s": {
+            "trial_07": 82601.285,
+            "trial_08": 16.631
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv6Layer::IPv6Layer<-pcpp::IPv4Layer::parseNextLayer<-pcpp::Packet::setRawPacket",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 35551.933,
+          "per_trial_first_s": {
+            "trial_02": 35551.933
+          }
+        },
+        {
+          "signature": "heap-buffer-overflow:pcpp::IPv4Layer::parseNextLayer<-pcpp::Packet::setRawPacket<-LLVMFuzzerTestOneInput",
+          "artifacts": 1,
+          "trials": 1,
+          "first_seen_s": 37714.849,
+          "per_trial_first_s": {
+            "trial_07": 37714.849
+          }
+        }
+      ]
+    }
+  }
+}

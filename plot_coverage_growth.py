@@ -45,6 +45,69 @@ HOURS = 24.0
 GRID = np.arange(0, HOURS * 3600 + 30, 30, dtype=float)
 
 
+def per_trial_charge_windows(exp_dir: Path, swaps_by_trial: dict) -> dict:
+    """{trial: [(run_time, charge_s)]} -- each trial charged its OWN optimizer.
+
+    Under per-trial optimizers, trial i runs its own optimizer against its own
+    source tree and never benefits from the other nine. Charging it the campaign
+    total (per-replicate) bills it for CPU spent on binaries it never executed;
+    dividing the total by ten (the average) hides that the optimizers did
+    measurably different amounts of work. Both answer the wrong question. The
+    right one is: if this were a real single campaign, how long would ITS
+    optimizer have taken?
+
+    Measured directly. Each optimizer is pinned to one core, so its CPU is the
+    wall time its sessions ran, and a session directory
+    (trials/trial_NN/iter_MM/sandbox) belongs to exactly one trial -- unlike the
+    ledger rows, 86% of which the broker writes without a trial_id and which
+    time-window matching cannot separate (ten sessions overlap; 89% ambiguous).
+
+    Session wall is scaled by ledger_cpu / session_wall to strip agent
+    model-wait: blocked on the API the core is free, so it is not CPU. On c1
+    that factor is 0.834 -- 95.0h of session wall against 79.2h of charged CPU.
+    """
+    root = exp_dir / "optimized" / "online" / "trials"
+    if not root.is_dir():
+        return {}
+    sessions: dict[int, list] = {}
+    for d in sorted(root.glob("trial_*/iter_*/sandbox")):
+        m = re.search(r"trial_(\d+)/iter_(\d+)", str(d))
+        if not m:
+            continue
+        times = [f.stat().st_mtime for f in d.rglob("*") if f.is_file()]
+        if times:
+            sessions.setdefault(int(m.group(1)), []).append(
+                (min(times), max(times) - min(times)))
+    if not sessions:
+        return {}
+
+    wall_total = sum(d for v in sessions.values() for _, d in v)
+    try:
+        cost = json.loads(
+            (exp_dir / "optimized" / "online" / "cpu_cost.json").read_text())
+        cpu_total = float(cost.get("total_core_s") or 0.0)
+    except (OSError, json.JSONDecodeError, TypeError):
+        cpu_total = 0.0
+    k = (cpu_total / wall_total) if (cpu_total and wall_total) else 1.0
+
+    starts = sorted(json.loads(m.read_text()).get("start_time", 0)
+                    for m in (exp_dir / "optimized").glob("trial_*/metadata.json"))
+    if not starts:
+        return {}
+    t0 = starts[0]
+
+    out: dict[int, list] = {}
+    for t, rounds in sessions.items():
+        acc = 0.0
+        prior_down = swaps_by_trial.get(t, [])
+        for begin, dur in sorted(rounds):
+            wall = begin - t0
+            down = sum(d for rt, d in prior_down if rt <= wall)
+            out.setdefault(t, []).append((max(wall - down - acc, 0.0), dur * k))
+            acc += dur * k
+    return out
+
+
 def cpu_charge_windows(exp_dir: Path, project: str, swaps):
     """Optimizer CPU, charged to the online arm as lost fuzzing time.
 
@@ -79,16 +142,27 @@ def cpu_charge_windows(exp_dir: Path, project: str, swaps):
     return out
 
 
-def swap_windows(experiment_id: str):
-    """[(down_start_runtime_s, duration_s)] for each hot swap, from the run log.
+def swap_windows(experiment_id: str, trial_id: int | None = None):
+    """Hot-swap stops for ONE trial (or, legacy, for the whole online arm).
 
-    Anchored on run_time (AFL's clock) because that is the axis the raw samples
-    are on; converting to wall-clock is then a cumulative shift.
+    Two log formats, because the design changed underneath this script:
 
-    The log is the ONLY record of how long each swap stopped the arm -- AFL's
-    relative_time does not advance while the trial is down. A missing log would
-    silently yield zero gaps and an uncharged, flattering curve, so it raises
-    rather than returning [].
+      shared-binary (b1..b6)  "online round N: HOT-SWAP into K running online
+                              trials" -- ONE stop applies to every online trial,
+                              so a single global window list is correct.
+      per-trial     (c1+)     "trial_07 round N: HOT-SWAP (swap generation G)"
+                              -- each trial stops on its OWN schedule, so the
+                              windows must be read per trial and applied only to
+                              that trial's samples. Averaging them onto a common
+                              timeline would place a gap where no trial actually
+                              stopped and shift every trial by downtime it did
+                              not experience.
+
+    A log that parses to ZERO swaps is treated as an error, not as "no
+    downtime". The old parser matched only the shared-binary string, so against
+    a per-trial log it silently returned [] and the online arm was plotted
+    UNCHARGED -- exactly the flattering curve the file-missing guard below was
+    written to prevent.
     """
     log = Path(f".{experiment_id}.log")
     if not log.is_file():
@@ -96,20 +170,66 @@ def swap_windows(experiment_id: str):
             f"missing run log {log} -- it is the only record of hot-swap "
             f"downtime; without it the online arm would be plotted uncharged")
     stamp = lambda l: dt.datetime.strptime(l[:19], "%Y-%m-%d %H:%M:%S")
-    start = pend = None
-    downtime = 0.0
-    out = []
-    for line in log.read_text(errors="replace").splitlines():
+    text = log.read_text(errors="replace").splitlines()
+
+    per_trial = any(re.search(r"trial_\d+ round \d+: HOT-SWAP", l) for l in text)
+    start = None
+    pend: dict[str, dt.datetime] = {}
+    downtime: dict[str, float] = {}
+    out: dict[str, list] = {}
+    for line in text:
         if "Started trial" in line and start is None:
             start = stamp(line)
-        elif "HOT-SWAP into" in line and start:
-            pend = stamp(line)
-        elif "swap complete" in line and pend:
-            wall = (pend - start).total_seconds()
-            out.append((wall - downtime, (stamp(line) - pend).total_seconds()))
-            downtime += out[-1][1]
-            pend = None
-    return out
+            continue
+        if start is None:
+            continue
+        if per_trial:
+            m = re.search(r"trial_(\d+) round \d+: HOT-SWAP", line)
+            if m:
+                pend[m.group(1)] = stamp(line)
+                continue
+            m = re.search(r"trial_(\d+) round \d+: swap complete", line)
+            key = m.group(1) if m else None
+        else:
+            if "HOT-SWAP into" in line:
+                pend["*"] = stamp(line)
+                continue
+            key = "*" if "swap complete" in line else None
+        if key is None or key not in pend:
+            continue
+        began = pend.pop(key)
+        dur = (stamp(line) - began).total_seconds()
+        acc = downtime.get(key, 0.0)
+        wall = (began - start).total_seconds()
+        out.setdefault(key, []).append((wall - acc, dur))
+        downtime[key] = acc + dur
+
+    total = sum(len(v) for v in out.values())
+    if total == 0:
+        raise SystemExit(
+            f"{log} parsed to ZERO hot swaps. Refusing to plot: the online arm "
+            f"would be drawn as if it never stopped. Check the log format "
+            f"(expected 'HOT-SWAP into' or 'trial_NN round N: HOT-SWAP').")
+
+    if not per_trial:
+        return out["*"]
+    if trial_id is None:
+        # Legacy callers want one list; hand back the union so the charged-CPU
+        # bookkeeping still composes, but per-trial callers pass trial_id.
+        return sorted(w for v in out.values() for w in v)
+    return out.get(f"{trial_id:02d}", [])
+
+
+def swap_windows_by_trial(experiment_id: str) -> dict:
+    """{trial_id: [(run_time, duration), ...]} -- empty dict for legacy logs."""
+    log = Path(f".{experiment_id}.log")
+    if not log.is_file():
+        return {}
+    text = log.read_text(errors="replace")
+    if not re.search(r"trial_\d+ round \d+: HOT-SWAP", text):
+        return {}
+    ids = sorted({int(m) for m in re.findall(r"trial_(\d+) round \d+: HOT-SWAP", text)})
+    return {i: swap_windows(experiment_id, i) for i in ids}
 
 
 def to_wall(t, windows):
@@ -245,6 +365,25 @@ def smooth(y, mask, win):
     return out
 
 
+def _windows_for(windows, arm, trial_id):
+    """Windows that apply to ONE trial's samples.
+
+    The baseline arm never stops, so it always gets []. For the online arm,
+    a dict means per-trial optimizers (look up this trial); a list is the
+    legacy shared-binary case where one stop applied to every trial.
+    """
+    if arm != "optimized":
+        return []
+    if isinstance(windows, dict):
+        return windows.get(trial_id, [])
+    return windows
+
+
+def _trial_id(path) -> int:
+    m = re.search(r"trial_(\d+)", str(path))
+    return int(m.group(1)) if m else -1
+
+
 def load_coverage(d: Path, windows):
     out = {}
     for arm in ARMS:
@@ -255,7 +394,7 @@ def load_coverage(d: Path, windows):
                 for row in csv.DictReader(fh):
                     xs.append(float(row["time_s"])); ys.append(int(row["cumulative_edges"]))
             if xs:
-                w = windows if arm == "optimized" else []
+                w = _windows_for(windows, arm, _trial_id(f))
                 series.append(with_gaps(xs, ys, w, hold="flat"))
         if series:
             out[arm] = series
@@ -279,7 +418,7 @@ def load_execs(exp_dir: Path, windows):
                 except ValueError:
                     continue
             if xs:
-                w = windows if arm == "optimized" else []
+                w = _windows_for(windows, arm, _trial_id(pd))
                 series.append(with_gaps(xs, ys, w, hold="zero"))
         if series:
             out[arm] = series
@@ -302,6 +441,11 @@ def _charge_caption(exp_dir: Path) -> str:
             continue
         model = d.get("charge_model")
         tc = d.get("trial_cores") or 9
+        if model == "per-trial-optimizer":
+            # Measured, not divided: this trial's own session wall time scaled
+            # by the ledger's CPU/wall ratio. Saying "total / N" would describe
+            # an average the windows do not use -- the trials differ by ~12%.
+            return "as THIS trial's own optimizer CPU (measured), per-trial-optimizer"
         if model == "per-replicate":
             return "in full to every replicate (per-replicate)"
         if model == "as-run":
@@ -343,17 +487,52 @@ def main() -> int:
     root = Path(config.RESULTS_DIR) / args.experiment_id
     project = args.experiment_id.rsplit("-", 1)[-1]
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
-    swaps = swap_windows(args.experiment_id)
+    by_trial = swap_windows_by_trial(args.experiment_id)
+    swaps = swap_windows(args.experiment_id)          # union, for CPU bookkeeping
 
     for exp_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        # Stopped-for-swap time AND optimizer CPU, both charged to the online arm.
-        windows = sorted(swaps + (cpu_charge_windows(exp_dir, project, swaps)
-                                  if args.charge_cpu else []))
+        # Optimizer CPU, charged to the online arm. Unlike a swap stop this is
+        # campaign-wide (the optimizer's core could have been fuzzing at that
+        # instant for ANY trial), so it stays on one shared timeline.
+        charge = (cpu_charge_windows(exp_dir, project, swaps)
+                  if args.charge_cpu else [])
+
+        # Per-trial design: each trial's own stops shift only its own samples.
+        # The shared CPU charge is added to every online trial on top of that.
+        if by_trial:
+            # Each trial charged ITS OWN optimizer, not a share of the campaign.
+            pt = per_trial_charge_windows(exp_dir, by_trial) if args.charge_cpu else {}
+            if pt:
+                windows = {t: sorted(w + pt.get(t, []))
+                           for t, w in by_trial.items()}
+                # Bands: the per-trial charges land at different instants, so
+                # shade the MEDIAN trial's windows as the representative case
+                # and say so in the caption. Shading all ten would overlap into
+                # a solid block that implies every trial paid at every moment.
+                med = sorted(pt, key=lambda t: sum(d for _, d in pt[t]))[len(pt)//2]
+                charge = pt[med]
+            else:
+                windows = {t: sorted(w + charge) for t, w in by_trial.items()}
+            # Bands: draw the CHARGE only. A per-trial stop is ~16s against a
+            # 24h axis -- under half a pixel -- and ten trials stop at ten
+            # different instants, so there is no common interval to shade. The
+            # old single-timeline bands would have implied a synchronised stop
+            # that never happened.
+            band_windows = sorted(charge)
+        else:
+            windows = sorted(swaps + charge)
+            band_windows = windows
         walls, acc = [], 0.0
-        for rt, dur in windows:
+        for rt, dur in band_windows:
             walls.append((rt + acc, rt + acc + dur)); acc += dur
 
-        cov = load_coverage(Path(args.covdir) / exp_dir.name, windows)
+        # Match coverage_growth.py's experiment-namespaced layout, falling back
+        # to the flat CVE-only path so campaigns replayed before the rename
+        # still plot.
+        covdir = Path(args.covdir) / args.experiment_id / exp_dir.name
+        if not covdir.is_dir():
+            covdir = Path(args.covdir) / exp_dir.name
+        cov = load_coverage(covdir, windows)
         exe = load_execs(exp_dir, windows)
         if not cov and not exe:
             continue
@@ -417,11 +596,25 @@ def main() -> int:
             ax2.tick_params(axis="y", labelcolor="#55A868")
             ax2.legend(loc="lower right", fontsize=8)
 
-        swap_s = sum(d for _, d in swaps)
-        cpu_s = sum(d for _, d in windows) - swap_s
+        # Per-trial mode: report the MEDIAN trial, because there is no single
+        # campaign-wide figure any more -- each trial stopped on its own
+        # schedule and paid its own optimizer. A total would describe a run
+        # nobody performed.
+        if isinstance(windows, dict):
+            per_swap = {t: sum(d for _, d in by_trial.get(t, [])) for t in windows}
+            per_all = {t: sum(d for _, d in w) for t, w in windows.items()}
+            mt = sorted(per_all, key=lambda t: per_all[t])[len(per_all)//2]
+            swap_s, cpu_s = per_swap[mt], per_all[mt] - per_swap[mt]
+            n_swaps = len(by_trial.get(mt, []))
+            who = f" (median trial_{mt:02d} of {len(windows)})"
+        else:
+            swap_s = sum(d for _, d in swaps)
+            cpu_s = sum(d for _, d in windows) - swap_s
+            n_swaps = len(swaps)
+            who = ""
         fig.suptitle(
-            f"{exp_dir.name} — online arm charged for its own cost: "
-            f"{swap_s/60:.1f} min stopped for {len(swaps)} hot swaps"
+            f"{exp_dir.name}{who} — online arm charged for its own cost: "
+            f"{swap_s/60:.1f} min stopped for {n_swaps} hot swaps"
             # Read the charge model from the ledger rather than hardcoding a
             # divisor: cpu_cost.json records which model produced
             # fuzz_seconds_equivalent, and a stale "÷ 9 trials" caption on a
@@ -430,7 +623,9 @@ def main() -> int:
                f"charged {_charge_caption(exp_dir)}" if args.charge_cpu else "")
             + ".  Grey bands = online arm not fuzzing.", fontsize=9)
         fig.tight_layout()
-        path = outdir / f"{exp_dir.name}_coverage_execs.png"
+        # Same reason as the CSV path: name by experiment so a second campaign
+        # on one target cannot overwrite the first's figure.
+        path = outdir / f"{args.experiment_id}_{exp_dir.name}_coverage_execs.png"
         fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
         print(f"  wrote {path}")
 

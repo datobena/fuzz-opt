@@ -150,7 +150,14 @@ def main() -> int:
         if entry is None:
             continue
         image, target = prework_image_for(entry), entry["fuzz_target"]
-        outdir = Path(args.outdir) / exp_dir.name
+        # Namespaced by EXPERIMENT, not just by CVE. Two campaigns on the same
+        # target (c1 cold builds vs c2 incremental) both resolve to the same CVE
+        # directory, so the second silently overwrote the first's CSVs -- and
+        # then the plot built from them overwrote the first's figure too. The
+        # raw AFL queues are untouched so this is recoverable by re-replaying,
+        # but that is 25 minutes per campaign to recover something that never
+        # needed to be lost.
+        outdir = Path(args.outdir) / args.experiment_id / exp_dir.name
         outdir.mkdir(parents=True, exist_ok=True)
         for arm in ("baseline", "optimized"):
             for i, trial in enumerate(sorted((exp_dir / arm).glob("trial_*"))):

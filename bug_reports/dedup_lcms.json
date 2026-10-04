@@ -1,0 +1,30 @@
+{
+  "lcms-arvo-756": {
+    "baseline": {
+      "artifacts_raw": 0,
+      "poc_crash": 0,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 0,
+      "unique_by_content": 0,
+      "unique_bugs_1frame": 0,
+      "unique_bugs_3frame": 0,
+      "bugs": [],
+      "bugs_3frame": []
+    },
+    "optimized": {
+      "artifacts_raw": 0,
+      "poc_crash": 0,
+      "assert_aborts": 0,
+      "assert_trials": 0,
+      "assert_sites": {},
+      "non_reproducing": 0,
+      "unique_by_content": 0,
+      "unique_bugs_1frame": 0,
+      "unique_bugs_3frame": 0,
+      "bugs": [],
+      "bugs_3frame": []
+    }
+  }
+}
