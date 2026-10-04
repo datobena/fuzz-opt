@@ -299,6 +299,39 @@ def extract_source_from_build(project: str, output_dir: str) -> bool:
         subprocess.run(["docker", "rm", container_name], capture_output=True)
 
 
+def extract_source_from_image(image: str, source_root: str) -> bool:
+    """Extract /src from any prework-style builder image into <source_root>/src.
+
+    Generic companion to extract_source_from_build (which is hardwired to
+    gcr.io/oss-fuzz/<project>) and extract_source_from_arvo_image (gcr.io/oss-fuzz/
+    <local_id>). Used by the FuzzBench path, whose entries carry an explicit
+    prework image (bench-aflpp/<project>-arvo-<id>) rather than an ARVO id or a
+    PoC. Copies /src to <source_root>/src -- the layout _find_project_source and
+    the sandbox rebuild_fn expect (build.sh + <project>/ side by side under src/),
+    so the same rebuild path the ARVO targets use compiles the optimizer's edits.
+    """
+    source_root = str(source_root)
+    os.makedirs(source_root, exist_ok=True)
+    cname = f"fbsrc_{abs(hash(image)) % 10_000_000}"
+    subprocess.run(["docker", "rm", "-f", cname], capture_output=True)
+    r = subprocess.run(["docker", "create", "--name", cname, image],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        logger.error("could not create container from %s: %s", image, (r.stderr or "")[-200:])
+        return False
+    try:
+        # `:/src` (not `/src/.`) so it lands at <source_root>/src.
+        subprocess.run(["docker", "cp", f"{cname}:/src", source_root],
+                       check=True, capture_output=True)
+        logger.info("Extracted /src from %s to %s/src", image, source_root)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error("source extract from %s failed: %s", image, e)
+        return False
+    finally:
+        subprocess.run(["docker", "rm", "-f", cname], capture_output=True)
+
+
 def prepare_optimized_project(project: str) -> str:
     """Copy project dir as <project>_opt. Returns opt project name."""
     opt_project = f"{project}_opt"
@@ -1019,6 +1052,41 @@ def _clean_build_artifacts(source_dir: str):
     Removing a SUBSET of a build is worse than removing none of it: a fully
     stale tree rebuilds, a half-deleted one cannot.
     """
+    # 1. "build"/"_build" dirs FIRST, before the object sweep below strips the
+    #    .o/.a that tell an OUTPUT dir apart from a shipped SOURCE dir. A dir with
+    #    that name can be either, and neither name nor depth decides it:
+    #      * mruby generates build/ output at the root AND ships
+    #        lib/mruby/build/{load_gems,command}.rb (nested source);
+    #      * php-src ships build/{*.m4,config-stubs} at the ROOT -- the autoconf
+    #        macros ./buildconf needs; deleting it fails every rebuild with
+    #        "cannot open build/*.m4 / ./configure: No such file or directory".
+    #    Decide by CONTENT: remove only a dir that holds compiled artifacts and NO
+    #    build-system source inputs. A shipped macro/script dir (php) or a nested
+    #    .rb source dir (mruby) has no objects (or has source inputs) and is spared.
+    _SRC_INPUT_EXT = (".m4", ".ac", ".am")
+    _SRC_INPUT_NAME = ("config-stubs", "configure.ac", "Makefile.am")
+    _COMPILED_EXT = (".o", ".a", ".so", ".lo", ".la", ".dylib")
+    def _classify(path: str):
+        has_src = has_obj = False
+        for _r, _d, _fs in os.walk(path):
+            for fn in _fs:
+                if fn.endswith(_SRC_INPUT_EXT) or fn in _SRC_INPUT_NAME:
+                    has_src = True
+                elif fn.endswith(_COMPILED_EXT) or ".so." in fn:
+                    has_obj = True
+            if has_src and has_obj:
+                break
+        return has_src, has_obj
+    for root, dirs, _files in os.walk(source_dir, topdown=True):
+        for name in [n for n in dirs if n in ("build", "_build")]:
+            d = os.path.join(root, name)
+            dirs.remove(name)  # never descend into a build dir, kept or removed
+            if os.path.islink(d):
+                continue
+            has_src, has_obj = _classify(d)
+            if has_obj and not has_src:
+                subprocess.run(["rm", "-rf", d], capture_output=True)
+    # 2. Scattered object/library artifacts anywhere else in the tree.
     for root, _dirs, files in os.walk(source_dir):
         for fname in files:
             if fname.startswith("llvm-"):
@@ -1028,14 +1096,14 @@ def _clean_build_artifacts(source_dir: str):
                     os.remove(os.path.join(root, fname))
                 except OSError:
                     pass
-    # .libs holds libtool's real outputs; drop it wholesale so the next make
-    # regenerates library and symlinks together.
+    # 3. .libs holds libtool's real outputs; drop it wholesale so the next make
+    #    regenerates library and symlinks together.
     for root, dirs, _files in os.walk(source_dir):
         if ".libs" in dirs:
             subprocess.run(["rm", "-rf", os.path.join(root, ".libs")],
                            capture_output=True)
-    for cache_name in ["cachedObjs", "CMakeCache.txt", "CMakeFiles",
-                       "build", "_build"]:
+    # 4. CMake/ninja cache names never collide with source, so purge them anywhere.
+    for cache_name in ["cachedObjs", "CMakeCache.txt", "CMakeFiles"]:
         for root, dirs, _files in os.walk(source_dir):
             if cache_name in dirs:
                 subprocess.run(["rm", "-rf", os.path.join(root, cache_name)],
@@ -1483,15 +1551,69 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
     return True
 
 
-def _profile_has_target_symbols(profile_dir: str | Path, fuzz_target: str) -> bool:
-    """True if the flat profile actually sampled the target.
+# Minimum share of perf samples that must land in the target's own DSO for the
+# profile to be usable as a hotspot ranking. Measured on real campaigns: healthy
+# profiles run 58-78% (wolfssl 78, selinux 70, libxml2 66, yara 64), while
+# contaminated ones run 1.5% (assimp, where llvm-symbolizer held 52%), 10.5%
+# (lcms) and 34% (PcapPlusPlus). 25 separates the two populations with margin.
+PHASE2_MIN_TARGET_DSO_SHARE = float(
+    os.environ.get("PHASE2_MIN_TARGET_DSO_SHARE", "25")
+)
 
-    A profile whose symbols are all loader/shell frames means the binary never
-    ran -- `perf record` happily samples whatever DID execute and exits 0, so
-    this is the only signal that separates "profiled the target" from "profiled
-    ld.so and /bin/date". Cheap and conservative: any frame attributed to the
-    target binary counts, and an unreadable/absent report is treated as bad.
+
+def _profile_target_dso_share(profile_dir: str | Path, fuzz_target: str) -> float | None:
+    """Percent of perf samples in the target's own DSO, or None if unknown.
+
+    Reads ``dso.txt`` (``perf report --sort dso --percent-limit 0``), which
+    unlike ``flat.txt`` has no reporting floor and so can answer what fraction
+    of the profile is even the target.
     """
+    path = Path(profile_dir) / "dso.txt"
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    total = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        head, sep, rest = line.partition("%")
+        if not sep:
+            continue
+        try:
+            pct = float(head.strip())
+        except ValueError:
+            continue
+        if fuzz_target in rest:
+            total = (total or 0.0) + pct
+    return total
+
+
+def _profile_has_target_symbols(profile_dir: str | Path, fuzz_target: str) -> bool:
+    """True if the flat profile actually sampled the target, and mostly it.
+
+    Two failure modes, not one. The binary may never have run at all -- `perf
+    record` happily samples whatever DID execute and exits 0. Or the binary ran
+    but something else dominated the samples: on one assimp campaign the target
+    held 6.4% of the profile while llvm-symbolizer's DWARF parsing held 46%, and
+    the ranked hotspot list the optimizer worked from was mostly symbolizer
+    internals. An existence check passes both; a share check catches the second.
+
+    When ``dso.txt`` is present the share gate applies. Older profile dirs have
+    no ``dso.txt``, so those fall back to the original existence check.
+    """
+    share = _profile_target_dso_share(profile_dir, fuzz_target)
+    if share is not None:
+        if share < PHASE2_MIN_TARGET_DSO_SHARE:
+            logger.warning(
+                "Profile in %s is only %.2f%% target DSO (floor %.0f%%) -- the "
+                "hotspot ranking describes something other than %s. Rejecting.",
+                profile_dir, share, PHASE2_MIN_TARGET_DSO_SHARE, fuzz_target)
+            return False
+        logger.info("Profile in %s is %.2f%% target DSO", profile_dir, share)
+        return True
+
     flat = Path(profile_dir) / "flat.txt"
     try:
         text = flat.read_text(errors="replace")
@@ -1912,6 +2034,46 @@ def _emits_blocked_low_confidence(text: str) -> bool:
     return False
 
 
+def _transcript_summary(paths) -> dict:
+    """Turn the CLI session JSONL into a few validation-grade numbers.
+
+    The transcript is the only record of what the agent actually thought and
+    ran -- stdout carries just its closing summary. `models` is what SERVED each
+    turn, so it validates the pin: more than one entry, or one that is not the
+    requested id, means the CLI resolved something else or fell back mid-run.
+    """
+    models, turns, tool_calls, tools = set(), 0, 0, {}
+    for path in paths or []:
+        try:
+            text = Path(path).read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            msg = rec.get("message")
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("model"):
+                models.add(msg["model"])
+                turns += 1
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_calls += 1
+                        name = block.get("name") or "?"
+                        tools[name] = tools.get(name, 0) + 1
+    return {
+        "models": sorted(models),
+        "assistant_turns": turns,
+        "tool_calls": tool_calls,
+        "tools": dict(sorted(tools.items(), key=lambda kv: -kv[1])),
+    }
+
+
 def _save_agent_session_output(diff_output_dir: str, attempt: int,
                                result: dict, note: str = "") -> None:
     """Persist the optimizer's own report for every round, not just failures.
@@ -1930,6 +2092,23 @@ def _save_agent_session_output(diff_output_dir: str, attempt: int,
             if note:
                 f.write(f"[harness note] {note}\n\n")
             f.write(f"[ok] {result.get('ok')}  [timed_out] {result.get('timed_out')}\n")
+            # Model + trace provenance. "requested" is what we pinned; "served"
+            # comes from the transcript and is what actually ran.
+            f.write(f"[model requested] {result.get('model_requested') or 'UNPINNED'}"
+                    f"  [effort] {result.get('effort_requested') or 'UNPINNED'}\n")
+            summary = _transcript_summary(result.get("transcripts"))
+            f.write(f"[model served] {', '.join(summary['models']) or 'unknown (no transcript)'}\n")
+            f.write(f"[assistant turns] {summary['assistant_turns']}  "
+                    f"[tool calls] {summary['tool_calls']}\n")
+            if summary["tools"]:
+                f.write(f"[tools used] {summary['tools']}\n")
+            for tpath in result.get("transcripts") or []:
+                f.write(f"[transcript] {tpath}\n")
+            req = result.get("model_requested")
+            if req and summary["models"] and summary["models"] != [req]:
+                f.write(f"[WARNING] served {summary['models']} != requested {req}\n")
+                logger.warning("optimizer model mismatch: requested %s, served %s",
+                               req, summary["models"])
             f.write("\n=== stdout ===\n")
             f.write(result.get("stdout") or "")
             if result.get("stderr"):
@@ -2409,9 +2588,20 @@ def _invoke_claude_capture(
         # optimizer cannot defer work to a future turn that never runs.
         "--disallowedTools", "ScheduleWakeup",
     ]
-    model = os.environ.get("BENCHMARK_CLAUDE_MODEL")
+    model = getattr(config, "PHASE2_CLAUDE_MODEL", "")
+    effort = getattr(config, "PHASE2_CLAUDE_EFFORT", "")
     if model:
         common += ["--model", model]
+    if effort:
+        common += ["--effort", effort]
+    else:
+        logger.warning(
+            "optimizer model is UNPINNED: no --model passed, so the CLI resolves "
+            "its own account default. The sandbox does not see the host's "
+            "~/.claude/settings.json, and the container is --rm, so nothing "
+            "records which model served this round. Set BENCHMARK_CLAUDE_MODEL "
+            "to make the run reproducible.")
+    logger.info("optimizer provenance: %s", optimizer_provenance())
 
     claude_cmd = ["claude", "-p", prompt, "--session-id", session_id, *common]
 
@@ -2471,6 +2661,17 @@ def _invoke_agent_sandboxed(
     """Run one optimizer session in the container sandbox (sandbox/session.py)."""
     from sandbox.session import run_sandboxed_optimizer
 
+    # Config defaults, env-overridable -- same source optimizer_provenance()
+    # reads, so the recorded pin is the pin that reached the CLI.
+    model = getattr(config, "PHASE2_CLAUDE_MODEL", "")
+    effort = getattr(config, "PHASE2_CLAUDE_EFFORT", "")
+    if not model:
+        logger.warning(
+            "optimizer model is UNPINNED: the sandboxed CLI will resolve its own "
+            "account default, and optimizer_provenance() will record that fact. "
+            "Set BENCHMARK_CLAUDE_MODEL to an exact id (claude-opus-5, "
+            "claude-opus-4-8, claude-opus-5-5) to make the run reproducible.")
+
     env = dict(extra_env or {})
     out_dir = env.get("FUZZ_SOURCE_FOLDS_OUT_DIR", "")
     corpus_dir = (env.get("FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR")
@@ -2507,6 +2708,7 @@ def _invoke_agent_sandboxed(
         corpus_dir=corpus_dir, image=image, fuzz_target=fuzz_target,
         project=project, prompt=prompt, timeout=timeout, base_env=env,
         cpu=broker_cpu, harness=env.get("PHASE2_HARNESS_HOST_PATH", ""),
+        model=model, effort=effort,
     )
 
 
@@ -3721,6 +3923,39 @@ def _find_project_source(source_dir: Path, project: str) -> str:
     return str(src_subdir) if src_subdir.exists() else str(source_dir)
 
 
+def optimizer_provenance() -> dict:
+    """What model/backend the optimizer will actually run with, for the record.
+
+    Nothing in a finished run recorded this: the sandbox gives the agent its own
+    HOME with only skills/ mounted, so the host's ~/.claude/settings.json model
+    pin is invisible to it, and the container is --rm so its session transcript
+    (which does carry the model per message) dies with it. A grep over 3576
+    metadata/text/log files across every experiment in this repo found zero model
+    identifiers. That means a server-side default could have shifted mid-series
+    and no artifact would show it -- b1..b6 are each internally consistent, but
+    not comparable to one another on this axis. Write it down at round start.
+    """
+    backend = getattr(config, "OPTIMIZER_BACKEND", "claude")
+    if backend == "codex":
+        model = os.environ.get("BENCHMARK_CODEX_MODEL")
+        effort = os.environ.get("BENCHMARK_CODEX_REASONING")
+    else:
+        model = getattr(config, "PHASE2_CLAUDE_MODEL", "")
+        # The CLI does expose --effort (low|medium|high|xhigh|max); the earlier
+        # note that it did not was wrong, and left the axis silently unpinned.
+        effort = getattr(config, "PHASE2_CLAUDE_EFFORT", "") or None
+    return {
+        "backend": backend,
+        # None means no --model was passed, so the CLI resolved its own account
+        # default -- which is precisely the unrecoverable case. Say so explicitly
+        # rather than writing null and leaving a future reader to guess.
+        "model": model or "UNPINNED (CLI account default -- not reproducible)",
+        "model_pinned": bool(model),
+        "reasoning_effort": effort,
+        "skill": getattr(config, "PHASE2_OPTIMIZER_SKILL", None),
+    }
+
+
 def _save_setup_metadata(
     entry, experiment_dir, experiment_id, opt_applied,
     poc_path=None, baseline_ok=False, optimized_ok=False,
@@ -3736,6 +3971,7 @@ def _save_setup_metadata(
         },
         "experiment_id": experiment_id,
         "setup_timestamp": datetime.now().isoformat(),
+        "optimizer": optimizer_provenance(),
     }
     if poc_path:
         metadata["poc_path"] = poc_path

@@ -1,0 +1,53 @@
+{
+  "project": "graphicsmagick",
+  "cve": "arvo-8280",
+  "fuzz_target": "coder_PTIF_fuzzer",
+  "experiment_dir": "/home/sefcom/fuzz-opt/results/preflight-graphicsmagick/graphicsmagick-arvo-8280",
+  "stages": {
+    "image": {
+      "ok": true,
+      "image": "bench-aflpp/graphicsmagick-arvo-8280"
+    },
+    "extract": {
+      "ok": true,
+      "secs": 32
+    },
+    "poc": {
+      "ok": true,
+      "reproduces_on_historical": true
+    },
+    "source": {
+      "ok": true,
+      "root": "/home/sefcom/fuzz-opt/results/preflight-graphicsmagick/graphicsmagick-arvo-8280/optimized/online/source_tree"
+    },
+    "seeds": {
+      "ok": true,
+      "bundled": 0,
+      "staged_files": 1,
+      "fallback_only": true
+    },
+    "projectsrc": {
+      "ok": true,
+      "path": "/home/sefcom/fuzz-opt/results/preflight-graphicsmagick/graphicsmagick-arvo-8280/optimized/online/source_tree/src/graphicsmagick"
+    },
+    "stripvcs": {
+      "ok": true
+    },
+    "aflbuild": {
+      "ok": true,
+      "secs": 828
+    },
+    "smoke": {
+      "ok": true,
+      "execs_done": 310180,
+      "run_time_s": 120,
+      "execs_per_sec": 2584.8,
+      "corpus": 185,
+      "crashes": 0,
+      "crashes_per_min": 0.0,
+      "stderr_tail": ""
+    }
+  },
+  "total_secs": 982,
+  "ok": true
+}

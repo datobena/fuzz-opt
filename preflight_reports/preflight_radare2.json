@@ -1,0 +1,53 @@
+{
+  "project": "radare2",
+  "cve": "arvo-10222",
+  "fuzz_target": "ia_fuzz",
+  "experiment_dir": "/home/sefcom/fuzz-opt/results/preflight-radare2/radare2-arvo-10222",
+  "stages": {
+    "image": {
+      "ok": true,
+      "image": "bench-aflpp/radare2-arvo-10222"
+    },
+    "extract": {
+      "ok": true,
+      "secs": 17
+    },
+    "poc": {
+      "ok": true,
+      "reproduces_on_historical": true
+    },
+    "source": {
+      "ok": true,
+      "root": "/home/sefcom/fuzz-opt/results/preflight-radare2/radare2-arvo-10222/optimized/online/source_tree"
+    },
+    "seeds": {
+      "ok": true,
+      "bundled": 854,
+      "staged_files": 854,
+      "fallback_only": false
+    },
+    "projectsrc": {
+      "ok": true,
+      "path": "/home/sefcom/fuzz-opt/results/preflight-radare2/radare2-arvo-10222/optimized/online/source_tree/src/radare2"
+    },
+    "stripvcs": {
+      "ok": true
+    },
+    "aflbuild": {
+      "ok": true,
+      "secs": 519
+    },
+    "smoke": {
+      "ok": true,
+      "execs_done": 15678,
+      "run_time_s": 122,
+      "execs_per_sec": 128.5,
+      "corpus": 878,
+      "crashes": 0,
+      "crashes_per_min": 0.0,
+      "stderr_tail": ""
+    }
+  },
+  "total_secs": 838,
+  "ok": true
+}

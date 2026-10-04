@@ -1,0 +1,53 @@
+{
+  "project": "libredwg",
+  "cve": "arvo-31419",
+  "fuzz_target": "llvmfuzz",
+  "experiment_dir": "/home/sefcom/fuzz-opt/results/preflight-libredwg/libredwg-arvo-31419",
+  "stages": {
+    "image": {
+      "ok": true,
+      "image": "bench-aflpp/libredwg-arvo-31419"
+    },
+    "extract": {
+      "ok": true,
+      "secs": 3
+    },
+    "poc": {
+      "ok": true,
+      "reproduces_on_historical": true
+    },
+    "source": {
+      "ok": true,
+      "root": "/home/sefcom/fuzz-opt/results/preflight-libredwg/libredwg-arvo-31419/optimized/online/source_tree"
+    },
+    "seeds": {
+      "ok": true,
+      "bundled": 0,
+      "staged_files": 1,
+      "fallback_only": true
+    },
+    "projectsrc": {
+      "ok": true,
+      "path": "/home/sefcom/fuzz-opt/results/preflight-libredwg/libredwg-arvo-31419/optimized/online/source_tree/src/libredwg"
+    },
+    "stripvcs": {
+      "ok": true
+    },
+    "aflbuild": {
+      "ok": true,
+      "secs": 609
+    },
+    "smoke": {
+      "ok": true,
+      "execs_done": 4487734,
+      "run_time_s": 120,
+      "execs_per_sec": 37397.8,
+      "corpus": 607,
+      "crashes": 3,
+      "crashes_per_min": 1.5,
+      "stderr_tail": ""
+    }
+  },
+  "total_secs": 733,
+  "ok": true
+}

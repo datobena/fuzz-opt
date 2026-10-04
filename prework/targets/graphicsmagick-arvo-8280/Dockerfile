@@ -57,5 +57,23 @@ RUN printf 'int main(void){return 0;}\n' > /tmp/instrtest.c && \
 # bundled engine trees so they cannot shadow the AFL++ pin.
 COPY src/ $SRC/
 
+# --- TOOLCHAIN FIX (pipeline-specific, not upstream) ---
+# std::unary_function/binary_function were removed in C++17 and are absent from the
+# pinned libc++, but Magick++/lib/Drawable.h still derives from them. Restore the
+# removed adaptors instead of forcing -std=c++14, which would change codegen for the
+# whole target rather than just these declarations.
+# url.c also references libxml2 (xmlNanoHTTPClose, xmlFree). GM's configure enables
+# XML support (the lib IS in the image) but fuzzing/oss-fuzz-build.sh links the
+# harness against an explicit MAGICK_LIBS list that omits it, so exporting LDFLAGS
+# does not reach that link line -- the list has to be extended. Done with sed at
+# BUILD TIME rather than baked in, because the rebuild bind-mounts the extracted
+# source over /src/graphicsmagick and shadows the image's copy of that script.
+# Preferred over --without-xml, which would change which coders the target contains.
+RUN printf '%s\n' \
+      'export CXXFLAGS="$CXXFLAGS -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION"' \
+      'sed -i "s|^MAGICK_LIBS=\\(.*\\)\\\"$|MAGICK_LIBS=\\1 -lxml2\\\"|" fuzzing/oss-fuzz-build.sh' \
+    | cat - "$SRC/build.sh" > /tmp/b && mv /tmp/b "$SRC/build.sh" && chmod +x "$SRC/build.sh"
+
+
 # OSS-Fuzz runs build.sh from the PROJECT directory, not $SRC.
 WORKDIR $SRC/graphicsmagick

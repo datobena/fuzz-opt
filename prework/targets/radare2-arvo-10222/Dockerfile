@@ -57,5 +57,19 @@ RUN printf 'int main(void){return 0;}\n' > /tmp/instrtest.c && \
 # bundled engine trees so they cannot shadow the AFL++ pin.
 COPY src/ $SRC/
 
+# --- TOOLCHAIN FIX (pipeline-specific, not upstream) ---
+# radare2's libr/config.mk does `include $(TOP)/mk/$(CC).mk`, expecting a bare compiler
+# name (mk/clang.mk). Under AFL++ $CC is an absolute path, so the include resolves to
+# mk//src/aflplusplus/afl-clang-fast.mk and the build dies before compiling anything.
+# afl-clang-fast IS clang, so provide that file as a copy of clang.mk rather than
+# renaming the compiler, which would break the instrumentation the benchmark needs.
+RUN printf '%s\n' \
+      'if [ -n "$CC" ] && [ -f "$SRC/radare2/mk/clang.mk" ]; then' \
+      '  mkdir -p "$SRC/radare2/mk$(dirname "$CC")"' \
+      '  cp "$SRC/radare2/mk/clang.mk" "$SRC/radare2/mk${CC}.mk"' \
+      'fi' \
+    | cat - "$SRC/build.sh" > /tmp/b && mv /tmp/b "$SRC/build.sh" && chmod +x "$SRC/build.sh"
+
+
 # OSS-Fuzz runs build.sh from the PROJECT directory, not $SRC.
 WORKDIR $SRC/radare2

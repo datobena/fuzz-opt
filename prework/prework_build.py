@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config
 from prework.build_image import image_tag
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,61 @@ def prework_image_for(entry: dict) -> str:
     return image_tag(entry["project"], int(local_id))
 
 
+_OPT_ENV_CACHE: dict[str, dict[str, str]] = {}
+_OPT_RE = re.compile(r"(?<![\w-])-O[0-3sz]\b")
+
+
+def opt_level_env(image: str, level: str | None = None) -> dict[str, str]:
+    """CFLAGS/CXXFLAGS overrides that rebuild the target at a different -O level.
+
+    Returns {} when no level is configured, which leaves the image's own
+    OSS-Fuzz defaults (-O1 for a sanitizer build) untouched.
+
+    The flags are read back OUT of the image rather than written here. Hardcoding
+    them would silently drift the moment base-builder changes its defaults, and
+    the failure mode is invisible: the build still succeeds, it just no longer
+    carries the warning suppressions and -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    the rest of the pipeline assumes. Substituting inside the real string keeps
+    everything else byte-identical, so -O level is the only variable that moved.
+    """
+    level = (level if level is not None
+             else str(getattr(config, "BUILD_OPT_LEVEL", "") or "")).strip()
+    if not level:
+        return {}
+    if not level.startswith("-"):
+        level = "-" + level
+    key = f"{image}|{level}"
+    if key in _OPT_ENV_CACHE:
+        return dict(_OPT_ENV_CACHE[key])
+
+    r = subprocess.run(
+        ["docker", "image", "inspect", "-f",
+         "{{range .Config.Env}}{{println .}}{{end}}", image],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"cannot read env from image {image}: {(r.stderr or '')[-200:]}")
+    env = {}
+    for line in (r.stdout or "").splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            env[k] = v
+
+    out: dict[str, str] = {}
+    for var in ("CFLAGS", "CXXFLAGS"):
+        base = env.get(var, "")
+        if not base:
+            raise RuntimeError(f"image {image} exposes no {var}; cannot retarget -O level")
+        new, n = _OPT_RE.subn(level, base)
+        if n == 0:
+            # No -O in the defaults: append rather than silently doing nothing.
+            new = f"{base} {level}"
+        out[var] = new
+    _OPT_ENV_CACHE[key] = dict(out)
+    logger.info("build opt level %s -> CFLAGS=%s", level, out["CFLAGS"][:90])
+    return out
+
+
 def build_prework_rebuild_command(
     *, image: str, source_dir: str, out_dir: str, project: str,
     cpu: int | None = None,
@@ -87,8 +144,18 @@ def build_prework_rebuild_command(
     cmd = ["docker", "run", "--rm", "--privileged"]
     if cpu is not None:
         cmd += ["--cpuset-cpus", str(cpu)]
+    # -O level override, when configured. Applied to BOTH arms (the baseline
+    # build goes through this same function), so the arms stay comparable.
+    for _k, _v in opt_level_env(image).items():
+        cmd += ["-e", f"{_k}={_v}"]
     cmd += [
         "-e", "FUZZING_ENGINE=afl",
+        # FuzzBench benchmark build.sh scripts reference $FUZZER_LIB (the engine
+        # driver lib), which OSS-Fuzz's compile exposes as $LIB_FUZZING_ENGINE
+        # (=/usr/lib/libFuzzingEngine.a for afl). Providing it lets those targets
+        # link; ARVO build.sh scripts don't read it, so it's a harmless no-op there.
+        "-e", "FUZZER_LIB=/usr/lib/libFuzzingEngine.a",
+        "-e", "FUZZER=afl",
         # Exclude the optimizer's INSERTED helpers from coverage instrumentation.
         # A coverage-guided fuzzer biases mutation toward inputs that reach new
         # edges, so helpers the skill adds shift the gradient away from the code

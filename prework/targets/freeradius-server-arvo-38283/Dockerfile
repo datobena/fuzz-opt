@@ -65,5 +65,63 @@ RUN printf 'int main(void){return 0;}\n' > /tmp/instrtest.c && \
 # bundled engine trees so they cannot shadow the AFL++ pin.
 COPY src/ $SRC/
 
+# --- TOOLCHAIN FIX (pipeline-specific, not upstream) ---
+# freeradius's top-level Makefile builds two GNU make PLUGINS and `load`s them into
+# make itself (Makefile:117,127). Built with the project's CC they carry AFL
+# instrumentation, so make's dlopen fails with `undefined symbol: __afl_area_ptr`
+# and the build stops before compiling anything.
+#
+# The Makefile already has a branch for building those targets explicitly
+# (ifeq findstring libfreeradius-make,$(MAKECMDGOALS)), so pre-build them with
+# AFL_NOOPT=1 -- afl-cc then behaves as a plain compiler. The plugins end up
+# uninstrumented and loadable, while the fuzz target itself is still built with full
+# instrumentation by the main make that follows. Instrumenting a build-time make
+# plugin buys nothing: it never executes target code.
+RUN sed -i 's|^make -i -j\$(nproc)$|AFL_NOOPT=1 make -i libfreeradius-make-dlopen.a libfreeradius-make-version.a \|\| true\nmake -i -j$(nproc)|' "$SRC/build.sh" \
+    && grep -q AFL_NOOPT "$SRC/build.sh"
+
+# build.sh does `git apply $SRC/patch.diff` to add the OSS-Fuzz harness, but the
+# source ARVO ships already has it applied, so the second application fails
+# ("patch does not apply") and the build stops before producing fuzzer_tacacs.
+# Apply only when it would actually apply. A genuine patch failure is still caught
+# downstream -- _build_afl_baseline verifies /out/<fuzz_target> exists and that the
+# PoC still reproduces, so this cannot silently ship an unpatched target.
+# clang-18 defaults to DWARF-5; the binutils ld in this image cannot parse it and
+# fails every link with "DWARF error: invalid or unhandled FORM value: 0x25". The
+# build runs `make -i`, so those failures are IGNORED and the build exits 0 having
+# produced no fuzzer_tacacs at all -- which is why this surfaced as a missing binary
+# rather than a build error. Pin the debug format to DWARF-4.
+#
+# The -DAFL_fuzzer_build token exists purely to satisfy src/bin/all.mk:31,
+#   ifneq "$(findstring fuzzer,${CFLAGS})" ""
+# which generates the fuzzer_<proto> targets ONLY when CFLAGS contains the literal
+# substring 'fuzzer'. libFuzzer builds satisfy that incidentally via
+# -fsanitize=fuzzer-no-link; an AFL build has no such token, so the whole fuzzer
+# block is skipped and no fuzzer_tacacs target is ever defined -- which is why this
+# presented as a missing binary rather than a compile failure. The gate's intent
+# ('built with fuzzing flags') IS satisfied here; only its libFuzzer-specific
+# detection is not. The define is otherwise unused by the source.
+#
+# With the targets finally generated, they still failed to LINK for two reasons:
+#   * boiler.mk links with $(LDFLAGS), not $(CFLAGS), so -fsanitize=address never
+#     reached the link line -- every fuzzer died on `undefined reference to
+#     __asan_init`.
+#   * fuzzer.c defines LLVMFuzzerTestOneInput but NO main(); libFuzzer builds get
+#     one from -fsanitize=fuzzer, an AFL build needs $LIB_FUZZING_ENGINE
+#     (/usr/lib/libFuzzingEngine.a). fuzzer.mk sets TGT_LDLIBS := $(LIBS), so
+#     exporting LIBS is what reaches it.
+# Adding a static archive to the GLOBAL LIBS is safe: archive members are pulled
+# lazily, so the driver's main() is only extracted by targets that lack one.
+RUN printf '%s\n' \
+      'export CFLAGS="$CFLAGS -gdwarf-4 -DAFL_fuzzer_build=1"' \
+      'export CXXFLAGS="$CXXFLAGS -gdwarf-4 -DAFL_fuzzer_build=1"' \
+      'export LDFLAGS="${LDFLAGS:-} -fsanitize=address"' \
+      'export LIBS="${LIBS:-} $LIB_FUZZING_ENGINE"' \
+    | cat - "$SRC/build.sh" > /tmp/b && mv /tmp/b "$SRC/build.sh" && chmod +x "$SRC/build.sh"
+
+RUN sed -i 's|^git apply --ignore-whitespace \$SRC/patch.diff$|if git apply --check --ignore-whitespace $SRC/patch.diff 2>/dev/null; then git apply --ignore-whitespace $SRC/patch.diff; else echo "patch.diff already applied; skipping"; fi|' "$SRC/build.sh" \
+    && grep -q "already applied" "$SRC/build.sh"
+
+
 # OSS-Fuzz runs build.sh from the PROJECT directory, not $SRC.
 WORKDIR $SRC/freeradius-server

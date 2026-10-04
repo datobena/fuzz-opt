@@ -57,5 +57,16 @@ RUN printf 'int main(void){return 0;}\n' > /tmp/instrtest.c && \
 # bundled engine trees so they cannot shadow the AFL++ pin.
 COPY src/ $SRC/
 
+# --- TOOLCHAIN FIX (pipeline-specific, not upstream) ---
+# clang-18 makes -Wimplicit-int-conversion an error where the ARVO-era clang-12 only
+# warned (src/ua_types_encoding_binary.c:883). The base image already relaxes
+# implicit-int and int-conversion for the same reason; extend that list rather than
+# editing vulnerable source, which must stay byte-identical to the revision under test.
+RUN printf '%s\n' \
+      'export CFLAGS="$CFLAGS -Wno-error=implicit-int-conversion"' \
+      'export CXXFLAGS="$CXXFLAGS -Wno-error=implicit-int-conversion"' \
+    | cat - "$SRC/build.sh" > /tmp/b && mv /tmp/b "$SRC/build.sh" && chmod +x "$SRC/build.sh"
+
+
 # OSS-Fuzz runs build.sh from the PROJECT directory, not $SRC.
 WORKDIR $SRC/open62541

@@ -1,0 +1,53 @@
+{
+  "project": "open62541",
+  "cve": "arvo-3609",
+  "fuzz_target": "fuzz_binary_message",
+  "experiment_dir": "/home/sefcom/fuzz-opt/results/preflight-open62541/open62541-arvo-3609",
+  "stages": {
+    "image": {
+      "ok": true,
+      "image": "bench-aflpp/open62541-arvo-3609"
+    },
+    "extract": {
+      "ok": true,
+      "secs": 4
+    },
+    "poc": {
+      "ok": true,
+      "reproduces_on_historical": true
+    },
+    "source": {
+      "ok": true,
+      "root": "/home/sefcom/fuzz-opt/results/preflight-open62541/open62541-arvo-3609/optimized/online/source_tree"
+    },
+    "seeds": {
+      "ok": true,
+      "bundled": 46,
+      "staged_files": 45,
+      "fallback_only": false
+    },
+    "projectsrc": {
+      "ok": true,
+      "path": "/home/sefcom/fuzz-opt/results/preflight-open62541/open62541-arvo-3609/optimized/online/source_tree/src/open62541"
+    },
+    "stripvcs": {
+      "ok": true
+    },
+    "aflbuild": {
+      "ok": true,
+      "secs": 18
+    },
+    "smoke": {
+      "ok": true,
+      "execs_done": 131582,
+      "run_time_s": 120,
+      "execs_per_sec": 1096.5,
+      "corpus": 242,
+      "crashes": 0,
+      "crashes_per_min": 0.0,
+      "stderr_tail": ""
+    }
+  },
+  "total_secs": 143,
+  "ok": true
+}

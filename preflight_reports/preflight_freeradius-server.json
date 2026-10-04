@@ -1,0 +1,53 @@
+{
+  "project": "freeradius-server",
+  "cve": "arvo-38283",
+  "fuzz_target": "fuzzer_tacacs",
+  "experiment_dir": "/home/sefcom/fuzz-opt/results/preflight-freeradius-server/freeradius-server-arvo-38283",
+  "stages": {
+    "image": {
+      "ok": true,
+      "image": "bench-aflpp/freeradius-server-arvo-38283"
+    },
+    "extract": {
+      "ok": true,
+      "secs": 8
+    },
+    "poc": {
+      "ok": true,
+      "reproduces_on_historical": true
+    },
+    "source": {
+      "ok": true,
+      "root": "/home/sefcom/fuzz-opt/results/preflight-freeradius-server/freeradius-server-arvo-38283/optimized/online/source_tree"
+    },
+    "seeds": {
+      "ok": true,
+      "bundled": 0,
+      "staged_files": 1,
+      "fallback_only": true
+    },
+    "projectsrc": {
+      "ok": true,
+      "path": "/home/sefcom/fuzz-opt/results/preflight-freeradius-server/freeradius-server-arvo-38283/optimized/online/source_tree/src/freeradius-server"
+    },
+    "stripvcs": {
+      "ok": true
+    },
+    "aflbuild": {
+      "ok": true,
+      "secs": 272
+    },
+    "smoke": {
+      "ok": true,
+      "execs_done": 9184180,
+      "run_time_s": 120,
+      "execs_per_sec": 76534.8,
+      "corpus": 143,
+      "crashes": 0,
+      "crashes_per_min": 0.0,
+      "stderr_tail": ""
+    }
+  },
+  "total_secs": 401,
+  "ok": true
+}

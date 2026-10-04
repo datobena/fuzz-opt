@@ -1,0 +1,50 @@
+{
+  "project": "c-blosc2",
+  "cve": "arvo-24837",
+  "fuzz_target": "decompress_fuzzer",
+  "experiment_dir": "/home/sefcom/fuzz-opt/results/preflight-c-blosc2/c-blosc2-arvo-24837",
+  "stages": {
+    "image": {
+      "ok": true,
+      "image": "bench-aflpp/c-blosc2-arvo-24837"
+    },
+    "extract": {
+      "ok": true,
+      "secs": 9
+    },
+    "poc": {
+      "ok": true,
+      "reproduces_on_historical": true
+    },
+    "source": {
+      "ok": true,
+      "root": "/home/sefcom/fuzz-opt/results/preflight-c-blosc2/c-blosc2-arvo-24837/optimized/online/source_tree"
+    },
+    "seeds": {
+      "ok": true,
+      "bundled": 24,
+      "staged_files": 19,
+      "fallback_only": false
+    },
+    "projectsrc": {
+      "ok": true,
+      "path": "/home/sefcom/fuzz-opt/results/preflight-c-blosc2/c-blosc2-arvo-24837/optimized/online/source_tree/src/c-blosc2"
+    },
+    "aflbuild": {
+      "ok": true,
+      "secs": 409
+    },
+    "smoke": {
+      "ok": true,
+      "execs_done": 7097183,
+      "run_time_s": 120,
+      "execs_per_sec": 59143.2,
+      "corpus": 917,
+      "crashes": 57,
+      "crashes_per_min": 28.5,
+      "stderr_tail": ""
+    }
+  },
+  "total_secs": 539,
+  "ok": true
+}

@@ -1,0 +1,50 @@
+{
+  "project": "lcms",
+  "cve": "arvo-756",
+  "fuzz_target": "cms_transform_fuzzer",
+  "experiment_dir": "/home/sefcom/fuzz-opt/results/preflight-lcms/lcms-arvo-756",
+  "stages": {
+    "image": {
+      "ok": true,
+      "image": "bench-aflpp/lcms-arvo-756"
+    },
+    "extract": {
+      "ok": true,
+      "secs": 2
+    },
+    "poc": {
+      "ok": true,
+      "reproduces_on_historical": true
+    },
+    "source": {
+      "ok": true,
+      "root": "/home/sefcom/fuzz-opt/results/preflight-lcms/lcms-arvo-756/optimized/online/source_tree"
+    },
+    "seeds": {
+      "ok": true,
+      "bundled": 0,
+      "staged_files": 1,
+      "fallback_only": true
+    },
+    "projectsrc": {
+      "ok": true,
+      "path": "/home/sefcom/fuzz-opt/results/preflight-lcms/lcms-arvo-756/optimized/online/source_tree/src/lcms"
+    },
+    "aflbuild": {
+      "ok": true,
+      "secs": 42
+    },
+    "smoke": {
+      "ok": true,
+      "execs_done": 6358451,
+      "run_time_s": 60,
+      "execs_per_sec": 105974.2,
+      "corpus": 3,
+      "crashes": 0,
+      "crashes_per_min": 0.0,
+      "stderr_tail": ""
+    }
+  },
+  "total_secs": 106,
+  "ok": true
+}

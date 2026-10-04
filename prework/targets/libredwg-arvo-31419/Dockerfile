@@ -57,6 +57,29 @@ RUN printf 'int main(void){return 0;}\n' > /tmp/instrtest.c && \
 # bundled engine trees so they cannot shadow the AFL++ pin.
 COPY src/ $SRC/
 
+# --- TOOLCHAIN FIX (pipeline-specific, not upstream) ---
+# autogen.sh runs `git submodule update --init --recursive` under `set -e`, which aborts
+# once the pipeline strips the shipped .git (done for leak and build reasons -- see
+# phase3_online step 1a). jsmn/jsmn.h is already vendored in the extracted tree, so the
+# fetch has nothing to do; an EMPTY repo lets the command succeed while leaking no
+# history. The earlier `git fetch --tags` block runs before autogen.sh sets -e.
+# safe.directory is also needed: the build container runs as root while the source
+# tree is bind-mounted from a uid-1000 host dir, so git refuses it as 'dubious
+# ownership'. Scoped to this throwaway build container.
+RUN printf '%s\n' \
+      'git config --global --add safe.directory "*" 2>/dev/null || true' \
+      'if [ -d libredwg ] && [ ! -d libredwg/.git ]; then git -C libredwg init -q; fi' \
+    | cat - "$SRC/build.sh" > /tmp/b && mv /tmp/b "$SRC/build.sh" && chmod +x "$SRC/build.sh"
+
+RUN sed -i 's|^make$|make -i|' "$SRC/build.sh" && grep -q "^make -i" "$SRC/build.sh"
+# The fuzz target is linked separately at the end of build.sh from
+# src/.libs/libredwg.a; the plain `make` also builds example programs
+# (dwg2svg2) that fail to link against the AFL-instrumented static lib.
+# -i keeps going so the library and the harness still get built. A missing
+# /out/llvmfuzz is still caught downstream -- the build is not assumed to
+# have worked just because make exited 0.
+
+
 # libredwg's build.sh starts with `cd libredwg`, so it must run FROM $SRC --
 # not from the project directory like most OSS-Fuzz targets. Setting the
 # usual WORKDIR $SRC/libredwg makes that cd fail with

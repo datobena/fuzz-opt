@@ -1,0 +1,272 @@
+[
+  {
+    "project": "bloaty",
+    "cve": "fuzzbench-900001",
+    "local_id": 900001,
+    "image": "bench-aflpp/bloaty-arvo-900001:latest",
+    "fuzz_target": "fuzz_target",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "bloaty_fuzz_target"
+  },
+  {
+    "project": "jsoncpp",
+    "cve": "fuzzbench-900002",
+    "local_id": 900002,
+    "image": "bench-aflpp/jsoncpp-arvo-900002:latest",
+    "fuzz_target": "jsoncpp_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "jsoncpp_jsoncpp_fuzzer"
+  },
+  {
+    "project": "zlib",
+    "cve": "fuzzbench-900003",
+    "local_id": 900003,
+    "image": "bench-aflpp/zlib-arvo-900003:latest",
+    "fuzz_target": "zlib_uncompress_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "zlib_zlib_uncompress_fuzzer"
+  },
+  {
+    "project": "libjpeg-turbo",
+    "cve": "fuzzbench-900004",
+    "local_id": 900004,
+    "image": "bench-aflpp/libjpeg-turbo-arvo-900004:latest",
+    "fuzz_target": "libjpeg_turbo_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libjpeg-turbo_libjpeg_turbo_fuzzer"
+  },
+  {
+    "project": "libxml2",
+    "cve": "fuzzbench-900005",
+    "local_id": 900005,
+    "image": "bench-aflpp/libxml2-arvo-900005:latest",
+    "fuzz_target": "xml",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libxml2_xml"
+  },
+  {
+    "project": "sqlite3",
+    "cve": "fuzzbench-900006",
+    "local_id": 900006,
+    "image": "bench-aflpp/sqlite3-arvo-900006:latest",
+    "fuzz_target": "ossfuzz",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "sqlite3_ossfuzz"
+  },
+  {
+    "project": "PROJ",
+    "cve": "fuzzbench-900007",
+    "local_id": 900007,
+    "image": "bench-aflpp/proj-arvo-900007:latest",
+    "fuzz_target": "proj_crs_to_crs_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "proj4_proj_crs_to_crs_fuzzer"
+  },
+  {
+    "project": "libxslt",
+    "cve": "fuzzbench-900008",
+    "local_id": 900008,
+    "image": "bench-aflpp/libxslt-arvo-900008:latest",
+    "fuzz_target": "xpath",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libxslt_xpath"
+  },
+  {
+    "project": "openthread",
+    "cve": "fuzzbench-900009",
+    "local_id": 900009,
+    "image": "bench-aflpp/openthread-arvo-900009:latest",
+    "fuzz_target": "ip6-fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "openthread_ot-ip6-send-fuzzer"
+  },
+  {
+    "project": "harfbuzz",
+    "cve": "fuzzbench-900010",
+    "local_id": 900010,
+    "image": "bench-aflpp/harfbuzz-arvo-900010:latest",
+    "fuzz_target": "hb-shape-fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "harfbuzz_hb-shape-fuzzer"
+  },
+  {
+    "project": "re2",
+    "cve": "fuzzbench-900011",
+    "local_id": 900011,
+    "image": "bench-aflpp/re2-arvo-900011:latest",
+    "fuzz_target": "fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "re2_fuzzer"
+  },
+  {
+    "project": "freetype2",
+    "cve": "fuzzbench-900012",
+    "local_id": 900012,
+    "image": "bench-aflpp/freetype2-arvo-900012:latest",
+    "fuzz_target": "ftfuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "freetype2_ftfuzzer"
+  },
+  {
+    "project": "php-src",
+    "cve": "fuzzbench-900013",
+    "local_id": 900013,
+    "image": "bench-aflpp/php-src-arvo-900013:latest",
+    "fuzz_target": "php-fuzz-parser",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "php_php-fuzz-parser_0dbedb"
+  },
+  {
+    "project": "woff2",
+    "cve": "fuzzbench-900014",
+    "local_id": 900014,
+    "image": "bench-aflpp/woff2-arvo-900014:latest",
+    "fuzz_target": "convert_woff2ttf_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "woff2_convert_woff2ttf_fuzzer"
+  },
+  {
+    "project": "Little-CMS",
+    "cve": "fuzzbench-900015",
+    "local_id": 900015,
+    "image": "bench-aflpp/little-cms-arvo-900015:latest",
+    "fuzz_target": "cms_transform_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "lcms_cms_transform_fuzzer"
+  },
+  {
+    "project": "libpcap",
+    "cve": "fuzzbench-900016",
+    "local_id": 900016,
+    "image": "bench-aflpp/libpcap-arvo-900016:latest",
+    "fuzz_target": "fuzz_both",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libpcap_fuzz_both"
+  },
+  {
+    "project": "libpng",
+    "cve": "fuzzbench-900017",
+    "local_id": 900017,
+    "image": "bench-aflpp/libpng-arvo-900017:latest",
+    "fuzz_target": "libpng_read_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libpng_libpng_read_fuzzer"
+  },
+  {
+    "project": "openh264",
+    "cve": "fuzzbench-900018",
+    "local_id": 900018,
+    "image": "bench-aflpp/openh264-arvo-900018:latest",
+    "fuzz_target": "decoder_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "openh264_decoder_fuzzer"
+  },
+  {
+    "project": "openssl",
+    "cve": "fuzzbench-900019",
+    "local_id": 900019,
+    "image": "bench-aflpp/openssl-arvo-900019:latest",
+    "fuzz_target": "x509",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "openssl_x509"
+  },
+  {
+    "project": "stb",
+    "cve": "fuzzbench-900020",
+    "local_id": 900020,
+    "image": "bench-aflpp/stb-arvo-900020:latest",
+    "fuzz_target": "stbi_read_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "stb_stbi_read_fuzzer"
+  },
+  {
+    "project": "systemd",
+    "cve": "fuzzbench-900021",
+    "local_id": 900021,
+    "image": "bench-aflpp/systemd-arvo-900021:latest",
+    "fuzz_target": "fuzz-link-parser",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "systemd_fuzz-link-parser"
+  },
+  {
+    "project": "vorbis",
+    "cve": "fuzzbench-900022",
+    "local_id": 900022,
+    "image": "bench-aflpp/vorbis-arvo-900022:latest",
+    "fuzz_target": "decode_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "vorbis_decode_fuzzer"
+  },
+  {
+    "project": "bloaty",
+    "cve": "fuzzbench-900023",
+    "local_id": 900023,
+    "image": "bench-aflpp/bloaty-arvo-900023:latest",
+    "fuzz_target": "fuzz_target",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "bloaty_fuzz_target_52948c"
+  },
+  {
+    "project": "harfbuzz",
+    "cve": "fuzzbench-900024",
+    "local_id": 900024,
+    "image": "bench-aflpp/harfbuzz-arvo-900024:latest",
+    "fuzz_target": "hb-shape-fuzzer",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "harfbuzz_hb-shape-fuzzer_17863b"
+  },
+  {
+    "project": "libxml2",
+    "cve": "fuzzbench-900025",
+    "local_id": 900025,
+    "image": "bench-aflpp/libxml2-arvo-900025:latest",
+    "fuzz_target": "xml",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "libxml2_xml_e85b9b"
+  },
+  {
+    "project": "mruby",
+    "cve": "fuzzbench-900026",
+    "local_id": 900026,
+    "image": "bench-aflpp/mruby-arvo-900026:latest",
+    "fuzz_target": "mruby_fuzzer",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "mruby_mruby_fuzzer_8c8bbd"
+  },
+  {
+    "project": "mbedtls",
+    "cve": "fuzzbench-900027",
+    "local_id": 900027,
+    "image": "bench-aflpp/mbedtls-arvo-900027:latest",
+    "fuzz_target": "fuzz_dtlsclient",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "mbedtls_fuzz_dtlsclient_7c6b0e"
+  }
+]
