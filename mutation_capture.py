@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture EVERY libFuzzer mutation into a saved corpus (regardless of coverage).
 
-Shared by the run_hotspotdiff.py diagnostic and phase-2 (phase2_setup.py). The
+Shared by the tools/run_hotspotdiff.py diagnostic and phase-2 (phase2_setup.py). The
 capture works by building a DIAGNOSTIC copy of the fuzz target with a custom
 mutator shim (``mutation_dump_mutator.c``) linked in, fuzzing it from an initial
 corpus, and having the shim persist every produced mutation. The result is frozen

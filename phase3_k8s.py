@@ -57,7 +57,7 @@ def build_job_spec(
     # corpora survive for offline analysis without a re-run: baseline corpora feed
     # the replay-timing metric, and optimized corpora feed differential coverage
     # studies (covdiff / coverage-over-time — replay each variant's corpus on the
-    # baseline binary and compare edge coverage; see run_covtime.py).
+    # baseline binary and compare edge coverage; see tools/run_covtime.py).
     # PHASE3_ARCHIVE_BASELINE_ONLY=1 reverts to baseline-only to save NFS space
     # (optimized corpora roughly double per-project corpus storage).
     # PHASE3_ARCHIVE_ALL_CORPUS=1 is still honored as an explicit force-all.

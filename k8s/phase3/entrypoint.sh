@@ -23,7 +23,7 @@ job_name="${JOB_NAME:-manual}"
 # coverage. NOTE: this measures coverage on THIS pod's (in-pod) binary -- for an
 # optimized trial that is the OPTIMIZED binary, a different edge map -- so it is a
 # per-variant diagnostic, NOT the common-baseline comparison. For baseline-binary
-# coverage-over-time (both variants on one yardstick) use run_covtime.py offline.
+# coverage-over-time (both variants on one yardstick) use tools/run_covtime.py offline.
 coverage_snapshot="${COVERAGE_SNAPSHOT:-0}"
 coverage_snapshot_interval="${COVERAGE_SNAPSHOT_INTERVAL:-1800}"
 

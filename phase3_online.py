@@ -1913,7 +1913,7 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # Campaign-level rollup. Every optimizer appends to ONE ledger (the path is
     # set process-wide before any of them start), so this is the whole campaign's
     # cost -- but _write_cpu_cost_summary writes it into each optimizer's OWN
-    # dir, and plot_coverage_growth.py reads optimized/online/cpu_cost.json.
+    # dir, and analysis/plot_coverage_growth.py reads optimized/online/cpu_cost.json.
     # Without this the coverage plots silently lose CPU charging entirely.
     if per_trial:
         try:

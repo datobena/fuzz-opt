@@ -111,4 +111,4 @@ echo "=== batch ${BATCH} launched; pids in ${PIDFILE} ==="
 cat "$PIDFILE"
 echo
 echo "watch progress:  tail -f .${EXP_PREFIX}-*.log"
-echo "cpu cost so far: python3 cpu_cost_report.py --experiment-id ${EXP_PREFIX}-<project>"
+echo "cpu cost so far: python3 analysis/cpu_cost_report.py --experiment-id ${EXP_PREFIX}-<project>"

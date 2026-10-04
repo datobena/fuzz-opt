@@ -125,9 +125,9 @@ def main():
     )
     parser.add_argument(
         "--input", default=os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "cves.txt"
+            os.path.dirname(os.path.abspath(__file__)), "data", "arvo", "cves.txt"
         ),
-        help="Input CVE file (default: cves.txt)",
+        help="Input CVE file (default: data/arvo/cves.txt)",
     )
     parser.add_argument(
         "--output", default=config.MANIFEST_PATH,

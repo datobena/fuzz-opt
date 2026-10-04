@@ -8,7 +8,7 @@ Two things AFL++ gives us for free that libFuzzer did not:
   * Crash artifacts carry the discovery time IN THE FILENAME, so time-to-bug no
     longer depends on how often the orchestrator happened to poll the directory.
   * plot_data is a coverage/throughput time series, which retires
-    run_covtime.py's reconstruction of cov(t) from corpus ZIP mtimes.
+    tools/run_covtime.py's reconstruction of cov(t) from corpus ZIP mtimes.
 
 UNITS: AFL++ writes `time:` in MILLISECONDS since campaign start. This is
 asserted against a real run rather than assumed -- see test_afl_live_units.py.

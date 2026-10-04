@@ -118,4 +118,4 @@ echo "  -> PID $pid, log $log"
 echo
 echo "watch progress:  tail -f ${log}"
 echo "per-optimizer:   ls results/${exp}/${PROJ}-*/optimized/online/trials/"
-echo "cpu cost so far: python3 cpu_cost_report.py --experiment-id ${exp}"
+echo "cpu cost so far: python3 analysis/cpu_cost_report.py --experiment-id ${exp}"

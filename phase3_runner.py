@@ -872,7 +872,7 @@ def parse_fuzzer_stats(afl_out_dir: str) -> dict:
     files, so nothing has to be recovered from console text:
       fuzzer_stats  final counters (execs_done, execs_per_sec, edges_found)
       plot_data     the whole time series, which also gives coverage-over-time
-                    for free and retires run_covtime.py's ZIP-mtime method.
+                    for free and retires tools/run_covtime.py's ZIP-mtime method.
 
     Keys are normalized to the names phase 4 already consumes.
     """
