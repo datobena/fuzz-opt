@@ -9,6 +9,7 @@ waiting for entire waves to complete.
 
 import argparse
 import json
+import glob
 import logging
 import os
 import random
@@ -26,7 +27,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
-from lib import afl, crash_classify, docker_util
+from lib import afl, crash_classify, docker_util, provenance, swap_signal
 from prework.build_image import image_tag
 
 logging.basicConfig(
@@ -49,6 +50,10 @@ class Trial:
     # stand in: selinux's cve is "CVE-2021-36085" while its image is
     # bench-aflpp/selinux-arvo-42493454.
     local_id: int = 0
+    # Per-trial binary directory. Set only for optimized trials under the
+    # per-trial-optimizer design, where each trial runs a binary its own
+    # optimizer produced. None means "use the shared <variant>/bin".
+    bin_dir_override: str | None = None
     cpu: int = -1
     container_id: str = ""
     status: str = "pending"  # pending, running, completed, failed
@@ -164,6 +169,15 @@ def get_fuzzer_binary(experiment_id: str, trial: Trial) -> str:
 
     if not fuzz_target:
         raise RuntimeError(f"No fuzz target found for {trial.project}/{trial.cve}")
+
+    # Per-trial binary. Under the per-trial-optimizer design each optimized trial
+    # owns its own binary (its own optimizer edited its own source tree), so the
+    # trials no longer share optimized/bin. Baseline trials never set this and
+    # keep the shared path, which is correct: they all run the same unmodified
+    # build by construction.
+    override = getattr(trial, "bin_dir_override", None)
+    if override:
+        return os.path.join(str(override), fuzz_target)
 
     return os.path.join(
         config.RESULTS_DIR, experiment_id, cve_dir,
@@ -568,8 +582,15 @@ def monitor_trial(
     # the same. That is a deliberate choice by the operator, not an oversight.
     restart_every = int(getattr(config, "BASELINE_RESTART_INTERVAL_SECS", 0) or 0)
     restart_arm = str(getattr(config, "BASELINE_RESTART_ARM", "baseline"))
+    # Mirroring the online arm's swaps takes precedence over the fixed cadence:
+    # the cadence cannot match a swap count that is not known in advance, and at
+    # 3h it gave the b6 baseline 7 restarts against the online arm's 2.
+    mirror_swaps = bool(getattr(config, "BASELINE_RESTART_MIRROR_SWAPS", False))
     restarts_done = 0
-    next_restart = (overall_start + restart_every) if restart_every else None
+    next_restart = (overall_start + restart_every) if (restart_every and not mirror_swaps) else None
+    # Start level with whatever has already happened, so a trial that begins
+    # after a swap does not immediately fire a backlog of restarts.
+    seen_generation = swap_signal.SIGNAL.generation if mirror_swaps else 0
 
     while True:
         if not docker_util.container_is_running(trial.container_id):
@@ -578,19 +599,34 @@ def monitor_trial(
         now = time.time()
         elapsed_since_start = now - overall_start
 
-        if (next_restart and trial.variant == restart_arm
-                and now >= next_restart
-                and (duration - elapsed_since_start) > 300):
-            # Leave >5 min of budget, else a restart costs more than it measures.
+        # Leave >5 min of budget, else a restart costs more than it measures.
+        restart_due = False
+        pending_generation = seen_generation
+        if trial.variant == restart_arm and (duration - elapsed_since_start) > 300:
+            if mirror_swaps:
+                pending_generation = swap_signal.SIGNAL.generation
+                restart_due = pending_generation > seen_generation
+            elif next_restart and now >= next_restart:
+                restart_due = True
+
+        if restart_due:
             remaining = int(duration - elapsed_since_start)
             logger.info(
-                "Trial %s: scheduled restart #%d at %.2fh (resuming its queue, "
-                "%ds budget left)", trial.name, restarts_done + 1,
-                elapsed_since_start / 3600, remaining)
+                "Trial %s: %s restart #%d at %.2fh (resuming its queue, "
+                "%ds budget left)", trial.name,
+                f"swap-mirrored (gen {pending_generation})" if mirror_swaps
+                else "scheduled",
+                restarts_done + 1, elapsed_since_start / 3600, remaining)
             docker_util.remove_container(trial.container_id)
             if relaunch_preserving_corpus(trial, experiment_id, remaining):
                 restarts_done += 1
-                next_restart = now + restart_every
+                if mirror_swaps:
+                    # Advance to the generation we OBSERVED, not +1: if several
+                    # swaps landed inside one poll the baseline restarts once,
+                    # matching what a single relaunch can mirror.
+                    seen_generation = pending_generation
+                else:
+                    next_restart = now + restart_every
             else:
                 logger.error(
                     "Trial %s: scheduled restart FAILED; not retrying, the trial "
@@ -678,6 +714,11 @@ def monitor_trial(
         "time_to_bug_s": crash_classify.trial_time_to_bug(crash_times, duration),
         "final_stats": final_stats,
         "failed_start": failed_start,
+        # What the run actually ran with, recorded while it ran.
+        "sanitizer_options": _trial_env_record(),
+        "toolchain": _trial_toolchain(trial),
+        "crash_classification": _classify_trial_crashes(trial, crash_times, dirs),
+        "failed_start_detail": failed_start,
         "docker_exit_code": (
             inspect_state.get("ExitCode")
             if isinstance(inspect_state, dict) else None
@@ -707,6 +748,93 @@ def monitor_trial(
 # fields are required so a stray file in crashes/ (AFL's own README.txt) is not
 # promoted to a crash.
 _AFL_ARTIFACT_RE = re.compile(r"^id:\d+,.*\bsig:\d+")
+
+
+def _classify_trial_crashes(trial, crash_times, dirs) -> dict:
+    """Replay crash artifacts in timestamp order and record what they really are.
+
+    crash_type in crash_times comes from classify_crash(), which reads the
+    FILENAME -- every AFL `id:...` artifact is labelled "crash" without the file
+    ever being executed. That is how 67% linkage artifacts and 31% assertion
+    aborts all became "the target bug" for assimp, and why its recorded
+    time_to_bug_s (0.19-4.8s) pointed the opposite way from the truth (10.7s
+    baseline vs 103.9s optimized).
+
+    Ordered by timestamp and capped, so the FIRST genuine sanitizer crash -- the
+    only one time-to-bug needs -- is found without replaying tens of thousands of
+    artifacts. Pinned to a reserved core so it never competes with a live fuzzer.
+    Annotates crash_times in place and returns a summary.
+    """
+    if not (getattr(config, "PROVENANCE_CLASSIFY_CRASHES", True) and crash_times):
+        return {}
+    bin_dir = getattr(trial, "_bin_dir", None)
+    image = getattr(trial, "_docker_image", None)
+    target = getattr(trial, "_fuzz_target_name", None)
+    if not (bin_dir and image and target):
+        return {"skipped": "binary/image/target unknown"}
+    crashes_dir = os.path.join(
+        dirs.get("afl_out") or os.path.join(dirs["base"], "afl_out"), "default")
+    cap = int(getattr(config, "PROVENANCE_CLASSIFY_MAX", 400))
+    opts = getattr(config, "PROVENANCE_CLASSIFY_ASAN_OPTIONS",
+                   "detect_leaks=0:alloc_dealloc_mismatch=0")
+    # Reserved cores only (0..RESERVED_CORES-1): trials own everything above.
+    cpu = max(int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
+    counts = {"sanitizer": 0, "assert": 0, "nocrash": 0, "infra": 0}
+    first_real = None
+    ordered = sorted(crash_times, key=lambda e: e.get("timestamp_s") or 0)
+    for entry in ordered[:cap]:
+        art = next(iter(glob.glob(os.path.join(
+            crashes_dir, "crashes*", glob.escape(entry.get("artifact", ""))))), None)
+        if not art:
+            continue
+        res = provenance.classify_artifact(image, bin_dir, target, art,
+                                           cpu=cpu, asan_options=opts)
+        entry["classified"] = res["class"]
+        entry["sanitizer_kind"] = res["kind"]
+        entry["crash_frame"] = res["frame"]
+        counts[res["class"]] = counts.get(res["class"], 0) + 1
+        if res["class"] == "sanitizer" and first_real is None:
+            first_real = entry.get("timestamp_s")
+    return {
+        "classified": sum(counts.values()),
+        "artifacts_total": len(crash_times),
+        "capped_at": cap,
+        "counts": counts,
+        "asan_options": opts,
+        # The honest time-to-bug: first artifact that is actually a sanitizer
+        # crash, not merely the first file AFL wrote into crashes/.
+        "time_to_first_sanitizer_crash_s": first_real,
+    }
+
+
+def _trial_env_record() -> dict:
+    """The sanitizer/AFL environment a trial actually ran under.
+
+    ARVO's runner sets alloc_dealloc_mismatch=0 and this benchmark did not; that
+    one difference accounts for 5845 assimp artifacts. It belongs next to the
+    results it shaped, not only in the source that produced them.
+    """
+    return {
+        "ASAN_OPTIONS": "detect_leaks=0:abort_on_error=1:symbolize=0",
+        "AFL_ENV": {
+            "AFL_NO_AFFINITY": "1", "AFL_SKIP_CPUFREQ": "1",
+            "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1", "AFL_AUTORESUME": "1",
+        },
+        "afl_flags": {"-m": "none", "-t": "5000+"},
+    }
+
+
+def _trial_toolchain(trial) -> dict:
+    """Compiler + C++ runtime linkage of the binary this trial actually ran."""
+    bin_dir = getattr(trial, "_bin_dir", None)
+    image = getattr(trial, "_docker_image", None)
+    target = getattr(trial, "_fuzz_target_name", None)
+    if not (bin_dir and image and target):
+        return {}
+    try:
+        return provenance.binary_fingerprint(image, bin_dir, target)
+    except Exception as e:  # noqa: BLE001 - provenance must not kill a trial
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 def classify_crash(crash_path: str) -> str:

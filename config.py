@@ -8,7 +8,11 @@ OSS_FUZZ_DIR = "/home/sefcom/asu/project/oss-fuzz"
 OSS_FUZZ_VULNS_DIR = "/home/sefcom/asu/project/oss-fuzz-vulns"
 BENCHMARK_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BENCHMARK_DIR, "results")
-MANIFEST_PATH = os.path.join(BENCHMARK_DIR, "manifest.json")
+# Default is the ARVO manifest; override with BENCHMARK_MANIFEST_PATH to run a
+# different set (e.g. manifest_fuzzbench.json for the FuzzBench coverage/bug
+# benchmarks) without disturbing the ARVO default or merging the two files.
+MANIFEST_PATH = os.environ.get(
+    "BENCHMARK_MANIFEST_PATH", os.path.join(BENCHMARK_DIR, "manifest.json"))
 
 # Trial parameters
 # Env-overridable so parallel multi-project online runs can shrink trials-per-project
@@ -87,6 +91,22 @@ BASELINE_RESTART_INTERVAL_SECS = int(
 # Which arm the cadence applies to. "baseline" by default; "optimized" or a
 # nonsense value simply means the baseline is never restarted.
 BASELINE_RESTART_ARM = os.environ.get("BASELINE_RESTART_ARM", "baseline")
+
+# Mirror the ONLINE arm's hot swaps onto the baseline instead of using a fixed
+# cadence. Takes precedence over BASELINE_RESTART_INTERVAL_SECS.
+#
+# The fixed cadence cannot match the online arm because the swap count is not
+# known in advance -- it is however many folds get accepted. At 3h that gave the
+# b6 baseline 7 restarts against the online arm's 2, so the baseline took MORE
+# restart penalty, not the same. Mirroring makes the counts equal by
+# construction (one baseline restart per swap that reached running trials) and
+# aligns them in time to within one monitor poll (<=10s).
+#
+# This equalises the restart COST. It deliberately leaves the asymmetry that
+# matters: the online arm's restart also delivers a better binary, the
+# baseline's is pure overhead. That is what the method actually does.
+BASELINE_RESTART_MIRROR_SWAPS = os.environ.get(
+    "BASELINE_RESTART_MIRROR_SWAPS", "0").strip().lower() not in ("0", "", "false", "no")
 
 # Wall-clock budget for ONE replay pass (one binary, one repeat). 0 disables the
 # time budget and falls back to PHASE2_REPLAY_MAX_UNITS alone.
@@ -203,6 +223,22 @@ PHASE2_SANDBOX = os.environ.get("PHASE2_SANDBOX", "1") == "1"
 # Overridable per-run with the BENCHMARK_OPTIMIZER env var.
 OPTIMIZER_BACKEND = os.environ.get("BENCHMARK_OPTIMIZER", "claude").lower()
 
+# Optimizer model and effort, pinned HERE rather than left to an env var.
+# c1/c2 recorded model_pinned=true while the sandboxed CLI actually ran the
+# account default, because the only --model flag lived on the unconfined
+# debug path; a config default survives whoever forgot to export.
+#
+# Opus 4.8 at xhigh: on GSO -- the public code-optimization benchmark --
+# Opus 4.8 leads all 30 entries at 47.06 Opt@1 with a zero hack penalty
+# (raw == hack-adjusted), and Opus 5 is not submitted there at all, so
+# there is no evidence it is better at THIS task despite leading on general
+# coding. Effort is pinned too because GSO shows it moving one model by
+# ~8 points (Opus 4.6: 33.33 default vs 41.18 high) -- larger than the gap
+# between adjacent model generations, so an unpinned effort would confound
+# any model comparison.
+PHASE2_CLAUDE_MODEL = os.environ.get("BENCHMARK_CLAUDE_MODEL", "claude-opus-4-8")
+PHASE2_CLAUDE_EFFORT = os.environ.get("BENCHMARK_CLAUDE_EFFORT", "xhigh")
+
 # Which optimization skill phase 2 drives. The default profiles once on a fixed
 # corpus and iterates hotspots without re-profiling; flip back to the old loop
 # with PHASE2_OPTIMIZER_SKILL=apply-fuzz-source-folds.
@@ -262,11 +298,9 @@ ONLINE_SNAPSHOT_TRIAL_SELECTOR = os.environ.get("ONLINE_SNAPSHOT_TRIAL_SELECTOR"
 # per project in a parallel multi-project run so the timing gates don't collide on one
 # core. Default: the top reserved core. Empty -> RESERVED_CORES-1.
 ONLINE_PROFILE_CPU = os.environ.get("ONLINE_PROFILE_CPU", "")
-# Re-open rule for the soft attempt ledger: a tried (function, pattern) is retried
-# only if its hotspot rank moved by >= this many places, or its self-time share
-# changed by >= this relative fraction, since the attempt.
-ONLINE_LEDGER_REOPEN_RANK_DELTA = int(os.environ.get("ONLINE_LEDGER_REOPEN_RANK_DELTA", "3"))
-ONLINE_LEDGER_REOPEN_SHARE_REL = float(os.environ.get("ONLINE_LEDGER_REOPEN_SHARE_REL", "0.25"))
+# (Removed) The soft attempt ledger's re-open thresholds. No mechanism skips or
+# re-opens a function any more -- the optimizer sees the current profile and may
+# retry any fold, including ones it previously reverted. See phase3_online.py.
 
 # Live mutation capture: online trials carry the AFL custom-mutator shim and
 # batch mutations in memory, so an optimization round consumes what the fuzzer
@@ -289,10 +323,72 @@ ONLINE_LIVE_MUTATION_CAPTURE = os.environ.get(
 # to compare hotspot rankings.
 ONLINE_MUTATION_MODE = os.environ.get("ONLINE_MUTATION_MODE", "prefix")
 
-# Seed generation
+# --- per-trial optimizer experiment (one project per experiment) -----------
+# Each optimized trial runs its OWN optimizer against its OWN source tree and
+# replaces only its OWN binary. The previous design ran a single optimizer and
+# hot-swapped one shared binary into all 10 optimized trials, which made the
+# arm a single sample dressed as ten: every trial fuzzed an identical binary,
+# so trial-to-trial variance measured AFL's randomness alone and said nothing
+# about the optimizer's. With this on, the 10 optimized trials are 10 genuinely
+# independent optimizer draws.
+ONLINE_PER_TRIAL_OPTIMIZER = os.environ.get("ONLINE_PER_TRIAL_OPTIMIZER", "1") == "1"
+
+# Profiling corpus for optimizer i is trial i's OWN mutations, harvested once
+# and then held FIXED for every round that optimizer runs. Two consequences,
+# both intended: the "which trial do we snapshot" question disappears (it is
+# always the optimizer's own trial), and a given optimizer profiles against a
+# stationary workload, so a round-to-round speedup difference is attributable
+# to the edit rather than to the corpus having moved underneath it.
+ONLINE_FIXED_MUTATION_CORPUS = os.environ.get(
+    "ONLINE_FIXED_MUTATION_CORPUS", "1") == "1"
+
+# Optimization level for TARGET builds, applied identically to both arms.
+# "" keeps the OSS-Fuzz default (-O1, see base-builder's CFLAGS). "O3" rebuilds
+# both arms at -O3. This is a measurement-affecting knob, not a tuning one: the
+# whole b1..b6 corpus was produced at -O1, so a run at -O3 is comparable only to
+# other -O3 runs. Recorded in campaign provenance for exactly that reason.
+BUILD_OPT_LEVEL = os.environ.get("BUILD_OPT_LEVEL", "")
+
+# Seconds of offset between consecutive optimizers' first rounds. Without it all
+# ten fire their agent sessions, rebuilds and replay gates at the same instant:
+# ten concurrent sessions against one account invite rate-limiting, and ten
+# simultaneous rebuild bursts spike the profile cores together. Staggering also
+# keeps the ten optimizers' round boundaries desynchronised for the whole
+# campaign, so their hot-swaps land at different times rather than in lockstep.
+ONLINE_OPTIMIZER_STAGGER_SECS = int(
+    os.environ.get("ONLINE_OPTIMIZER_STAGGER_SECS", "120"))
+
+# How long a round waits for a trial's capture shim to write its mutation batch.
+# The shim answers in ~5s on an idle box, but a dump writes 20k small files while
+# other optimizers are snapshotting 6k-file corpora onto the same disk, and under
+# that contention it can take far longer. At the old hard-coded 60s, trials 00
+# and 01 of online-24h-c1 missed their batch and LOST round 1 outright -- there
+# is no usable fallback, because phase 2's own capture is libFuzzer-based and
+# would profile the wrong workload for an AFL campaign.
+ONLINE_MUTATION_DUMP_TIMEOUT_SECS = int(
+    os.environ.get("ONLINE_MUTATION_DUMP_TIMEOUT_SECS", "300"))
+
+# Seed generation. Per-trial RNG seed = BASE_SEED + trial_id*SEED_MULTIPLIER
+# + arm offset, passed to afl-fuzz as `-s <seed>` (AFL++ 5.02c: "use a fixed
+# seed for the RNG").
+#
+# Both arms share the offset, so trial k of each arm runs the same seed. This is
+# Common Random Numbers: it costs nothing and removes "the arms were given
+# different randomness" as an objection. The variance-reduction benefit CRN
+# normally provides is likely near zero here -- the arms execute different
+# binaries, so coverage feedback, queue evolution and scheduling diverge from
+# the first execution and the trajectories do not stay correlated -- but the
+# reporting benefit is real and the cost is not.
+#
+# Note what a fixed seed does NOT buy: reproducibility. Per Schloegel et al.
+# (S&P'24), scheduling order, getpid/time/rand, and shared filesystem state are
+# all additional randomness sources, so `-s` pins the mutator PRNG only. These
+# seeds LABEL trials and make the setup auditable; they do not make a campaign
+# replayable. And no seed touches the per-trial optimizer agents, which are a
+# larger randomness source than the mutator.
 BASE_SEED = 1337
 BASELINE_SEED_OFFSET = 0
-OPTIMIZED_SEED_OFFSET = 500
+OPTIMIZED_SEED_OFFSET = 0
 SEED_MULTIPLIER = 1000
 SHUFFLE_SEED = 42
 
@@ -367,3 +463,39 @@ MONITOR_INTERVAL = 60
 
 # State file for orchestrator
 STATE_FILE = "state.json"
+
+
+# --------------------------------------------------------------------------- #
+# Provenance: record what the run actually ran with, while it runs.
+# --------------------------------------------------------------------------- #
+# Replay each crash artifact once at trial end and record WHAT IT IS (sanitizer
+# / assert / nocrash), instead of inferring "crash" from the filename. That
+# inference made assimp's time-to-bug read 0.19-4.8s when the truth was 10.7s
+# baseline vs 103.9s optimized -- the wrong direction -- because 67% of its
+# artifacts were a libc++ linkage artifact and 31% were assertion aborts.
+PROVENANCE_CLASSIFY_CRASHES = os.environ.get(
+    "PROVENANCE_CLASSIFY_CRASHES", "1").strip().lower() not in ("0", "", "false", "no")
+
+# Artifacts classified per trial, in TIMESTAMP order. Ordered, not sampled, so
+# the first genuine sanitizer crash -- the only one time-to-bug needs -- is found
+# even when a trial saves tens of thousands of artifacts (PcapPlusPlus b6 saved
+# 23867; classifying all of them would cost hours per trial).
+PROVENANCE_CLASSIFY_MAX = _int_env("PROVENANCE_CLASSIFY_MAX", 400)
+
+# Sanitizer options for CLASSIFICATION replays. alloc_dealloc_mismatch is off:
+# our targets link libc++/libc++abi dynamically while upstream ARVO links them
+# statically, so every caught C++ exception reports a mismatch that belongs to
+# our linkage, not the target. OSS-Fuzz's own runner disables it too.
+PROVENANCE_CLASSIFY_ASAN_OPTIONS = os.environ.get(
+    "PROVENANCE_CLASSIFY_ASAN_OPTIONS", "detect_leaks=0:alloc_dealloc_mismatch=0")
+
+
+# Measure the target's build-to-build variance ONCE per campaign: rebuild the
+# unmodified source a second time and replay-measure both. The gate accepts a
+# fold when it beats the previous best, which is only meaningful against how far
+# the measurement moves when nothing changes. PcapPlusPlus's optimizer found a
+# 6.6% spread by hand and correctly rejected every 1-2% fold it had; without that
+# number two campaigns of null results were uninterpretable.
+# Cost: one extra pristine rebuild per campaign (42s on assimp, ~570s on
+# graphicsmagick) plus two replay passes. Set 0 to skip.
+PROVENANCE_NOISE_FLOOR = _int_env("PROVENANCE_NOISE_FLOOR", 2)

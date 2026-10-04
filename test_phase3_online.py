@@ -1,5 +1,8 @@
 # test_phase3_online.py
+import json
 import os
+import threading
+import time
 import types
 
 import config
@@ -115,59 +118,10 @@ def test_functions_from_diff_empty():
 
 
 # ---------------------------------------------------------------------------
-# should_reopen — soft-ledger re-open rule
-# ---------------------------------------------------------------------------
-def test_should_reopen_stable_hotspot_stays_avoided():
-    assert phase3_online.should_reopen(1, 0.40, 1, 0.41) is False
-
-
-def test_should_reopen_on_big_rank_shift():
-    assert phase3_online.should_reopen(1, 0.40, 5, 0.40) is True
-
-
-def test_should_reopen_on_big_share_shift():
-    # rank barely moves but self-time share jumps 0.40 -> 0.60 (>25% relative)
-    assert phase3_online.should_reopen(1, 0.40, 2, 0.60) is True
-
-
-def test_should_reopen_dropped_out_of_profile_not_reopened():
-    assert phase3_online.should_reopen(1, 0.40, None, None) is False
-
-
-# ---------------------------------------------------------------------------
-# build_ledger_summary — prompt block of already-tried folds to avoid
-# ---------------------------------------------------------------------------
-def _ledger_entry(func, rank, share, pattern="lut", outcome="rejected-no-speedup"):
-    return {
-        "functions": [func],
-        "fold_pattern": pattern,
-        "outcome": outcome,
-        "measured_speedup": 1.0,
-        "hotspot_rank": {func: rank},
-        "hotspot_share": {func: share},
-    }
-
-
-def test_build_ledger_summary_lists_stable_attempts():
-    ledger = [_ledger_entry("cil_resolve_ast", 1, 0.40)]
-    profile = {"cil_resolve_ast": {"rank": 1, "share": 0.41}}
-    summary = phase3_online.build_ledger_summary(ledger, profile)
-    assert "cil_resolve_ast" in summary
-    assert "lut" in summary
-
-
-def test_build_ledger_summary_excludes_reopened_attempts():
-    ledger = [_ledger_entry("cil_resolve_ast", 1, 0.40)]
-    # profile now ranks it 6th -> materially changed -> re-opened -> not avoided
-    profile = {"cil_resolve_ast": {"rank": 6, "share": 0.40}}
-    summary = phase3_online.build_ledger_summary(ledger, profile)
-    assert "cil_resolve_ast" not in summary
-
-
-def test_build_ledger_summary_empty_when_nothing_to_avoid():
-    assert phase3_online.build_ledger_summary([], {}) == ""
-
-
+# (Removed) should_reopen / build_ledger_summary tests. The soft attempt ledger
+# no longer exists: nothing skips or re-opens a function, and no attempt-history
+# block is injected into the optimizer prompt. ledger.json is still written as a
+# record by _record_ledger, which the round-outcome tests below still cover.
 # ---------------------------------------------------------------------------
 # snapshot_live_corpus — consistent copy of a corpus being written concurrently
 # ---------------------------------------------------------------------------
@@ -432,9 +386,12 @@ def test_apply_round_outcome_accept_commits_and_advances(monkeypatch):
 def test_build_online_trials_two_arms_and_core_pinning(monkeypatch):
     monkeypatch.setattr(config, "NUM_TRIALS", 10)
     monkeypatch.setattr(config, "ONLINE_TRIAL_CORES", "4-23")
+    monkeypatch.setattr(config, "ONLINE_PER_TRIAL_OPTIMIZER", False)
     entry = {"project": "selinux", "cve": "arvo-1", "fuzz_target": "secilc-fuzzer"}
     baseline, online = phase3_online._build_online_trials(entry)
     assert len(baseline) == 10 and len(online) == 10
+    # legacy mode: every optimized trial shares the one optimized/bin
+    assert all(t.bin_dir_override is None for t in online)
     assert all(t.variant == "baseline" for t in baseline)
     assert all(t.variant == "optimized" for t in online)
     pool = set(range(4, 24))
@@ -518,3 +475,144 @@ def test_an_auth_failure_is_not_evidence(tmp_path):
 def test_a_missing_report_is_not_evidence(tmp_path):
     """No report means the session never got far enough to write one."""
     assert phase3_online._round_produced_evidence(str(tmp_path), False) is False
+
+
+# ===========================================================================
+# Per-trial optimizer design: 10 optimized trials = 10 INDEPENDENT optimizers.
+# ===========================================================================
+def test_per_trial_mode_gives_each_optimized_trial_its_own_binary(monkeypatch, tmp_path):
+    """The shared-binary design made the optimized arm one sample dressed as ten:
+    all 10 trials bind-mounted the same optimized/bin, so between-trial variance
+    measured AFL's randomness alone. Each trial must own its binary directory."""
+    monkeypatch.setattr(config, "NUM_TRIALS", 10)
+    monkeypatch.setattr(config, "ONLINE_TRIAL_CORES", "4-23")
+    monkeypatch.setattr(config, "ONLINE_PER_TRIAL_OPTIMIZER", True)
+    entry = {"project": "libxml2", "cve": "arvo-1972", "fuzz_target": "x"}
+    baseline, online = phase3_online._build_online_trials(entry, str(tmp_path))
+    assert all(t.bin_dir_override is None for t in baseline), "baseline arm is shared"
+    dirs = [t.bin_dir_override for t in online]
+    assert len(set(dirs)) == 10, "every optimized trial needs a DISTINCT bin dir"
+    for t in online:
+        assert t.bin_dir_override.endswith(f"bin_{t.trial_id:02d}")
+
+
+def test_per_trial_bin_dir_reaches_the_runner(monkeypatch, tmp_path):
+    """The override is only useful if get_fuzzer_binary honours it -- that is the
+    single place the container's /out mount is resolved from."""
+    import phase3_runner
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps(
+        [{"project": "libxml2", "cve": "arvo-1972", "fuzz_target": "xml"}]))
+    monkeypatch.setattr(config, "MANIFEST_PATH", str(manifest))
+    t = phase3_runner.Trial(project="libxml2", cve="arvo-1972",
+                            variant="optimized", trial_id=7, seed=1)
+    shared = phase3_runner.get_fuzzer_binary("exp", t)
+    t.bin_dir_override = str(tmp_path / "bin_07")
+    own = phase3_runner.get_fuzzer_binary("exp", t)
+    assert own != shared
+    assert own == str(tmp_path / "bin_07" / "xml")
+
+
+def test_fixed_mutation_corpus_is_pinned_and_reused(monkeypatch, tmp_path):
+    """Optimizer i profiles trial i's mutations, harvested ONCE. Re-harvesting
+    every round moved the workload underneath the optimizer, so a round-to-round
+    speedup change confounded 'this edit was better' with 'the corpus grew'."""
+    ctx = phase3_online.RoundContext(
+        entry={}, experiment_id="e", experiment_dir=str(tmp_path),
+        online_dir=str(tmp_path), source_tree="", source_root="",
+        project="libxml2", image="", fuzz_target="xml", poc_path=None,
+        previous_best_bin="", prev_tag="iter_00", optimized_bin_dir="",
+        ledger_path="", swap_timeline_path="", profile_cpu=1)
+    assert ctx.fixed_mutations is None
+    ctx.fixed_mutations = str(tmp_path / "fixed_mutations")
+    ctx.fixed_mutation_count = 20000
+    # A second round must reuse the pinned corpus rather than re-harvesting.
+    assert ctx.fixed_mutations.endswith("fixed_mutations")
+    assert ctx.fixed_mutation_count == 20000
+
+
+def test_per_trial_swap_events_are_isolated():
+    """Trial 3 swapping must not make trial 7's monitor believe it is being
+    swapped -- that is what the shared swap_barrier would do."""
+    state = phase3_online.OnlineState()
+    for tid in (3, 7):
+        state.trials[tid] = {"state": "running",
+                             "swap_barrier": threading.Event(),
+                             "relaunch_ready": threading.Event(),
+                             "relaunched": threading.Event()}
+    state.trials[3]["swap_barrier"].set()
+    assert state.trials[3]["swap_barrier"].is_set()
+    assert not state.trials[7]["swap_barrier"].is_set()
+    assert not state.swap_barrier.is_set(), "global barrier must stay untouched"
+
+
+# ===========================================================================
+# "build-failed" used to cover three unrelated outcomes, so a campaign's round
+# table could not be read: the agent declined, the agent died, or the compiler
+# rejected a real edit all produced the same label.
+# ===========================================================================
+def _agent_report(tmp_path, text):
+    d = tmp_path / "source_diff"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "agent_attempt_0.txt").write_text(text)
+    return str(d)
+
+
+def test_declined_round_is_evidence_but_dead_session_is_not(tmp_path):
+    """The split hinges on _round_produced_evidence. A session that ran and kept
+    nothing says something about the TARGET (no headroom found); one that timed
+    out or failed auth says something about the INFRASTRUCTURE only."""
+    declined = _agent_report(tmp_path / "a", "[ok] True\nNO source changes were needed\n")
+    assert phase3_online._round_produced_evidence(declined, False) is True
+
+    timed_out = _agent_report(tmp_path / "b", "[ok] False  [timed_out] True\n")
+    assert phase3_online._round_produced_evidence(timed_out, False) is False
+
+    never_ran = str(tmp_path / "c")          # no agent report at all
+    os.makedirs(never_ran, exist_ok=True)
+    assert phase3_online._round_produced_evidence(never_ran, False) is False
+
+
+def test_evidence_split_maps_to_distinct_labels(tmp_path):
+    """Mirrors run_round's classification for the no-diff case, which is the one
+    that used to collapse into build-failed."""
+    def label(diff_dir):
+        return ("no-fold" if phase3_online._round_produced_evidence(diff_dir, False)
+                else "agent-failed")
+
+    assert label(_agent_report(tmp_path / "x", "[ok] True\nNO source changes needed\n")) == "no-fold"
+    assert label(_agent_report(tmp_path / "y", "[ok] False  [timed_out] True\n")) == "agent-failed"
+    # A real diff that fails to compile keeps the original label, and is only
+    # reachable when opt_applied is True -- i.e. never through this path.
+
+
+def test_mutation_dump_timeout_is_configurable_not_hardcoded(monkeypatch, tmp_path):
+    """60s was hard-coded and too tight: a dump writes 20k small files while other
+    optimizers snapshot 6k-file corpora onto the same disk. trials 00 and 01 of
+    online-24h-c1 lost round 1 to it, then delivered in 5s when asked again."""
+    monkeypatch.setattr(config, "ONLINE_MUTATION_DUMP_TIMEOUT_SECS", 1)
+    d = tmp_path / "mutations"
+    d.mkdir()
+    t0 = time.time()
+    # No shim is listening, so this must time out using the CONFIGURED value.
+    assert phase3_online.request_mutation_dump([str(d)]) == []
+    assert time.time() - t0 < 30, "did not honour the configured timeout"
+    # and the stale request is cleaned up so the next round starts fresh
+    assert not (d / phase3_online.DUMP_REQUEST).exists()
+
+
+def test_dump_request_is_cleared_before_waiting(tmp_path):
+    """The marker waited on must be THIS round's, not a leftover from the last."""
+    d = tmp_path / "mutations"
+    d.mkdir()
+    (d / phase3_online.BATCH_MARKER).write_text("")
+    (d / "mut_old_00000001").write_text("stale")
+    import config as _c
+    old = getattr(_c, "ONLINE_MUTATION_DUMP_TIMEOUT_SECS", 300)
+    _c.ONLINE_MUTATION_DUMP_TIMEOUT_SECS = 1
+    try:
+        phase3_online.request_mutation_dump([str(d)])
+    finally:
+        _c.ONLINE_MUTATION_DUMP_TIMEOUT_SECS = old
+    assert not (d / phase3_online.BATCH_MARKER).exists()
+    assert not (d / "mut_old_00000001").exists()

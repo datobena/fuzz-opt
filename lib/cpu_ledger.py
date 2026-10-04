@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from contextlib import contextmanager
 
@@ -47,6 +48,26 @@ def set_ledger_path(path: str | os.PathLike) -> None:
     os.environ[LEDGER_ENV] = str(path)
 
 
+# Per-thread round tag. The environment is process-global, which was fine while
+# one optimizer ran at a time. Under the per-trial design ten optimizers advance
+# rounds concurrently in ten threads, and the last writer's iter_n would label
+# every other optimizer's records. Thread-local state wins when set; the
+# environment remains the fallback so the out-of-process writers (the broker)
+# keep working unchanged.
+_LOCAL = threading.local()
+
+
+def set_thread_round(project: str | None = None, iter_n: int | None = None,
+                     trial_id: int | None = None) -> None:
+    """Tag records written BY THIS THREAD. Overrides the environment."""
+    if project is not None:
+        _LOCAL.project = str(project)
+    if iter_n is not None:
+        _LOCAL.iter_n = int(iter_n)
+    if trial_id is not None:
+        _LOCAL.trial_id = int(trial_id)
+
+
 def set_round(project: str | None = None, iter_n: int | None = None) -> None:
     """Tag subsequent records with the current project/round.
 
@@ -62,11 +83,22 @@ def set_round(project: str | None = None, iter_n: int | None = None) -> None:
 
 
 def _current_iter() -> int | None:
+    local = getattr(_LOCAL, "iter_n", None)
+    if local is not None:
+        return local
     raw = os.environ.get(ITER_ENV, "")
     try:
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _current_project() -> str:
+    return getattr(_LOCAL, "project", None) or os.environ.get(PROJECT_ENV, "")
+
+
+def _current_trial() -> int | None:
+    return getattr(_LOCAL, "trial_id", None)
 
 
 def record(
@@ -86,7 +118,11 @@ def record(
     t0 = now - wall_s if t_start is None else t_start
     row = {
         "stage": stage,
-        "project": project if project is not None else os.environ.get(PROJECT_ENV, ""),
+        "project": project if project is not None else _current_project(),
+        # Which optimizer wrote this. None under the legacy single-optimizer
+        # design; the owning trial's id under the per-trial design, without which
+        # ten interleaved optimizers produce one indistinguishable ledger.
+        "trial_id": _current_trial(),
         "iter": iter_n if iter_n is not None else _current_iter(),
         "t_start": round(t0, 3),
         "t_end": round(t0 + wall_s, 3),
@@ -153,7 +189,8 @@ def load(path: str | os.PathLike) -> list[dict]:
 
 
 def summarize(rows: list[dict], *, trial_cores: int | None = None,
-              charge: str = "per-replicate") -> dict:
+              charge: str = "per-replicate",
+              optimizers: int | None = None) -> dict:
     """Per-round and cumulative core-seconds, ready to overlay on a timeline.
 
     ``fuzz_seconds_equivalent`` converts core-seconds into the wall-clock a
@@ -174,13 +211,39 @@ def summarize(rows: list[dict], *, trial_cores: int | None = None,
         one optimizer amortised over the arm. Correct for "what did this
         campaign cost me", wrong for "what does this method cost".
 
-    The two differ by ``trial_cores`` (9 in the standard layout), which is large
-    enough to flip a verdict: b5's PcapPlusPlus reads 1.01x net under as-run and
-    0.85x -- a net LOSS against simply fuzzing longer -- per-replicate.
+    ``per-trial-optimizer``
+        Charge each trial ONE optimizer's cost: ``core_s / optimizers``. Correct
+        only for the per-trial design, where every optimized trial runs its OWN
+        optimizer against its OWN source tree. There, per-replicate double-counts
+        -- trial i never benefited from the other nine optimizers, so billing it
+        for their CPU charges it for work done on binaries it never executed.
+        The other nine exist to obtain ten independent samples; that is a cost of
+        MEASUREMENT, not of the method. A practitioner adopting this technique
+        runs one optimizer for one campaign and pays this number.
+
+        Requires ``optimizers``. Division is EQUAL across optimizers rather than
+        per-row, because the broker records its work from threads that never
+        tagged a trial_id -- 86% of c1's rows. Equal division is a close
+        approximation there: the attributable 14% spread only 0.98-1.24h across
+        the ten (+/-12%), so they did comparable amounts of work.
+
+    The first two differ by ``trial_cores`` (9 in the standard layout), which is
+    large enough to flip a verdict: b5's PcapPlusPlus reads 1.01x net under
+    as-run and 0.85x -- a net LOSS against simply fuzzing longer -- per-replicate.
     """
-    if charge not in ("per-replicate", "as-run"):
-        raise ValueError(f"charge must be per-replicate or as-run, got {charge!r}")
-    divisor = 1 if charge == "per-replicate" else (trial_cores or 1)
+    if charge not in ("per-replicate", "as-run", "per-trial-optimizer"):
+        raise ValueError(
+            f"charge must be per-replicate, as-run or per-trial-optimizer, "
+            f"got {charge!r}")
+    if charge == "per-trial-optimizer":
+        if not optimizers:
+            raise ValueError(
+                "per-trial-optimizer charging needs `optimizers` (how many "
+                "independent optimizers ran); without it the per-trial cost "
+                "cannot be separated from the campaign total")
+        divisor = optimizers
+    else:
+        divisor = 1 if charge == "per-replicate" else (trial_cores or 1)
     per_round: dict = {}
     per_stage: dict = {}
     for r in rows:
@@ -229,6 +292,7 @@ def summarize(rows: list[dict], *, trial_cores: int | None = None,
         "by_stage": dict(sorted(per_stage.items(), key=lambda kv: -kv[1])),
         "trial_cores": trial_cores,
         "charge_model": charge,
+        "optimizers": optimizers,
     }
     if trial_cores:
         total["total_fuzz_seconds_equivalent"] = round(cumulative / divisor, 3)

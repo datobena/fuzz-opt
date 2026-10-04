@@ -35,6 +35,17 @@ case "$BATCH" in
   *) echo "usage: $0 <1|2|3|4>"; exit 2 ;;
 esac
 
+# Pin the optimizer's model. Without this no --model is passed and the CLI
+# resolves its own ACCOUNT DEFAULT, which nothing records: the sandbox gives the
+# agent its own HOME (only skills/ mounted, so the host ~/.claude/settings.json
+# pin is invisible) and runs --rm, so the session transcript that carries the
+# model dies with the container. A sweep of 3576 metadata files across every
+# experiment here found zero model identifiers -- b1..b6 cannot be compared on
+# this axis, because a server-side default shift would leave no trace. Pin it so
+# future batches are reproducible and comparable to each other.
+# Accepts an alias ('opus', 'sonnet', 'fable') or a full model id.
+export BENCHMARK_CLAUDE_MODEL=${BENCHMARK_CLAUDE_MODEL:-opus}
+
 DURATION=${DURATION:-86400}          # 24h
 INTERVAL=${INTERVAL:-7200}           # minimum fuzzing time between rounds (2h)
 OPT_TIMEOUT=${OPT_TIMEOUT:-14400}    # 4h backstop (0 disables it entirely).

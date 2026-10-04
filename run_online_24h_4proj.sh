@@ -8,6 +8,17 @@
 set -u
 cd /home/sefcom/asu/project/test/benchmark
 
+# Pin the optimizer's model. Without this no --model is passed and the CLI
+# resolves its own ACCOUNT DEFAULT, which nothing records: the sandbox gives the
+# agent its own HOME (only skills/ mounted, so the host ~/.claude/settings.json
+# pin is invisible) and runs --rm, so the session transcript that carries the
+# model dies with the container. A sweep of 3576 metadata files across every
+# experiment here found zero model identifiers -- b1..b6 cannot be compared on
+# this axis, because a server-side default shift would leave no trace. Pin it so
+# future batches are reproducible and comparable to each other.
+# Accepts an alias ('opus', 'sonnet', 'fable') or a full model id.
+export BENCHMARK_CLAUDE_MODEL=${BENCHMARK_CLAUDE_MODEL:-opus}
+
 DURATION=${DURATION:-86400}          # 24h
 INTERVAL=${INTERVAL:-5400}           # 1.5h min between swaps
 OPT_TIMEOUT=${OPT_TIMEOUT:-5400}     # 1.5h optimizer backstop
