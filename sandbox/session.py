@@ -163,10 +163,16 @@ def run_sandboxed_optimizer(
     if len(sock_path.encode()) > 100:                 # leave headroom under 108
         raise RuntimeError(f"broker socket path too long: {sock_path}")
 
+    # Drift-corrected replay timing: the broker snapshots the first built /out (the
+    # pristine round-start binary) here, then brackets every candidate replay against
+    # it so machine drift cancels. Off by setting FOLD_BRACKET_REPLAY=0.
+    bracket = os.environ.get("FOLD_BRACKET_REPLAY", "1") != "0"
+    baseline_ref_dir = str(session_dir / "baseline_ref") if bracket else ""
     ctx = broker_mod.BrokerContext(
         image=image, source_dir=source_dir, out_dir=out_dir,
         corpus_dir=corpus_dir, fuzz_target=fuzz_target, project=project,
         cpu=cpu, audit_log=audit_log or str(session_dir / "broker_audit.log"),
+        baseline_ref_dir=baseline_ref_dir,
     )
 
     stop = threading.Event()

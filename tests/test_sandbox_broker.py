@@ -50,7 +50,10 @@ def test_smoke_result_is_scrubbed(tmp_path, monkeypatch):
 
 def test_replay_time_returns_only_a_number(tmp_path, monkeypatch):
     import sandbox.broker as b
-    monkeypatch.setattr(b, "_run_replay", lambda ctx, repeats: 12.5)
+    # _run_replay returns a dict (seconds + host-side bracketing detail); the
+    # agent-facing reply must stay just the number plus repeats.
+    monkeypatch.setattr(b, "_run_replay",
+                        lambda ctx, repeats: {"seconds": 12.5, "bracketed": False})
     r = handle_request({"op": "replay_time", "repeats": 3}, _ctx(tmp_path))
     assert r == {"ok": True, "seconds": 12.5, "repeats": 3}
 
@@ -59,8 +62,10 @@ def test_replay_repeats_is_clamped(tmp_path, monkeypatch):
     """An agent asking for 10_000 repeats must not wedge the host."""
     import sandbox.broker as b
     seen = {}
-    monkeypatch.setattr(
-        b, "_run_replay", lambda ctx, repeats: seen.setdefault("n", repeats) and 1.0)
+    def fake(ctx, repeats):
+        seen["n"] = repeats
+        return {"seconds": 1.0, "bracketed": False}
+    monkeypatch.setattr(b, "_run_replay", fake)
     handle_request({"op": "replay_time", "repeats": 10000}, _ctx(tmp_path))
     assert seen["n"] <= b.MAX_REPLAY_REPEATS
 
@@ -89,7 +94,8 @@ def test_socket_round_trip(tmp_path, monkeypatch):
 
     import sandbox.broker as b
 
-    monkeypatch.setattr(b, "_run_replay", lambda ctx, repeats: 4.25)
+    monkeypatch.setattr(b, "_run_replay",
+                        lambda ctx, repeats: {"seconds": 4.25, "bracketed": False})
     sock_path = str(tmp_path / "broker.sock")
     ctx = _ctx(tmp_path)
 

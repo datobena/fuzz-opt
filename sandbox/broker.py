@@ -21,16 +21,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import socket
 import statistics
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib import cpu_ledger
+from lib.core_lock import core_lock
 from prework.prework_build import restore_ownership
 from sandbox.scrub import scrub
 
@@ -54,6 +56,19 @@ class BrokerContext:
     project: str
     cpu: int
     audit_log: str = ""
+    # Drift-corrected ("bracketed") replay timing. When ``baseline_ref_dir`` is set
+    # the broker snapshots the FIRST successfully built /out there -- the round's
+    # pristine "beat-this" binary -- and every later replay interleaves that
+    # reference with the candidate, reporting the candidate's time normalised to the
+    # reference's time at the first measurement. That cancels machine drift (turbo /
+    # memory-bandwidth / thermal from neighbour cores) that a stale once-per-round
+    # anchor cannot. Empty -> disabled, falls back to a plain single-binary replay.
+    baseline_ref_dir: str = ""
+    # Runtime state (not agent-chosen): set true once the reference is captured, and
+    # the reference's own replay time at that first measurement (the normalisation
+    # anchor). One BrokerContext per session, so these persist across requests.
+    ref_ready: bool = field(default=False, repr=False)
+    ref_anchor_s: float = field(default=0.0, repr=False)
 
 
 def _audit(ctx: BrokerContext, op: str, blob: str) -> None:
@@ -114,13 +129,16 @@ def _build_command(ctx: BrokerContext) -> list[str]:
     ]
 
 
-def _replay_command(ctx: BrokerContext) -> list[str]:
+def _replay_command(ctx: BrokerContext, out_dir: str | None = None) -> list[str]:
     """Deterministic corpus replay via afl-showmap.
 
     afl-showmap -i replays every file in a directory exactly once through the
     forkserver -- the AFL analogue of libFuzzer's -runs=0, and the measurement
     the replay-speedup gate is built on. Pinned to one CPU so timings are stable.
+    ``out_dir`` selects which built /out to replay (default: the candidate); the
+    bracketed path passes the reference binary's dir here too.
     """
+    out_dir = out_dir or ctx.out_dir
     return [
         "docker", "run", "--rm", "--privileged",
         "--cpuset-cpus", str(ctx.cpu),
@@ -128,7 +146,7 @@ def _replay_command(ctx: BrokerContext) -> list[str]:
         # smoke/replay that crashes would otherwise dump its image
         # synchronously. See phase3_runner for the full reasoning.
         "--ulimit", "core=0",
-        "-v", f"{Path(ctx.out_dir).absolute()}:/out:ro",
+        "-v", f"{Path(out_dir).absolute()}:/out:ro",
         "-v", f"{Path(ctx.corpus_dir).absolute()}:/corpus:ro",
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
         "export AFL_NO_AFFINITY=1 AFL_SKIP_CPUFREQ=1 "
@@ -158,14 +176,41 @@ def _replay_command(ctx: BrokerContext) -> list[str]:
 
 
 def _run_build(ctx: BrokerContext) -> tuple[bool, str]:
-    rc, blob = _run(_build_command(ctx), BUILD_TIMEOUT_SECS)
+    # Serialize against any replay/smoke on this optimizer's core (incl. the
+    # harness-side rebuild in another process): never measure a core mid-build.
+    with core_lock(ctx.cpu):
+        rc, blob = _run(_build_command(ctx), BUILD_TIMEOUT_SECS)
     _audit(ctx, "build", blob)
     # `compile` runs as root through a bind mount, so it leaves root-owned objects
     # in the tree the AGENT (uid 1000) is editing and the orchestrator later has to
     # `git clean` when a round is rejected. Restored on failure too: a build that
     # died halfway leaves exactly the artifacts that have to be cleanable.
     restore_ownership(ctx.image, [ctx.source_dir, ctx.out_dir])
+    if rc == 0:
+        _capture_reference(ctx)
     return rc == 0, blob
+
+
+def _capture_reference(ctx: BrokerContext) -> None:
+    """Snapshot the FIRST successfully built /out as the bracketing reference.
+
+    The skill builds the pristine round-start tree before applying any fold (to
+    anchor the baseline), so the first successful build is that "beat-this" binary.
+    Copied aside once because the next build overwrites /out with a candidate.
+    Best-effort: on any failure bracketing simply stays off and the replay falls
+    back to a plain single-binary measurement.
+    """
+    if not ctx.baseline_ref_dir or ctx.ref_ready:
+        return
+    try:
+        if os.path.exists(ctx.baseline_ref_dir):
+            shutil.rmtree(ctx.baseline_ref_dir, ignore_errors=True)
+        shutil.copytree(ctx.out_dir, ctx.baseline_ref_dir, symlinks=True)
+        ctx.ref_ready = True
+        logger.info("captured bracketing reference binary into %s", ctx.baseline_ref_dir)
+    except OSError as e:
+        logger.warning("could not capture bracketing reference (%s); replay timing "
+                       "will be un-bracketed", e)
 
 
 def _run_smoke(ctx: BrokerContext) -> tuple[bool, str]:
@@ -182,31 +227,91 @@ def _run_smoke(ctx: BrokerContext) -> tuple[bool, str]:
         f"export ASAN_OPTIONS=detect_leaks=0; printf '' > /tmp/e; "
         f"timeout 120 /out/{ctx.fuzz_target} /tmp/e",
     ]
-    rc, blob = _run(cmd, 300)
+    with core_lock(ctx.cpu):
+        rc, blob = _run(cmd, 300)
     _audit(ctx, "smoke", blob)
     return rc == 0, blob
 
 
-def _run_replay(ctx: BrokerContext, repeats: int) -> float | None:
-    """Median wall-clock of `repeats` deterministic replays, in seconds."""
-    times: list[float] = []
-    for _ in range(repeats):
-        t0 = time.monotonic()
-        rc, blob = _run(_replay_command(ctx), REPLAY_TIMEOUT_SECS)
-        elapsed = time.monotonic() - t0
-        _audit(ctx, "replay", f"rc={rc} elapsed={elapsed:.3f}\n{blob[-2000:]}")
-        if rc == 124:
-            return None
-        # A replay that did not actually execute the corpus must not be timed.
-        # afl-showmap reports its own outcome; absent that line the run failed
-        # before the forkserver and the "elapsed" is pure start-up cost, which
-        # is indistinguishable from a very fast binary.
-        if "coverage of" not in blob and "Captured" not in blob:
-            logger.error("replay produced no coverage report; refusing to time "
-                         "it: %s", blob[-300:])
-            return None
-        times.append(elapsed)
-    return statistics.median(times) if times else None
+def _timed_replay(ctx: BrokerContext, out_dir: str) -> float | None:
+    """One replay pass over the fixed corpus; wall seconds, or None if it did not
+    actually execute the corpus (afl-showmap prints no coverage line -- the run
+    failed before the forkserver and the elapsed time is pure start-up cost,
+    indistinguishable from a very fast binary, so it must never be timed)."""
+    t0 = time.monotonic()
+    rc, blob = _run(_replay_command(ctx, out_dir), REPLAY_TIMEOUT_SECS)
+    elapsed = time.monotonic() - t0
+    _audit(ctx, "replay", f"dir={out_dir} rc={rc} elapsed={elapsed:.3f}\n{blob[-2000:]}")
+    if rc == 124:
+        return None
+    if "coverage of" not in blob and "Captured" not in blob:
+        logger.error("replay produced no coverage report; refusing to time it: %s",
+                     blob[-300:])
+        return None
+    return elapsed
+
+
+def _run_replay(ctx: BrokerContext, repeats: int) -> dict | None:
+    """Median replay time of the candidate /out, in seconds (or None on failure).
+
+    Plain mode (no reference captured): median of ``repeats`` passes over the
+    candidate, compared later against a separately-anchored baseline.
+
+    Bracketed mode (reference captured on the first build): each of ``repeats``
+    pairs times the reference binary and the candidate back-to-back, so machine
+    drift (turbo / memory-bandwidth / thermal from neighbour cores) hits both
+    equally. The reported ``seconds`` is the candidate normalised to the
+    reference's time at the first measurement (``ref_anchor_s``) -- i.e. the
+    candidate expressed in the anchor's conditions -- which is directly comparable
+    across cycles without a stale once-per-round baseline.
+
+    The whole measurement holds the core lock so no build (this process or the
+    harness rebuild) can slip between passes and skew it.
+    """
+    bracketed = bool(ctx.baseline_ref_dir) and ctx.ref_ready
+    ref_times: list[float] = []
+    cand_times: list[float] = []
+    with core_lock(ctx.cpu):
+        if not bracketed:
+            for _ in range(repeats):
+                e = _timed_replay(ctx, ctx.out_dir)
+                if e is None:
+                    return None
+                cand_times.append(e)
+        else:
+            for _ in range(repeats):
+                e_ref = _timed_replay(ctx, ctx.baseline_ref_dir)
+                if e_ref is None:
+                    return None
+                e_cand = _timed_replay(ctx, ctx.out_dir)
+                if e_cand is None:
+                    return None
+                ref_times.append(e_ref)
+                cand_times.append(e_cand)
+    if not cand_times:
+        return None
+    if not bracketed:
+        return {"seconds": statistics.median(cand_times), "bracketed": False}
+    ref_now = statistics.median(ref_times)
+    # Anchor on the first bracketed call -- a real measured pass, not a guess.
+    if ctx.ref_anchor_s <= 0.0:
+        ctx.ref_anchor_s = ref_now
+    anchor = ctx.ref_anchor_s
+    # Per-pair normalisation cancels within-pair drift, then median across pairs.
+    corrected = [c * (anchor / r) if r > 0 else c
+                 for r, c in zip(ref_times, cand_times)]
+    out = {
+        "seconds": statistics.median(corrected),
+        "raw_seconds": statistics.median(cand_times),
+        "reference_seconds": ref_now,
+        "reference_anchor_seconds": anchor,
+        "bracketed": True,
+    }
+    _audit(ctx, "replay-bracket",
+           f"corrected={out['seconds']:.3f} raw={out['raw_seconds']:.3f} "
+           f"ref_now={ref_now:.3f} ref_anchor={anchor:.3f} "
+           f"drift={anchor / ref_now if ref_now else 1.0:.3f}x")
+    return out
 
 
 def handle_request(req, ctx: BrokerContext) -> dict:
@@ -242,11 +347,13 @@ def handle_request(req, ctx: BrokerContext) -> dict:
             return {"ok": False, "error": "repeats must be an integer"}
         repeats = max(1, min(raw, MAX_REPLAY_REPEATS))
         with cpu_ledger.timed("broker_replay", cores=1) as info:
-            seconds = _run_replay(ctx, repeats)
+            result = _run_replay(ctx, repeats)
             info["repeats"] = repeats
-        if seconds is None:
+        if result is None:
             return {"ok": False, "error": "replay did not complete"}
-        return {"ok": True, "seconds": seconds, "repeats": repeats}
+        # Agent-facing reply stays a single number; the bracketing detail
+        # (raw vs corrected, reference time) is recorded host-side only.
+        return {"ok": True, "seconds": result["seconds"], "repeats": repeats}
 
     return {"ok": False, "error": f"unknown op: {op}"}
 

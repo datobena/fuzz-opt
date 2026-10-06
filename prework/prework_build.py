@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
+from lib.core_lock import core_lock
 from prework.build_image import image_tag
 
 logger = logging.getLogger(__name__)
@@ -187,15 +188,32 @@ def rebuild_with_prework_image(
     image = prework_image_for(entry)
     project = entry["project"]
     Path(out_dir).mkdir(parents=True, exist_ok=True)
+    # Clear stale build output from the source tree before compiling. The online
+    # flow runs the SAME build.sh on the SAME tree repeatedly (extract -> baseline
+    # -> noise-floor x2 -> every optimizer round); a script that does an
+    # out-of-source `mkdir build` (mbedtls's cmake step) aborts on the 2nd run
+    # with "mkdir: cannot create directory 'build': File exists" unless the prior
+    # output is gone. Builds here are from-scratch regardless, so this only
+    # removes debris. Lazy import: phase2_setup imports THIS module, so a
+    # top-level import would be circular.
+    try:
+        from phase2_setup import _clean_build_artifacts
+        _clean_build_artifacts(source_dir)
+    except Exception:  # noqa: BLE001 -- cleaning must never block a build
+        pass
     cmd = build_prework_rebuild_command(
         image=image, source_dir=source_dir, out_dir=out_dir,
         project=project, cpu=cpu,
     )
     logger.info("Rebuilding %s in %s", project, image)
     try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
-        )
+        # Serialize against any replay/smoke timing on the same optimizer core (the
+        # agent's broker runs those in another process); a build overlapping a
+        # measurement inflates the measured wall clock and skews the gate.
+        with core_lock(cpu):
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
+            )
     except subprocess.TimeoutExpired:
         log = f"build timed out after {timeout}s"
         logger.error("%s for %s", log, project)
