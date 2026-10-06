@@ -455,7 +455,8 @@ def hot_swap_one(ctx: RoundContext, state: OnlineState, new_bin_dir):
 # Sequential optimizer loop (convergence-terminated)
 # ---------------------------------------------------------------------------
 def run_optimizer_loop(*, run_round_fn, hot_swap_fn, convergence_k: int,
-                       wait_fn, all_terminal_fn) -> int:
+                       wait_fn, all_terminal_fn, deadline: float | None = None,
+                       min_round_lead_s: float = 3600.0) -> int:
     """Drive sequential optimization rounds.
 
     Each iteration: wait the minimum inter-swap fuzz interval, stop if every online
@@ -479,6 +480,17 @@ def run_optimizer_loop(*, run_round_fn, hot_swap_fn, convergence_k: int,
     while True:
         wait_fn()
         if all_terminal_fn():
+            break
+        # Do not START a round when the fuzzing budget is within min_round_lead_s
+        # of ending (default 1h): a round begun now finishes after the trials
+        # terminate, so its binary could never be swapped in -- pure agent/API
+        # cost for no measured benefit. Once the deadline has passed this also
+        # stops the loop (and the per-round agent timeout is capped to the
+        # deadline, so an already-running round is killed at the budget end).
+        if deadline is not None and (deadline - time.time()) <= min_round_lead_s:
+            logger.info("optimizer: %.0fs left in budget (<= %ds round lead); "
+                        "not starting another round",
+                        max(deadline - time.time(), 0.0), int(min_round_lead_s))
             break
         iter_n += 1
         result = run_round_fn(iter_n)
@@ -665,6 +677,11 @@ class RoundContext:
     last_profile: dict = field(default_factory=dict)
     online_trials: list = field(default_factory=list)
     iter_n: int = 0
+    # Absolute wall-clock (time.time()) the fuzzing budget ends. Used to stop
+    # starting rounds in the final hour and to cap an in-flight agent so it dies
+    # at the budget end rather than running hours into the wind-down. None = no
+    # deadline enforcement (legacy behaviour).
+    deadline: float | None = None
     # --- per-trial-optimizer fields -------------------------------------
     # The single trial this optimizer owns. Set in per-trial mode; None in the
     # legacy shared-binary mode, where one optimizer served all online trials.
@@ -749,6 +766,84 @@ def _write_cumulative_diff(tree, out_path):
                        cwd=str(tree), capture_output=True, text=True)
     with open(out_path, "w") as f:
         f.write(r.stdout or "")
+
+
+def _reassert_edit_mtimes(source_tree) -> None:
+    """Make every optimizer-edited file newer than the pristine baseline tree.
+
+    A build's ``make`` regenerates a checked-in *generated* file -- re2c's
+    ``zend_language_scanner.c``, bison's ``*_parser.c``, flex/gperf output, ... --
+    whenever its *generator source* (``.l``/``.y``/...) is newer. Across rounds the
+    cumulative tree's mtimes get flattened: the original prework extraction does not
+    preserve the "generated committed after its source" ordering, and a rejected
+    round's ``git reset --hard`` rewrites files in arbitrary order. So a generated
+    file that an earlier accepted round hand-edited can end up OLDER than its
+    pristine generator source, and this round's first build silently regenerates
+    over it from the un-edited source -- discarding the fold. Observed on php-src:
+    the ``lex_scan`` scanner folds vanished between iterations, erasing the single
+    largest source of kept speedup.
+
+    Restore the one invariant that is always correct: every file that differs from
+    the pristine baseline (every file the optimizer has touched) is newer than every
+    file it has not. An edited generated file is then never regenerated over; an
+    edited generator source is still the newest of its pair, so the regeneration it
+    intends still runs. Called just before the agent's first build of each round.
+    Best-effort -- a build must never be blocked by mtime bookkeeping.
+    """
+    try:
+        g = tracked_git.git_cmd(source_tree)
+        root = subprocess.run(g + ["rev-list", "--max-parents=0", "HEAD"],
+                              cwd=str(source_tree), capture_output=True, text=True)
+        base = (root.stdout or "").split()
+        if root.returncode != 0 or not base:
+            return
+        changed = subprocess.run(g + ["diff", "--name-only", base[-1]],
+                                 cwd=str(source_tree), capture_output=True, text=True)
+        if changed.returncode != 0:
+            return
+        now = time.time()
+        root_path = Path(source_tree)
+        bumped = 0
+        for rel in (changed.stdout or "").splitlines():
+            rel = rel.strip()
+            if not rel:
+                continue
+            try:
+                os.utime(root_path / rel, (now, now))
+                bumped += 1
+            except OSError:
+                pass
+        if bumped:
+            logger.info("reasserted mtimes on %d optimizer-edited file(s) so a "
+                        "generated-file rebuild cannot wipe a fold", bumped)
+    except Exception:  # noqa: BLE001 -- never block a build on mtime bookkeeping
+        return
+
+
+def _load_target_facts(project: str) -> str | None:
+    """Static, curated, read-only per-target facts to inject into the optimizer
+    prompt.
+
+    Identical for every trial and fixed before the run -- part of the treatment
+    definition (like the skill text), never harvested back from a run, so trial
+    independence is preserved. Lets a fresh session skip re-deriving target quirks
+    that cost real build cycles every round (e.g. that ZEND_DEBUG neuters
+    zend_never_inline, or that the scanner/parser are generated). Returns None when
+    no facts file exists for this project, so general targets are unaffected.
+    """
+    path = Path(__file__).resolve().parent / "prework" / "target_facts" / f"{project}.md"
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    return (
+        "## Verified target facts (static -- do not re-derive)\n\n"
+        "These are confirmed, fixed facts about THIS target's fuzz build. They are "
+        "identical for every run and were established beforehand. Treat them as given; "
+        "do not spend build cycles rediscovering them.\n\n" + text
+    )
 
 
 def _record_ledger(ctx: RoundContext, iter_n, diff_dir, outcome, speedup):
@@ -971,11 +1066,25 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         with cpu_ledger.timed("rebuild", cores=1):
             return ctx.rebuild_fn(ctx.source_root, opt_bin_dir)
 
+    # Guard against a generated-file rebuild (re2c/bison/...) silently wiping a
+    # fold an earlier accepted round made to a checked-in generated file. Done
+    # just before the agent's first build of this round. See _reassert_edit_mtimes.
+    _reassert_edit_mtimes(ctx.source_tree)
+
+    # Inject static, curated per-target facts (if any) so a fresh session does not
+    # re-pay build cycles rediscovering this build's quirks. Read-only and identical
+    # for every trial -- part of the treatment, never harvested back. See
+    # _load_target_facts.
+    target_facts = _load_target_facts(ctx.project)
+    if target_facts:
+        logger.info("online iter %d: injected static target facts for %s",
+                    iter_n, ctx.project)
+
     try:
         build_ok = phase2_setup.optimize_and_build(
             ctx.source_tree, ctx.fuzz_target, diff_dir, project=ctx.project,
             build_fn=build_fn, codex_extra_env=env, use_wrapper_validation=True,
-            extra_prompt_directives=None)
+            extra_prompt_directives=target_facts, deadline=ctx.deadline)
     except phase2_setup.MutationAugmentationError as exc:
         logger.warning("online iter %d: mutation augmentation failed: %s", iter_n, exc)
         ctx.previous_best_bin = apply_round_outcome(
@@ -1075,6 +1184,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             "partial": (replay or {}).get("partial"),
         },
         "optimizer": phase2_setup.optimizer_provenance(),
+        "target_facts_injected": bool(target_facts),
     })
     logger.info(
         "online round %d: outcome=%s speedup=%s applied=%s built=%s "
@@ -1466,6 +1576,14 @@ def _build_afl_baseline(*, entry: dict, project_src_dir: str, baseline_bin_dir: 
     # equally legitimate to anything that globs the directory.
     shutil.rmtree(baseline_bin_dir, ignore_errors=True)
     os.makedirs(baseline_bin_dir, exist_ok=True)
+
+    # Clean BEFORE building: _extract_online_target already compiled once to
+    # produce the historical /out, leaving its build output in the tree. A
+    # build.sh that does an out-of-source `mkdir build` (mbedtls's cmake step)
+    # then aborts with "mkdir: cannot create directory 'build': File exists" on
+    # this second compile. Starting from a clean tree avoids it; the after-clean
+    # below still runs for the git-init hygiene it was added for.
+    phase2_setup._clean_build_artifacts(project_src_dir)
 
     # counts=False: this build produces the binary BOTH arms start from, before
     # any fuzzing begins. It is setup, not a cost the online arm pays and the
@@ -1863,6 +1981,21 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
 
     _stagger = int(getattr(config, "ONLINE_OPTIMIZER_STAGGER_SECS", 0) or 0)
 
+    # Optimizer budget deadline = when the fuzzing trials end. Each trial runs
+    # `-V duration` from its OWN start; use the earliest so the deadline never
+    # sits past a trial's real end. No round starts within ONLINE_ROUND_MIN_LEAD_SECS
+    # (default 1h) of it, and any in-flight agent is capped to it (see run_round ->
+    # optimize_and_build(deadline=...)), so the optimizer stops at the budget end
+    # instead of running hours into the wind-down.
+    _min_lead = float(getattr(config, "ONLINE_ROUND_MIN_LEAD_SECS", 3600) or 0)
+    _starts = [v.get("overall_start") for v in state.trials.values()
+               if v.get("overall_start")]
+    _opt_deadline = (min(_starts) if _starts else time.time()) + float(duration)
+    for _c in contexts:
+        _c.deadline = _opt_deadline
+    logger.info("optimizer budget deadline in %.1fh; no new round within %.0fm of it",
+                max(_opt_deadline - time.time(), 0.0) / 3600.0, _min_lead / 60.0)
+
     def _drive(c: RoundContext) -> int:
         tid = c.trial.trial_id if c.trial is not None else -1
         # Offset this optimizer from its siblings before its first round. See
@@ -1883,6 +2016,7 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
                                         else hot_swap(c, state, nb)),
                 convergence_k=_conv_k,
                 wait_fn=lambda: time.sleep(_interval),
+                deadline=c.deadline, min_round_lead_s=_min_lead,
                 all_terminal_fn=(
                     (lambda: state.trials.get(tid, {}).get("state") != "running")
                     if c.trial is not None else
