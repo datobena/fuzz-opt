@@ -820,6 +820,50 @@ def _reassert_edit_mtimes(source_tree) -> None:
         return
 
 
+def _carry_forward_agent_memory(online_dir: str, iter_n: int) -> bool:
+    """Seed this round's agent memory dir from the previous round of the SAME trial.
+
+    Every round runs a fresh agent container, and its ``~/.claude/projects`` is
+    mounted per-iteration -- so the notes the agent writes for itself are thrown
+    away when the round ends. That is why each round re-paid the same discoveries
+    (e.g. that ZEND_DEBUG makes ``zend_never_inline`` expand to nothing, costing two
+    ~17-minute builds), and why one trial re-tried the same regressing rewrite three
+    rounds running.
+
+    This copies the most recent previous round's memory directory into this round's,
+    so the agent inherits ITS OWN notes. Nothing from outside the run is introduced
+    and nothing crosses between trials -- each trial has its own ``online_dir`` -- so
+    trial independence is unchanged. It is the carry-forward the cumulative source
+    tree already provides, extended to the agent's notes. Carried after a rejected
+    round too: "I tried X and it regressed" is the most useful note there is.
+    """
+    cur = Path(online_dir) / f"iter_{iter_n:02d}" / "sandbox" / "transcripts"
+    for prev_n in range(iter_n - 1, -1, -1):
+        prev = Path(online_dir) / f"iter_{prev_n:02d}" / "sandbox" / "transcripts"
+        if not prev.is_dir():
+            continue
+        # The CLI names the project dir after the agent's cwd (/work/src ->
+        # "-work-src"); glob rather than hardcode it.
+        srcs = [p for p in prev.glob("*/memory")
+                if p.is_dir() and any(p.iterdir())]
+        if not srcs:
+            continue
+        carried = False
+        for src in srcs:
+            try:
+                dest = cur / src.parent.name / "memory"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src, dest, dirs_exist_ok=True)
+                carried = True
+            except OSError as e:
+                logger.warning("could not carry agent memory forward: %s", e)
+        if carried:
+            logger.info("carried agent memory forward from iter_%02d to iter_%02d",
+                        prev_n, iter_n)
+        return carried
+    return False
+
+
 def _record_ledger(ctx: RoundContext, iter_n, diff_dir, outcome, speedup):
     diff_path = os.path.join(diff_dir, "optimization.diff")
     diff_text = ""
@@ -1045,6 +1089,11 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     # just before the agent's first build of this round. See _reassert_edit_mtimes.
     _reassert_edit_mtimes(ctx.source_tree)
 
+    # Let this trial's agent inherit its OWN notes from the previous round, instead
+    # of re-deriving them on a fresh container every time. See
+    # _carry_forward_agent_memory.
+    carried_memory = _carry_forward_agent_memory(ctx.online_dir, iter_n)
+
     try:
         build_ok = phase2_setup.optimize_and_build(
             ctx.source_tree, ctx.fuzz_target, diff_dir, project=ctx.project,
@@ -1149,6 +1198,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             "partial": (replay or {}).get("partial"),
         },
         "optimizer": phase2_setup.optimizer_provenance(),
+        "agent_memory_carried": carried_memory,
     })
     logger.info(
         "online round %d: outcome=%s speedup=%s applied=%s built=%s "
