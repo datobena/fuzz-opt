@@ -820,32 +820,6 @@ def _reassert_edit_mtimes(source_tree) -> None:
         return
 
 
-def _load_target_facts(project: str) -> str | None:
-    """Static, curated, read-only per-target facts to inject into the optimizer
-    prompt.
-
-    Identical for every trial and fixed before the run -- part of the treatment
-    definition (like the skill text), never harvested back from a run, so trial
-    independence is preserved. Lets a fresh session skip re-deriving target quirks
-    that cost real build cycles every round (e.g. that ZEND_DEBUG neuters
-    zend_never_inline, or that the scanner/parser are generated). Returns None when
-    no facts file exists for this project, so general targets are unaffected.
-    """
-    path = Path(__file__).resolve().parent / "prework" / "target_facts" / f"{project}.md"
-    try:
-        text = path.read_text().strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    return (
-        "## Verified target facts (static -- do not re-derive)\n\n"
-        "These are confirmed, fixed facts about THIS target's fuzz build. They are "
-        "identical for every run and were established beforehand. Treat them as given; "
-        "do not spend build cycles rediscovering them.\n\n" + text
-    )
-
-
 def _record_ledger(ctx: RoundContext, iter_n, diff_dir, outcome, speedup):
     diff_path = os.path.join(diff_dir, "optimization.diff")
     diff_text = ""
@@ -1071,20 +1045,11 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     # just before the agent's first build of this round. See _reassert_edit_mtimes.
     _reassert_edit_mtimes(ctx.source_tree)
 
-    # Inject static, curated per-target facts (if any) so a fresh session does not
-    # re-pay build cycles rediscovering this build's quirks. Read-only and identical
-    # for every trial -- part of the treatment, never harvested back. See
-    # _load_target_facts.
-    target_facts = _load_target_facts(ctx.project)
-    if target_facts:
-        logger.info("online iter %d: injected static target facts for %s",
-                    iter_n, ctx.project)
-
     try:
         build_ok = phase2_setup.optimize_and_build(
             ctx.source_tree, ctx.fuzz_target, diff_dir, project=ctx.project,
             build_fn=build_fn, codex_extra_env=env, use_wrapper_validation=True,
-            extra_prompt_directives=target_facts, deadline=ctx.deadline)
+            extra_prompt_directives=None, deadline=ctx.deadline)
     except phase2_setup.MutationAugmentationError as exc:
         logger.warning("online iter %d: mutation augmentation failed: %s", iter_n, exc)
         ctx.previous_best_bin = apply_round_outcome(
@@ -1184,7 +1149,6 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             "partial": (replay or {}).get("partial"),
         },
         "optimizer": phase2_setup.optimizer_provenance(),
-        "target_facts_injected": bool(target_facts),
     })
     logger.info(
         "online round %d: outcome=%s speedup=%s applied=%s built=%s "
