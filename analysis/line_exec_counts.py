@@ -51,6 +51,19 @@ logger = logging.getLogger("line_exec_counts")
 RESULTS = Path(os.environ.get("BENCH_RESULTS", "/home/sefcom/fuzz-opt/results"))
 # The coverage build and merged profiles are cached between runs; the build is a
 # full project compile, so never redo one silently.
+# Hard per-container memory cap. WITHOUT THIS, `llvm-cov export` on a large
+# target escalates into a HOST-WIDE OOM: on php-src it reached 166 GB RSS
+# against 250 GB of RAM, and because the container had no limit the kernel
+# chose victims across the whole machine (constraint=CONSTRAINT_NONE,
+# global_oom) and took the server down on 2026-10-08. With a cap the same
+# process dies alone inside its own cgroup, _run sees rc=137, and the trial is
+# reported as failed -- which is the correct outcome for a measurement that
+# cannot be made on this host, instead of a reboot.
+#
+# Keep jobs * CONTAINER_MEM comfortably under total RAM: the replay itself,
+# docker, and anything else on the box all need room outside this budget.
+CONTAINER_MEM = os.environ.get("LINE_COV_CONTAINER_MEM", "48g")
+
 CACHE = Path(os.environ.get("LINE_COV_CACHE", "/home/sefcom/fuzz-opt/.linecov"))
 
 
@@ -168,7 +181,8 @@ def coverage_build(image: str, out: Path, cpu: str, timeout: int = 5400) -> None
     the common instrument every arm is measured on.
     """
     out.mkdir(parents=True, exist_ok=True)
-    cmd = ["docker", "run", "--rm", "--privileged", "--ulimit", "core=0"]
+    cmd = ["docker", "run", "--rm", "--privileged", "--ulimit", "core=0",
+           "--memory", CONTAINER_MEM, "--memory-swap", CONTAINER_MEM]
     if cpu:
         cmd += ["--cpuset-cpus", cpu]
     cmd += [
@@ -197,7 +211,8 @@ def replay_for_profile(image: str, out: Path, queue: Path, prof: Path,
     prof.mkdir(parents=True, exist_ok=True)
     for stale in prof.glob("*.profraw"):
         stale.unlink()
-    cmd = ["docker", "run", "--rm", "--privileged", "--ulimit", "core=0"]
+    cmd = ["docker", "run", "--rm", "--privileged", "--ulimit", "core=0",
+           "--memory", CONTAINER_MEM, "--memory-swap", CONTAINER_MEM]
     if cpu:
         cmd += ["--cpuset-cpus", cpu]
     cmd += [
@@ -251,6 +266,8 @@ def export_line_counts(image: str, out: Path, prof: Path, target: str,
         "> /prof/cov.json"
     )
     cmd = ["docker", "run", "--rm",
+           # The one that took the host down; see CONTAINER_MEM.
+           "--memory", CONTAINER_MEM, "--memory-swap", CONTAINER_MEM,
            "-v", f"{out.resolve()}:/out:ro",
            "-v", f"{prof.resolve()}:/prof",
            "--entrypoint", "/bin/bash", image, "-lc", script]
@@ -543,6 +560,7 @@ $('only').onchange=draw;$('diffonly').onchange=draw;nav();draw();
 
 
 def main() -> int:
+    global CONTAINER_MEM
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--experiment", required=True)
@@ -551,6 +569,10 @@ def main() -> int:
     ap.add_argument("--arms", default="baseline,optimized")
     ap.add_argument("--trials", default="", help="comma list, e.g. 0,1,2 (default: all)")
     ap.add_argument("--jobs", type=int, default=2, help="concurrent replays")
+    ap.add_argument("--container-memory", default=CONTAINER_MEM,
+                    help="hard per-container memory cap (docker --memory). "
+                         "jobs * this must stay well under host RAM; an "
+                         "uncapped llvm-cov export took this host down.")
     ap.add_argument("--cpus", default="", help="cpuset for each container, e.g. 20-29")
     ap.add_argument("--chunk", type=int, default=400,
                     help="queue files per replay process; smaller confines "
@@ -562,6 +584,7 @@ def main() -> int:
     ap.add_argument("--html-max-files", type=int, default=60)
     ap.add_argument("--out", default="", help="report dir (default: <results>/<exp>/line_counts)")
     args = ap.parse_args()
+    CONTAINER_MEM = args.container_memory
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     info = discover(args.experiment)

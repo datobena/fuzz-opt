@@ -11,8 +11,19 @@
 # So: poll until no run_benchmark.py is alive, then work. The guard is "no
 # campaign at all", not "not harfbuzz", because campaigns here are launched
 # back to back and a successor deserves the same protection.
+# DISARMED BY DEFAULT. On 2026-10-08 this script was left running unattended,
+# reached php-src, and an uncapped `llvm-cov export` grew to 166 GB RSS against
+# 250 GB of RAM. The container had no memory limit, so the kernel OOM-killed
+# across the whole machine (global_oom) and the host went down. line_exec_counts
+# now caps every container, but nothing here runs on its own again: export
+# HEATMAPS_ARMED=1 to use it, and watch it.
 set -u
 cd "$(dirname "$0")/../.."
+
+if [ "${HEATMAPS_ARMED:-0}" != "1" ]; then
+  echo "refusing to run unattended: set HEATMAPS_ARMED=1 if you mean it" >&2
+  exit 3
+fi
 
 EXPS=${EXPS:-"online-24h-bug-libxml2 online-24h-bug-mbedtls online-24h-bug-php-src"}
 LOG=.pending_heatmaps.log
@@ -26,7 +37,8 @@ echo "[$(date -u +%FT%TZ)] host idle, starting" >> "$LOG"
 
 for exp in $EXPS; do
   echo "[$(date -u +%FT%TZ)] $exp: line_exec_counts" >> "$LOG"
-  if ! nice -n 10 python3 analysis/line_exec_counts.py --experiment "$exp" >> "$LOG" 2>&1; then
+  if ! nice -n 10 python3 analysis/line_exec_counts.py --experiment "$exp" \
+       --jobs "${JOBS:-2}" --container-memory "${CONTAINER_MEM:-48g}" >> "$LOG" 2>&1; then
     echo "[$(date -u +%FT%TZ)] $exp: line_exec_counts FAILED, skipping heatmap" >> "$LOG"
     continue
   fi
