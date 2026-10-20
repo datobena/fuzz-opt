@@ -39,7 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 from lib import cpu_ledger
 from lib.core_lock import core_lock
-from prework.prework_build import restore_ownership
+from prework.fuzzbench_image import fuzzbench_build_command, is_fuzzbench_image
+from prework.prework_build import arvo_compile_args, restore_ownership
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +75,21 @@ class BrokerContext:
     # memory-bandwidth / thermal from neighbour cores) that a stale once-per-round
     # anchor cannot. Empty -> disabled, falls back to a plain single-binary replay.
     baseline_ref_dir: str = ""
+    # FuzzBench targets on the ccache verified list: THIS trial's own ccache (main +
+    # cmplog builds) (prework/fb_ccache.py). Empty -> uncached, the command is unchanged.
+    ccache_dir: str = ""
     # Online rounds: the sample of the round's crash-filtered mutations that
     # `smoke` runs the candidate on. Empty -> the legacy empty-input smoke.
     smoke_corpus_dir: str = ""
+    # CPU-ledger identity of the optimizer this session serves: the round's
+    # trial_id and iter, snapshotted by the session from the round's thread
+    # (cpu_ledger.current_tags). serve() runs on a thread of its own, which never
+    # sees the round thread's tags, so without these every broker row -- most of
+    # a campaign's CPU -- was written with no trial_id and whatever iter the
+    # last optimizer to start a round had left in the process environment.
+    # None -> fall back to this thread's/the environment's tags (legacy).
+    ledger_trial_id: int | None = None
+    ledger_iter: int | None = None
     # Runtime state (not agent-chosen): set true once the reference is captured, and
     # the reference's own replay time at that first measurement (the normalisation
     # anchor). One BrokerContext per session, so these persist across requests.
@@ -96,17 +109,45 @@ def _audit(ctx: BrokerContext, op: str, blob: str) -> None:
 
 
 def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
+    # A timeout kills only the `docker run` CLIENT; the container keeps running.
+    # On php a timed-out build went on compiling for hours on the optimizer's core,
+    # after core_lock was released, so later replays were timed on a busy core and
+    # the next build ran slower and timed out too. Name the container so a timeout
+    # can kill it.
+    name = None
+    if cmd[:2] == ["docker", "run"]:
+        name = f"broker-{os.getpid()}-{time.time_ns()}"
+        cmd = cmd[:2] + ["--name", name] + cmd[2:]
     try:
         r = subprocess.run(
             cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
         )
     except subprocess.TimeoutExpired:
+        if name:
+            try:
+                subprocess.run(["docker", "rm", "-f", name], capture_output=True,
+                               timeout=120)
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning("could not kill timed-out container %s: %s", name, e)
         return 124, "timeout"
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
 def _build_command(ctx: BrokerContext) -> list[str]:
-    """OSS-Fuzz `compile` with the agent's current source bind-mounted over $SRC."""
+    """OSS-Fuzz `compile` with the agent's current source bind-mounted over $SRC.
+
+    A FuzzBench-parity image (fb-aflpp/..., the only thing the broker knows about
+    the target) instead gets FuzzBench's own aflplusplus build with the tree copied
+    in from a read-only mount (prework/fuzzbench_image.fuzzbench_build_command).
+    """
+    if is_fuzzbench_image(ctx.image):
+        return fuzzbench_build_command(
+            image=ctx.image, source_dir=ctx.source_dir, out_dir=ctx.out_dir,
+            cpu=ctx.cpu,
+            # No core dumps, same reason as below.
+            extra_docker_args=["--ulimit", "core=0"],
+            ccache_dir=ctx.ccache_dir or None,
+        )
     return [
         "docker", "run", "--rm", "--privileged",
         "--cpuset-cpus", str(ctx.cpu),
@@ -114,31 +155,14 @@ def _build_command(ctx: BrokerContext) -> list[str]:
         # smoke/replay that crashes would otherwise dump its image
         # synchronously. See phase3_runner for the full reasoning.
         "--ulimit", "core=0",
-        "-e", "FUZZING_ENGINE=afl",
-        # FuzzBench build.sh scripts read $FUZZER_LIB (OSS-Fuzz exposes it as
-        # $LIB_FUZZING_ENGINE = /usr/lib/libFuzzingEngine.a for afl). Harmless for
-        # ARVO targets, which don't reference it.
-        "-e", "FUZZER_LIB=/usr/lib/libFuzzingEngine.a",
-        "-e", "FUZZER=afl",
-        # Exclude the optimizer's INSERTED helpers from coverage instrumentation.
-        # A coverage-guided fuzzer biases mutation toward inputs that reach new
-        # edges, so helpers the skill adds shift the gradient away from the code
-        # under test -- the skill records a ~5x time-to-bug swing from exactly
-        # this. Its prescribed `no_sanitize("coverage")` is libFuzzer's mechanism
-        # and does NOT work here: AFL++ 5.02c runs LLVM-PCGUARD, its own fork of
-        # the sancov pass, and instruments a marked helper identically to an
-        # unmarked one (verified by counting __afl_area_ptr relocations). The
-        # denylist is the mechanism that does work, which is why the skill
-        # requires every inserted function to be named fold_*.
-        "-e", "AFL_LLVM_DENYLIST=/src/aflpp_fold_denylist.txt",
-        "-e", "SANITIZER=address",
-        "-e", "ARCHITECTURE=x86_64",
-        "-e", "FUZZING_LANGUAGE=c++",
-        "-v", f"{Path(__file__).resolve().parent.parent / 'prework' / 'aflpp_fold_denylist.txt'}"
-              f":/src/aflpp_fold_denylist.txt:ro",
-        "-v", f"{Path(ctx.source_dir).absolute()}:/src/{ctx.project}",
-        "-v", f"{Path(ctx.out_dir).absolute()}:/out",
-        ctx.image, "compile",
+        # The -O override, compile env, fold denylist and mounts: the SAME list
+        # the harness rebuilds (baseline, noise floor, round rebuild) use, so the
+        # build the agent times is compiled exactly like the one the gate
+        # measures and the trials run. Hand-copied here before, it silently
+        # dropped BUILD_OPT_LEVEL: the agent optimised -O1 builds while -O3 builds
+        # were gated and deployed.
+        *arvo_compile_args(image=ctx.image, source_dir=ctx.source_dir,
+                           out_dir=ctx.out_dir, project=ctx.project),
     ]
 
 
@@ -170,10 +194,13 @@ def _replay_command(ctx: BrokerContext, out_dir: str | None = None) -> list[str]
         # fold can reduce, which dilutes every speedup ratio and adds variance
         # (its cost scales with how many reports fire). Execution is unchanged:
         # same code runs, same bugs detected, reports just carry raw addresses.
-        # Must stay identical to the profiler's env (replay_fuzzer_profile.py) or
-        # the hotspot ranking and this gate describe different workloads.
-        "ASAN_OPTIONS=detect_leaks=0:symbolize=0 "
-        "UBSAN_OPTIONS=symbolize=0 MSAN_OPTIONS=symbolize=0; "
+        # The rest is the fuzzer's own sanitizer set, leak checking included
+        # (config.REPLAY_ASAN_OPTIONS), so the gate executes what the fuzzer
+        # executes. Must stay identical to the profiler's env
+        # (replay_fuzzer_profile.py) or the hotspot ranking and this gate
+        # describe different workloads.
+        f"ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
+        f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS} MSAN_OPTIONS=symbolize=0; "
         # -C (collect-coverage) is REQUIRED with -i <dir>. Without it afl-showmap
         # treats -o as a DIRECTORY to write one bitmap per input into, so
         # `-o /dev/null` aborts instantly with
@@ -183,14 +210,33 @@ def _replay_command(ctx: BrokerContext, out_dir: str | None = None) -> list[str]
         # on execution time. With -C the whole corpus is replayed and -o is a
         # single file, so /dev/null is valid and no per-input I/O pollutes the
         # timing.
+        f"{_map_size_prefix(ctx)}"
         f"/out/afl-showmap -C -i /corpus -o /dev/null -t 5000+ -m none -- "
         f"/out/{ctx.fuzz_target}",
     ]
 
 
+def _map_size_prefix(ctx: BrokerContext) -> str:
+    """Export the target's own map size before afl-showmap, FuzzBench images only.
+
+    AFL++ 4.21a's afl-showmap aborts with "AFL_MAP_SIZE is not set and fuzzing
+    target reports that the required size is very large" when the target's map
+    exceeds the default (bloaty, curl, systemd, proj4, php: 70k-161k edges), so
+    every gate replay on those targets failed. afl-fuzz sizes the map itself.
+    ARVO images (AFL++ v5.02c) keep their command unchanged.
+    """
+    if not is_fuzzbench_image(ctx.image):
+        return ""
+    return (f"m=$(AFL_DUMP_MAP_SIZE=1 /out/{ctx.fuzz_target} 2>/dev/null); "
+            f'case "$m" in ""|*[!0-9]*) ;; *) export AFL_MAP_SIZE=$m;; esac; ')
+
+
 def _run_build(ctx: BrokerContext) -> tuple[bool, str]:
     # Serialize against any replay/smoke on this optimizer's core (incl. the
     # harness-side rebuild in another process): never measure a core mid-build.
+    if ctx.ccache_dir and is_fuzzbench_image(ctx.image):
+        # Created here, not by docker (which would create it root-owned).
+        os.makedirs(ctx.ccache_dir, exist_ok=True)
     with core_lock(ctx.cpu):
         rc, blob = _run(_build_command(ctx), BUILD_TIMEOUT_SECS)
     _audit(ctx, "build", blob)
@@ -198,7 +244,8 @@ def _run_build(ctx: BrokerContext) -> tuple[bool, str]:
     # in the tree the AGENT (uid 1000) is editing and the orchestrator later has to
     # `git clean` when a round is rejected. Restored on failure too: a build that
     # died halfway leaves exactly the artifacts that have to be cleanable.
-    restore_ownership(ctx.image, [ctx.source_dir, ctx.out_dir])
+    restore_ownership(ctx.image, [ctx.source_dir, ctx.out_dir]
+                      + ([ctx.ccache_dir] if ctx.ccache_dir else []))
     if rc == 0:
         _capture_reference(ctx)
     return rc == 0, blob
@@ -251,6 +298,7 @@ def _crash_scan_command(ctx: BrokerContext, out_dir: str, corpus_dir: str) -> li
         "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 AFL_CMIN_CRASHES_ONLY=1 "
         f"ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
         f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS} MSAN_OPTIONS=symbolize=0; "
+        f"{_map_size_prefix(ctx)}"
         f"/out/afl-showmap -q -Z -i /corpus -o /maps -t 5000+ -m none -- "
         f"/out/{ctx.fuzz_target} >/dev/null 2>/tmp/showmap.err; rc=$?; "
         "tail -c 2000 /tmp/showmap.err; "
@@ -373,7 +421,8 @@ def _run_smoke(ctx: BrokerContext) -> tuple[bool, str]:
         "--ulimit", "core=0",
         "-v", f"{Path(ctx.out_dir).absolute()}:/out:ro",
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
-        f"export ASAN_OPTIONS=detect_leaks=0; printf '' > /tmp/e; "
+        f"export ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
+        f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS}; printf '' > /tmp/e; "
         f"timeout 120 /out/{ctx.fuzz_target} /tmp/e",
     ]
     with core_lock(ctx.cpu):
@@ -471,6 +520,13 @@ def _tail(blob: str) -> str:
             + blob[-LOG_TAIL_CHARS:])
 
 
+def _ledger_tags(ctx: BrokerContext) -> dict:
+    """Ledger tags for one broker row: the served optimizer's trial and round,
+    plus the core the op ran on (every op is pinned to ctx.cpu)."""
+    return {"trial_id": ctx.ledger_trial_id, "iter_n": ctx.ledger_iter,
+            "cpus": str(ctx.cpu)}
+
+
 def handle_request(req, ctx: BrokerContext) -> dict:
     """Dispatch one request. Never raises -- a broker crash would kill the round.
 
@@ -487,13 +543,13 @@ def handle_request(req, ctx: BrokerContext) -> dict:
         return {"ok": False, "error": "missing or malformed op"}
 
     if op == "build":
-        with cpu_ledger.timed("broker_build", cores=1) as info:
+        with cpu_ledger.timed("broker_build", cores=1, **_ledger_tags(ctx)) as info:
             ok, blob = _run_build(ctx)
             info["ok"] = ok
         return {"ok": ok, "log": _tail(blob)}
 
     if op == "smoke":
-        with cpu_ledger.timed("broker_smoke", cores=1) as info:
+        with cpu_ledger.timed("broker_smoke", cores=1, **_ledger_tags(ctx)) as info:
             ok, blob = _run_smoke(ctx)
             info["ok"] = ok
         return {"ok": ok, "log": _tail(blob)}
@@ -503,7 +559,7 @@ def handle_request(req, ctx: BrokerContext) -> dict:
         if isinstance(raw, bool) or not isinstance(raw, int):
             return {"ok": False, "error": "repeats must be an integer"}
         repeats = max(1, min(raw, MAX_REPLAY_REPEATS))
-        with cpu_ledger.timed("broker_replay", cores=1) as info:
+        with cpu_ledger.timed("broker_replay", cores=1, **_ledger_tags(ctx)) as info:
             result = _run_replay(ctx, repeats)
             info["repeats"] = repeats
         if result is None:

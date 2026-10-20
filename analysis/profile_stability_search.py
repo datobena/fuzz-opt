@@ -101,6 +101,10 @@ def parse_flat(flat_text: str, fuzz_target: str, *, project_only: bool) -> dict[
 def _replay_loop(fuzz_target: str, min_sec: int) -> str:
     """The afl-showmap replay loop, run under perf until min_sec of samples."""
     return (
+        # Same AFL_MAP_SIZE export as the broker gate: afl-showmap aborts on
+        # large-map targets (FuzzBench bloaty/curl/php/...) without it.
+        f"m=$(AFL_DUMP_MAP_SIZE=1 /out/{fuzz_target} 2>/dev/null); "
+        'case "$m" in ""|*[!0-9]*) ;; *) export AFL_MAP_SIZE=$m;; esac; '
         f"end=$(( $(date +%s) + {int(min_sec)} )); "
         'while [ "$(date +%s)" -lt "$end" ]; do '
         f"/out/afl-showmap -C -i /corpus -o /dev/null -t 5000+ -m none "

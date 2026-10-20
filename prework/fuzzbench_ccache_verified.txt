@@ -1,0 +1,37 @@
+# FuzzBench targets whose rebuilds may use ccache (main AND cmplog build): one fuzzbench_dir per line,
+# optionally followed by its equivalence verdict: `pass` (default) or `pass_noise_masked`.
+# Add a target ONLY after tools/fb_ccache_equivalence.py passed for it (skill
+# fuzzbench-parity-ccache, section 5). Read by prework/fb_ccache.py (host) and by
+# prework/fb_build.sh (container, mounted at /fold/ccache_verified.txt).
+#
+# Oct 13 2026, round 3 (both halves cached): every pair identical in main, cmplog and dict set.
+# pass_noise_masked targets embed build dates/hostnames; campaign setup runs one extra uncached
+# build for them to learn that noise. Not listed: stb (one compile+link call), woff2 (upstream
+# dictionary.o race makes even uncached builds differ).
+bloaty_fuzz_target pass
+bloaty_fuzz_target_52948c pass
+curl_curl_fuzzer_http pass_noise_masked
+freetype2_ftfuzzer pass
+harfbuzz_hb-shape-fuzzer pass
+harfbuzz_hb-shape-fuzzer_17863b pass
+jsoncpp_jsoncpp_fuzzer pass
+lcms_cms_transform_fuzzer pass
+libjpeg-turbo_libjpeg_turbo_fuzzer pass
+libpcap_fuzz_both pass
+libpng_libpng_read_fuzzer pass
+libxml2_xml pass
+libxml2_xml_e85b9b pass
+libxslt_xpath pass
+mbedtls_fuzz_dtlsclient pass
+mbedtls_fuzz_dtlsclient_7c6b0e pass
+mruby_mruby_fuzzer_8c8bbd pass
+openh264_decoder_fuzzer pass
+openssl_x509 pass
+openthread_ot-ip6-send-fuzzer pass_noise_masked
+php_php-fuzz-parser_0dbedb pass_noise_masked
+proj4_proj_crs_to_crs_fuzzer pass
+re2_fuzzer pass
+sqlite3_ossfuzz pass
+systemd_fuzz-link-parser pass
+vorbis_decode_fuzzer pass
+zlib_zlib_uncompress_fuzzer pass

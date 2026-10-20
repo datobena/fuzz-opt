@@ -45,7 +45,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import config
 import phase2_setup
 import phase3_online
-from lib import docker_util, tracked_git
+from lib import afl_launch, docker_util, tracked_git
 from prework.prework_build import prework_image_for
 
 
@@ -71,20 +71,27 @@ def smoke(entry, exp_dir, fuzz_target, cpu, secs) -> dict:
     name = f"preflight_{entry['project']}_{int(time.time())}"
     # Mirror phase3_runner.start_trial's invocation: --user so the output tree is
     # owned by the host user (without it afl_out is root-owned and unreadable),
-    # HOME=/tmp because a pinned uid has no passwd entry, /out read-only, and the
-    # same ASAN_OPTIONS the trials use.
+    # HOME=/tmp because a pinned uid has no passwd entry, /out read-only. The
+    # afl-fuzz argv/env/cwd come from the same builder the trials use
+    # (lib/afl_launch), so a FuzzBench smoke runs FuzzBench's launch.
+    try:
+        launch = afl_launch.build_afl_launch(
+            entry=entry, host_bin_dir=str(bin_dir), fuzz_target=fuzz_target,
+            input_dir="/corpus", output_dir="/afl_out", duration=secs,
+            seed=None, autoresume=True, arvo_order=afl_launch.ARVO_ORDER_PREFLIGHT)
+    except ValueError as e:
+        return {"ok": False, "execs_done": 0, "run_time_s": 0, "execs_per_sec": 0.0,
+                "corpus": 0, "crashes": 0, "crashes_per_min": 0.0,
+                "stderr_tail": f"launch: {e}"}
     cmd = ["docker", "run", "--rm", "--name", name, "--privileged",
            "--cpuset-cpus", str(cpu), "--ulimit", "core=0",
            "--user", f"{os.getuid()}:{os.getgid()}",
            "-v", f"{bin_dir}:/out:ro", "-v", f"{seeds}:/corpus", "-v", f"{out}:/afl_out",
            "-e", "HOME=/tmp",
-           "-e", "AFL_NO_AFFINITY=1", "-e", "AFL_SKIP_CPUFREQ=1",
-           "-e", "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1",
-           "-e", "AFL_AUTORESUME=1",
-           "-e", "ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:symbolize=0",
+           *launch.docker_env_args(),
+           *launch.docker_workdir_args(),
            prework_image_for(entry),
-           "/out/afl-fuzz", "-i", "/corpus", "-o", "/afl_out", "-V", str(secs),
-           "-m", "none", "-t", "5000+", "--", f"/out/{fuzz_target}"]
+           *launch.argv]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=secs + 300)
     d = out / "default"
     stats = {}
@@ -105,7 +112,8 @@ def smoke(entry, exp_dir, fuzz_target, cpu, secs) -> dict:
             "stderr_tail": (r.stderr or "")[-400:] if execs == 0 else ""}
 
 
-def preflight(project: str, cpu: int, smoke_secs: int, keep: bool) -> dict:
+def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
+              build_cpus: str | None = None) -> dict:
     entry = _entry(project)
     fuzz_target = entry["fuzz_target"]
     exp_id = f"preflight-{project}"
@@ -135,15 +143,22 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool) -> dict:
 
         t = time.time()
         crashed, poc_path, issue, source_root = phase3_online._extract_online_target(
-            entry, src_root, bin_dir, poc_dir, fuzz_target, project)
+            entry, src_root, bin_dir, poc_dir, fuzz_target, project, cpu=cpu,
+            setup_cpus=build_cpus or cpu)
         if not stage("extract", bool(source_root), secs=round(time.time() - t)):
             return res
-        stage("poc", bool(crashed), reproduces_on_historical=bool(crashed))
+        if afl_launch.is_fuzzbench(entry):
+            # FuzzBench benchmarks ship no PoC: the fuzzer has to find the bug.
+            # run_online skips its PoC gate for them too.
+            stage("poc", True, skipped="fuzzbench: no PoC")
+        else:
+            stage("poc", bool(crashed), reproduces_on_historical=bool(crashed))
 
         sub = Path(source_root)
         stage("source", phase3_online._src_subtree_has_files(sub), root=str(sub))
 
-        n = phase3_online._stage_online_seed_corpus(exp_dir, bin_dir, fuzz_target)
+        n = phase3_online._stage_online_seed_corpus(exp_dir, bin_dir, fuzz_target,
+                                                     entry=entry)
         # A 1-byte fallback seed is legitimate (see _stage_online_seed_corpus:
         # only wolfssl/selinux ship a corpus zip). What is fatal is an EMPTY
         # directory -- AFL aborts at startup on an empty -i. So check the dir,
@@ -163,11 +178,18 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool) -> dict:
         stage("stripvcs", True)
 
         t = time.time()
-        built = phase3_online._build_afl_baseline(
-            entry=entry, project_src_dir=project_src_dir, baseline_bin_dir=bin_dir,
-            fuzz_target=fuzz_target, poc_path=poc_path, profile_cpu=cpu)
-        if not stage("aflbuild", built, secs=round(time.time() - t)):
-            return res
+        if afl_launch.is_fuzzbench(entry):
+            # Like run_online: the extract stage already built the AFL++ baseline.
+            built = (Path(bin_dir) / fuzz_target).is_file()
+            if not stage("aflbuild", built, skipped="fuzzbench: built at extract"):
+                return res
+        else:
+            built = phase3_online._build_afl_baseline(
+                entry=entry, project_src_dir=project_src_dir, baseline_bin_dir=bin_dir,
+                fuzz_target=fuzz_target, poc_path=poc_path, profile_cpu=cpu,
+                setup_cpus=build_cpus or cpu)
+            if not stage("aflbuild", built, secs=round(time.time() - t)):
+                return res
 
         s = smoke(entry, exp_dir, fuzz_target, cpu, smoke_secs)
         stage("smoke", s.pop("ok"), **s)
@@ -188,12 +210,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--project", required=True)
-    ap.add_argument("--cpu", type=int, default=3, help="core to pin builds/smoke to")
+    ap.add_argument("--cpu", type=int, default=3,
+                    help="core for the PoC check and the smoke (and builds without --build-cpus)")
+    # Same default as run_online_pertrial.sh's SETUP_BUILD_CPUS: like campaign setup,
+    # preflight builds run before any trial, so they may use every physical core.
+    ap.add_argument("--build-cpus", default="2-39",
+                    help="cpuset for the setup builds ('' = --cpu only)")
     ap.add_argument("--smoke-secs", type=int, default=120)
     ap.add_argument("--keep", action="store_true", help="keep the smoke afl_out")
     a = ap.parse_args()
-    print(f"=== preflight {a.project} (cpu {a.cpu}, smoke {a.smoke_secs}s) ===", flush=True)
-    return 0 if preflight(a.project, a.cpu, a.smoke_secs, a.keep)["ok"] else 1
+    print(f"=== preflight {a.project} (cpu {a.cpu}, builds on {a.build_cpus or a.cpu}, "
+          f"smoke {a.smoke_secs}s) ===", flush=True)
+    return 0 if preflight(a.project, a.cpu, a.smoke_secs, a.keep,
+                          build_cpus=a.build_cpus or None)["ok"] else 1
 
 
 if __name__ == "__main__":

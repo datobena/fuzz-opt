@@ -1,0 +1,7 @@
+ub.c:8:12: runtime error: signed integer overflow: 2147483646 + 6 cannot be represented in type 'int'
+    #0 0x4d8529 in add_lengths /w/ub.c:8:12
+    #1 0x4d877b in main /w/ub.c:28:20
+    #2 0x7f4867682082 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x24082) (BuildId: 1878e6b475720c7c51969e69ab2d276fae6d1dee)
+    #3 0x41c30d in _start (/w/ub+0x41c30d)
+
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior ub.c:8:12 in 

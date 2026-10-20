@@ -98,7 +98,7 @@ def _flag(cmd: list, flag: str):
 def recover_trial(exp_id, cve_key, variant, trial_id, configured_duration,
                   swap_count, force=False, dry_run=False) -> dict:
     trial_name = f"{cve_key}-{variant}-trial_{trial_id:02d}"
-    container = f"bench_{trial_name}"
+    import phase3_runner
     base = os.path.join(
         config.RESULTS_DIR, exp_id, cve_key, variant, f"trial_{trial_id:02d}",
     )
@@ -115,7 +115,21 @@ def recover_trial(exp_id, cve_key, variant, trial_id, configured_duration,
     if os.path.exists(paths["metadata"]) and not force:
         return {"trial": trial_name, "status": "already-harvested"}
 
+    # Containers are named per experiment (phase3_runner.trial_container_name),
+    # so two campaigns on one project cannot `docker rm -f` each other's trials.
+    # Campaigns launched before that change used the bare bench_<trial> name,
+    # which any campaign on the same project shared -- so a legacy-named
+    # container is only taken if it really mounted THIS experiment's afl_out.
+    container = phase3_runner.trial_container_name(exp_id, trial_name)
     info = inspect_container(container)
+    if not info:
+        container = phase3_runner.trial_container_name("", trial_name)
+        info = inspect_container(container)
+        sources = {os.path.realpath(m.get("Source", ""))
+                   for m in (info.get("Mounts") or [])}
+        if info and os.path.realpath(paths["afl_out"]) not in sources:
+            return {"trial": trial_name, "status": "container-is-another-experiments",
+                    "container": container}
     if not info:
         return {"trial": trial_name, "status": "container-gone"}
 

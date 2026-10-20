@@ -19,7 +19,7 @@
  * Lifecycle (sample continuously -> dump on request -> resume):
  *   Mutations accumulate IN MEMORY across the whole inter-round window. The
  *   orchestrator asks for a batch by creating .dump_now; the shim notices on a
- *   cheap periodic check, writes the batch, and resumes sampling immediately.
+ *   once-a-second check, writes the batch, and resumes sampling immediately.
  *
  *   Sampling must span the WINDOW, not stop when the buffer first fills. At
  *   ~7k exec/s a 20k buffer fills in ~3 seconds, so dumping on full would make
@@ -34,7 +34,7 @@
  *   MUTATION_DUMP_DIR        output directory (unset -> capture disabled)
  *   MUTATION_DUMP_CAP        mutations per batch (default 20000)
  *   MUTATION_DUMP_MODE       reservoir (default) | prefix
- *   MUTATION_DUMP_MAX_BYTES  memory ceiling for the batch (default 512 MiB)
+ *   MUTATION_DUMP_MAX_BYTES  memory ceiling for the held sample (default 512 MiB)
  *   MUTATION_DUMP_EVERY      pre-filter: consider 1 of every N (default 1)
  *   MUTATION_DUMP_SEED       PRNG seed, so a capture is reproducible
  */
@@ -43,14 +43,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MODE_RESERVOIR 0
 #define MODE_PREFIX 1
 
-/* How often, in calls, an idle shim checks whether it has been re-armed. Cheap
- * enough to vanish into noise, frequent enough to catch a round boundary. */
-#define REARM_CHECK_INTERVAL 4096
+/* How often, in wall-clock ms, the shim checks for a dump request. Time-based,
+ * not call-based: a fixed call count (it was 4096) took over a minute to notice
+ * a request on a ~60 exec/s target (sanitizer + leak-check builds) and would
+ * miss the orchestrator's dump deadline below ~14 exec/s. The clock read is
+ * CLOCK_MONOTONIC_COARSE (vDSO, a few ns), negligible next to an execution. */
+#define REQUEST_CHECK_MS 1000
 
 typedef struct {
     uint8_t *data;
@@ -72,8 +76,9 @@ typedef struct {
 
     unsigned long produced;   /* every call */
     unsigned long candidates; /* post-`every` filter */
+    unsigned long over_ceiling; /* picks not stored: would exceed max_bytes */
     unsigned long batches;
-    unsigned long since_check;
+    uint64_t      last_check_ms;
 
     uint64_t      rng;
     int           pid;
@@ -84,6 +89,12 @@ static uint64_t mdump_next(dump_state_t *st) {
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
+}
+
+static uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
 static unsigned long env_ul(const char *name, unsigned long dflt) {
@@ -126,8 +137,8 @@ static void mdump_flush(dump_state_t *st) {
         st->slots[i].len = 0;
     }
     fprintf(stderr, "[mutation_dump_afl] batch %lu: wrote %lu mutations "
-                    "(produced=%lu candidates=%lu)\n",
-            st->batches, written, st->produced, st->candidates);
+                    "(produced=%lu candidates=%lu over_ceiling=%lu)\n",
+            st->batches, written, st->produced, st->candidates, st->over_ceiling);
 
     /* Marker last: its presence means the batch is complete, so a reader never
      * consumes a half-written set. Removing it is what re-arms the shim. */
@@ -138,8 +149,8 @@ static void mdump_flush(dump_state_t *st) {
     st->filled = 0;
     st->bytes = 0;
     st->candidates = 0;
+    st->over_ceiling = 0;
     st->batches++;
-    st->since_check = 0;
     /* Resume sampling at once. Going idle here would leave the next window
      * blind for however long the orchestrator takes to harvest. */
 }
@@ -179,31 +190,46 @@ size_t afl_custom_post_process(void *data, uint8_t *buf, size_t buf_size,
     st->produced++;
     if (st->every > 1 && (st->produced % st->every) != 0) return buf_size;
 
+    /* Memory ceiling: a pick that would push the held sample past max_bytes is
+     * not stored (counted in over_ceiling). It used to FLUSH the batch early, and
+     * the orchestrator's next request deletes any unrequested batch, so on
+     * large-input targets (harfbuzz, woff2: >26 KiB mean over 20k slots) a round
+     * kept only the tail of its window -- one review run kept 33% of the
+     * executions. Skipping only biases against the largest inputs, and only
+     * while the ceiling binds. */
     unsigned long t = ++st->candidates;
-    if (st->filled < st->cap) {
+    int fits = st->bytes + buf_size <= st->max_bytes;
+    if (st->filled < st->cap && fits) {
         slot_set(st, st->filled, buf, buf_size);
         st->filled++;
-    } else if (st->mode == MODE_RESERVOIR) {
-        /* Algorithm R: keep with probability cap/t, so the batch is a uniform
-         * sample over the whole collection window rather than its opening. */
+    } else if (st->mode == MODE_RESERVOIR && st->filled) {
+        /* Algorithm R: keep with probability k/t, so the batch is a uniform
+         * sample over the whole collection window rather than its opening.
+         * k = filled: normally cap, fewer if the ceiling stopped the fill --
+         * replacement must still run then, or the batch degrades to a prefix. */
         uint64_t r = mdump_next(st) % t;
-        if (r < st->cap) slot_set(st, (unsigned long)r, buf, buf_size);
+        if (r < st->filled) {
+            if (st->bytes - st->slots[r].len + buf_size > st->max_bytes)
+                st->over_ceiling++;
+            else
+                slot_set(st, (unsigned long)r, buf, buf_size);
+        }
+    } else if (!fits) {
+        st->over_ceiling++;
     }
 
-    /* Memory ceiling only. Deliberately NOT `filled >= cap`: flushing the moment
-     * the buffer fills would make every mode behave as prefix, since the
-     * reservoir branch above is only reached once filled == cap. That bug made
-     * each round profile the first ~3 seconds of a 60-minute window -- and the
-     * seconds right after a hot-swap, while AFL re-calibrates its queue.
+    /* Write ONLY on request. Never on `filled >= cap`: flushing the moment the
+     * buffer fills would make every mode behave as prefix, since the reservoir
+     * branch above is only reached once filled == cap. That bug made each round
+     * profile the first ~3 seconds of a 60-minute window -- and the seconds
+     * right after a hot-swap, while AFL re-calibrates its queue.
      *
      * In prefix mode the buffer simply stops accepting (the branch above does
-     * nothing once full) and the batch is written on request, so both modes now
+     * nothing once full) and the batch is written on request, so both modes
      * dump at the same point and differ only in WHICH mutations they hold. */
-    if (st->bytes >= st->max_bytes) {
-        fprintf(stderr, "[mutation_dump_afl] byte ceiling hit; dumping early\n");
-        mdump_flush(st);
-    } else if (++st->since_check >= REARM_CHECK_INTERVAL) {
-        st->since_check = 0;
+    uint64_t now = now_ms();
+    if (now - st->last_check_ms >= REQUEST_CHECK_MS) {
+        st->last_check_ms = now;
         struct stat sb;
         if (stat(st->request, &sb) == 0) mdump_flush(st);
     }

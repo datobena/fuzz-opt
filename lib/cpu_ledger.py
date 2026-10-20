@@ -18,12 +18,27 @@ round's wall-clock went, but it consumes no CPU that fuzzing could have used.
 That is the whole reason the two are separated here rather than timing the round
 end to end.
 
-The ledger path travels in the environment because the writers are not one
-process: the broker (sandbox/broker.py) serves the sandboxed agent from a
-separate host process, and phase 2 runs in the orchestrator. Both append to the
+The ledger path travels in the environment so every writer finds it without
+being handed it: phase 2 and the round stages run in the optimizer's own thread,
+the broker (sandbox/broker.py) serves each sandboxed agent session from a thread
+of its own, and anything spawned inherits the environment. All append to the
 same file. Appends are a single write() of one line under O_APPEND, which the
 kernel keeps atomic well past any line this module produces, so concurrent
 writers interleave by line rather than corrupting each other.
+
+Every row must say WHICH optimizer (trial_id) and WHICH round (iter) paid for
+it, or the cost cannot be placed on that trial's timeline. Two ways that went
+wrong before Oct 2026, and why the tags now travel the way they do:
+
+  * The per-trial driver tagged its thread iter=0 once, and thread-local beats
+    the environment, so run_round's environment tag never took effect: every
+    trial-tagged row of every round said iter 0. run_round now re-tags its own
+    thread (set_thread_round) at the start of each round.
+  * The broker serves from a thread that never saw any thread-local tag, so its
+    rows (~85% of a campaign's CPU) carried no trial_id and whatever iter the
+    LAST optimizer to start a round had put in the process-wide environment.
+    The session now snapshots the round's tags (current_tags) into the
+    BrokerContext, and the broker passes them explicitly on every row.
 """
 from __future__ import annotations
 
@@ -52,8 +67,10 @@ def set_ledger_path(path: str | os.PathLike) -> None:
 # one optimizer ran at a time. Under the per-trial design ten optimizers advance
 # rounds concurrently in ten threads, and the last writer's iter_n would label
 # every other optimizer's records. Thread-local state wins when set; the
-# environment remains the fallback so the out-of-process writers (the broker)
-# keep working unchanged.
+# environment remains the fallback for a thread nobody tagged. A writer on a
+# DIFFERENT thread than the round (the broker) cannot see this thread's tags at
+# all, so it is handed them explicitly: see current_tags() and the trial_id /
+# iter_n arguments of record() and timed().
 _LOCAL = threading.local()
 
 
@@ -66,6 +83,25 @@ def set_thread_round(project: str | None = None, iter_n: int | None = None,
         _LOCAL.iter_n = int(iter_n)
     if trial_id is not None:
         _LOCAL.trial_id = int(trial_id)
+
+
+def clear_thread_round() -> None:
+    """Drop this thread's tags (tests; a thread pool reusing a worker)."""
+    for k in ("project", "iter_n", "trial_id"):
+        if hasattr(_LOCAL, k):
+            delattr(_LOCAL, k)
+
+
+def current_tags() -> dict:
+    """The tags a row written by THIS thread right now would carry.
+
+    For handing the round's identity to a writer on another thread: the broker
+    thread serves one optimizer's session, but thread-local state does not cross
+    threads, so the session snapshots this when it starts the broker and the
+    broker passes it back explicitly on every row it writes.
+    """
+    return {"project": _current_project(), "iter": _current_iter(),
+            "trial_id": _current_trial()}
 
 
 def set_round(project: str | None = None, iter_n: int | None = None) -> None:
@@ -104,9 +140,13 @@ def _current_trial() -> int | None:
 def record(
     stage: str, *, wall_s: float, cores: float, counts: bool = True,
     project: str | None = None, iter_n: int | None = None,
-    t_start: float | None = None, **extra,
+    trial_id: int | None = None, t_start: float | None = None, **extra,
 ) -> dict | None:
     """Append one stage record. Returns it, or None when recording is off.
+
+    ``project`` / ``iter_n`` / ``trial_id`` override the thread's tags when not
+    None -- for a writer that runs on behalf of an optimizer from a thread of
+    its own (the broker).
 
     Never raises: a failure to record must not take down an optimization round
     that is otherwise fine.
@@ -122,7 +162,7 @@ def record(
         # Which optimizer wrote this. None under the legacy single-optimizer
         # design; the owning trial's id under the per-trial design, without which
         # ten interleaved optimizers produce one indistinguishable ledger.
-        "trial_id": _current_trial(),
+        "trial_id": trial_id if trial_id is not None else _current_trial(),
         "iter": iter_n if iter_n is not None else _current_iter(),
         "t_start": round(t0, 3),
         "t_end": round(t0 + wall_s, 3),
@@ -149,7 +189,8 @@ def record(
 
 @contextmanager
 def timed(stage: str, *, cores: float = 1, counts: bool = True,
-          project: str | None = None, iter_n: int | None = None, **extra):
+          project: str | None = None, iter_n: int | None = None,
+          trial_id: int | None = None, **extra):
     """Time a block and record it, including when it raises.
 
     Yields a dict the caller may add fields to (outcome, file counts, ...); they
@@ -163,11 +204,12 @@ def timed(stage: str, *, cores: float = 1, counts: bool = True,
         yield info
     except BaseException as exc:  # noqa: BLE001 - re-raised immediately
         record(stage, wall_s=time.time() - t0, cores=cores, counts=counts,
-               project=project, iter_n=iter_n, t_start=t0,
+               project=project, iter_n=iter_n, trial_id=trial_id, t_start=t0,
                error=type(exc).__name__, **{**extra, **info})
         raise
     record(stage, wall_s=time.time() - t0, cores=cores, counts=counts,
-           project=project, iter_n=iter_n, t_start=t0, **{**extra, **info})
+           project=project, iter_n=iter_n, trial_id=trial_id, t_start=t0,
+           **{**extra, **info})
 
 
 def load(path: str | os.PathLike) -> list[dict]:
@@ -222,10 +264,12 @@ def summarize(rows: list[dict], *, trial_cores: int | None = None,
         runs one optimizer for one campaign and pays this number.
 
         Requires ``optimizers``. Division is EQUAL across optimizers rather than
-        per-row, because the broker records its work from threads that never
-        tagged a trial_id -- 86% of c1's rows. Equal division is a close
+        per-row, because ledgers written before Oct 2026 carry no trial_id on
+        broker rows -- 86% of c1's rows. Equal division is a close
         approximation there: the attributable 14% spread only 0.98-1.24h across
-        the ten (+/-12%), so they did comparable amounts of work.
+        the ten (+/-12%), so they did comparable amounts of work. (Newer ledgers
+        tag every broker row; analysis/plot_coverage_growth.py attributes rows
+        per trial and per round, and handles both.)
 
     The first two differ by ``trial_cores`` (9 in the standard layout), which is
     large enough to flip a verdict: b5's PcapPlusPlus reads 1.01x net under

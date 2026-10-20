@@ -161,10 +161,15 @@ def wait_for_container(container_id: str, timeout: Optional[int] = None) -> int:
         return -1
 
 
-def write_container_logs(container_id: str, dest_path: str) -> int:
+def write_container_logs(container_id: str, dest_path: str, *,
+                         check: bool = False) -> int:
     """Stream a container's combined output straight to dest_path.
 
-    Returns the number of bytes written.
+    Returns the number of bytes written. ``check=True`` raises RuntimeError when
+    `docker logs` exits non-zero (dest_path then holds docker's error, not the
+    log); a failed open/write raises OSError either way. A caller that removes
+    the container afterwards needs check=True -- the container is the only other
+    copy of the log.
 
     Never materializes the log in memory. A 24h AFL++ campaign writes several
     GB to the console, and capturing that through a pipe costs three live
@@ -176,11 +181,14 @@ def write_container_logs(container_id: str, dest_path: str) -> int:
     """
     os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
     with open(dest_path, "wb") as f:
-        subprocess.run(
+        proc = subprocess.run(
             ["docker", "logs", container_id],
             stdout=f,
             stderr=subprocess.STDOUT,
         )
+    if check and proc.returncode != 0:
+        raise RuntimeError(f"docker logs {container_id} exited {proc.returncode}; "
+                           f"{dest_path} does not hold the full log")
     try:
         return os.path.getsize(dest_path)
     except OSError:

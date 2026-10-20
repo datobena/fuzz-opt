@@ -159,3 +159,13 @@ def test_a_host_path_smuggled_into_an_allowlisted_key_is_dropped():
             "/home/x/results/libxml2-arvo-1972/build.sh",
     })
     assert "FUZZ_SOURCE_FOLDS_BUILD_COMMAND" not in env
+
+
+def test_docker_command_pins_the_agent_cpuset():
+    cmd = build_agent_docker_command(
+        image="bench-sandbox/agent", src="/s", profile="/p", tools="/t",
+        sock="/k", network="n", env={}, cpus="0-1,32-39",
+    )
+    assert cmd[cmd.index("--cpuset-cpus") + 1] == "0-1,32-39"
+    # A docker option, so it must precede the image.
+    assert cmd.index("--cpuset-cpus") < cmd.index("bench-sandbox/agent")

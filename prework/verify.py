@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from lib.crash_classify import normalize_signature
+from lib.crash_classify import (
+    SANITIZER_ERROR_RE, is_abort_report, normalize_signature, sanitizer_identity,
+    ubsan_identity, ubsan_signature_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +75,23 @@ def classify_run(blob: str, returncode: int, expected_signature: str,
     """
     m = _SUMMARY_RE.search(blob)
     detected = m.group(1).strip() if m else ""
-    if detected:
+    if is_abort_report(blob):
+        # assert()/abort() under handle_abort=2: verdict as before that flag, when
+        # it aborted without a report (see crash_classify.is_abort_report).
+        detected = ""
+    # A UBSan finding (FuzzBench bug builds: -fno-sanitize-recover, no stack) has
+    # SUMMARY class "undefined-behavior" for every check; identify it by
+    # check + location instead (lib/crash_classify.ubsan_identity). An ERROR:
+    # report (ASan & co.) always wins, so ASan verdicts are unchanged.
+    ub = None if SANITIZER_ERROR_RE.search(blob or "") else ubsan_identity(blob)
+    if detected or ub:
         # Prefer the reference stack when ARVO gave us one: it identifies the bug
         # by WHERE it fires, not by which sanitizer check won the race.
         if reference:
             return "poc_crash" if matches_reference(blob, reference)[0] else "other_crash"
+        if ub:
+            return ("poc_crash" if ubsan_signature_matches(ub, expected_signature)
+                    else "other_crash")
         return "poc_crash" if signature_matches(detected, expected_signature) else "other_crash"
     if any(marker in blob for marker in _DID_NOT_RUN_MARKERS):
         return "did_not_run"
@@ -104,17 +119,25 @@ def compile_command(tag: str, out_dir: str | Path) -> list[str]:
 
 
 _FRAME_RE = re.compile(r"#\d+ 0x[0-9a-f]+ in ([A-Za-z_][A-Za-z0-9_:]*)")
-_ASAN_KIND_RE = re.compile(r"ERROR: AddressSanitizer: ([a-z-]+)")
-_RUNTIME_FRAMES = ("__asan", "__sanitizer", "__interceptor", "__lsan")
+_RUNTIME_FRAMES = ("__asan", "__sanitizer", "__interceptor", "__lsan", "__ubsan")
 
 
 def report_identity(blob: str, depth: int = 3) -> tuple[str, list[str]]:
-    """(sanitizer kind, top non-runtime frames) from a crash report."""
-    k = _ASAN_KIND_RE.search(blob or "")
-    if not k:
+    """(sanitizer kind, top non-runtime frames) from a crash report.
+
+    Parsing is shared with the rest of triage (lib/crash_classify):
+      * "ERROR: <San>: <kind>" -> the printed kind, lowercase classes
+        (heap-buffer-overflow) and deadly signals (SEGV, FPE, BUS) alike;
+      * UBSan -> "ubsan:<check>"; with no stack (print_stacktrace=0, the
+        FuzzBench setting) the compiled-in "file:line" stands in for the frames.
+    """
+    ident = sanitizer_identity(blob or "")
+    if not ident:
         return "", []
     frames = [f for f in _FRAME_RE.findall(blob) if not f.startswith(_RUNTIME_FRAMES)]
-    return k.group(1), frames[:depth]
+    if ident.get("sanitizer") == "UndefinedBehaviorSanitizer" and not frames:
+        frames = [ident["location"]]
+    return ident["kind"], frames[:depth]
 
 
 def matches_reference(blob: str, reference: str, depth: int = 3) -> tuple[bool, str]:
@@ -190,6 +213,9 @@ def verify_poc(
     blob = (r.stdout or "") + (r.stderr or "")
     m = _SUMMARY_RE.search(blob)
     detected = m.group(1).strip() if m else ""
+    ub = None if SANITIZER_ERROR_RE.search(blob) else ubsan_identity(blob)
+    if ub:
+        detected = ub["signature"]
     ref = ""
     if reference_log and Path(reference_log).is_file():
         ref = Path(reference_log).read_text(errors="replace")

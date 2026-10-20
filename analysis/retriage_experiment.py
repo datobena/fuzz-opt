@@ -41,6 +41,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import config
 import phase3_runner
 from lib import afl_triage, crash_classify
+from lib.provenance import experiment_image
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("retriage")
@@ -93,7 +94,12 @@ def main():
         reference = open(repro, errors="replace").read()
     expected = args.expected_signature or entry.get("crash_type", "")
     fuzz_target = entry.get("fuzz_target", "")
-    image = f"bench-aflpp/{key}"
+    # The image the experiment ran with (recorded in its provenance), else
+    # prework_image_for(entry) (fb-aflpp/<dir> for FuzzBench-parity entries),
+    # else the legacy tag. The old hardcoded f"bench-aflpp/{key}" never existed
+    # for fuzzbench-kind entries (their images are <project>-arvo-<id>).
+    image = (experiment_image(os.path.join(exp_dir, key), entry)
+             or f"bench-aflpp/{key}")
     logger.info("target %s | fuzz_target=%s | identity: %s",
                 key, fuzz_target,
                 f"reference stack from {repro}" if reference

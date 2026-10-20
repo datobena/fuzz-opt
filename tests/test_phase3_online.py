@@ -5,6 +5,8 @@ import threading
 import time
 import types
 
+import pytest
+
 import config
 
 
@@ -630,50 +632,86 @@ def _mutations(tmp_path, n):
     return d
 
 
-def _fake_find(crashers, seconds):
+def _fake_find(crashers, rate, seen=None):
+    """find_crashers stand-in: ``rate`` inputs/s; reports only crashers it ran."""
     def find(*, out_dir, corpus_dir, fuzz_target, cpu, image):
-        n = sum(1 for _ in Path(corpus_dir).iterdir())
-        return {"ok": True, "crashers": sorted(crashers), "scanned": n,
-                "expected": n, "seconds": seconds, "log": ""}
+        names = {p.name for p in Path(corpus_dir).iterdir()}
+        if seen is not None:
+            seen.append(names)
+        return {"ok": True, "crashers": sorted(set(crashers) & names),
+                "scanned": len(names), "expected": len(names),
+                "seconds": len(names) / rate, "log": ""}
     return find
+
+
+def _names(d):
+    return {p.name for p in Path(d).iterdir()}
+
+
+def _round(tmp_path, n, crashers=(), rate=10.0, seen=None, out="corpus", **kw):
+    muts = tmp_path / "muts"
+    if not muts.exists():
+        muts = _mutations(tmp_path, n)
+    return phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / out, previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7,
+        find_crashers_fn=_fake_find(crashers, rate, seen), **kw)
 
 
 def test_round_corpus_drops_inputs_that_crash_the_previous_best(tmp_path, monkeypatch):
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 0)
-    muts = _mutations(tmp_path, 100)
-    r = phase3_online.prepare_round_corpus(
-        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
-        fuzz_target="t", image="i", cpu=1, seed=7,
-        find_crashers_fn=_fake_find({"mut_00000003", "mut_00000050"}, 1.0))
-    full = {p.name for p in Path(r["full"]).iterdir()}
-    assert len(full) == 98 and "mut_00000003" not in full
-    assert r["crashers_removed"] == 2 and r["tuning"] == r["full"]
+    r = _round(tmp_path, 100, {"mut_00000003", "mut_00000050"})
+    checked = _names(r["checked"])
+    assert len(checked) == 98 and "mut_00000003" not in checked
+    assert r["crashers_removed"] == 2 and r["tuning"] == r["checked"]
 
 
 def test_round_corpus_caps_the_tuning_set_by_measured_speed(tmp_path, monkeypatch):
-    # 100 inputs in 10s = 10 inputs/s; a 3s budget fits 30.
+    # The smoke filter pass measures 10 inputs/s; a 3s budget fits 30.
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
-    muts = _mutations(tmp_path, 100)
-    r = phase3_online.prepare_round_corpus(
-        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
-        fuzz_target="t", image="i", cpu=1, seed=7,
-        find_crashers_fn=_fake_find(set(), 10.0))
-    tuning = {p.name for p in Path(r["tuning"]).iterdir()}
-    full = {p.name for p in Path(r["full"]).iterdir()}
-    assert len(tuning) == 30 and tuning <= full and len(full) == 100
+    r = _round(tmp_path, 100)
+    assert len(_names(r["tuning"])) == 30 and r["rate_source"] == "smoke-filter"
 
 
-def test_round_corpus_smoke_is_five_percent_of_the_full_set(tmp_path, monkeypatch):
+def test_round_corpus_filters_only_the_inputs_it_uses(tmp_path, monkeypatch):
+    # 30 tuning + 30 gate + 5 smoke of 100: the other inputs are never run, and
+    # no input is run twice (the smoke pass covers its share of the rest).
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
     monkeypatch.setattr(phase3_online.config, "ONLINE_SMOKE_FRACTION", 0.05)
-    muts = _mutations(tmp_path, 200)
-    kw = dict(mutations_dir=muts, previous_best_bin="/b", fuzz_target="t",
-              image="i", cpu=1, seed=7, find_crashers_fn=_fake_find(set(), 1.0))
-    a = phase3_online.prepare_round_corpus(out_root=tmp_path / "a", **kw)
-    b = phase3_online.prepare_round_corpus(out_root=tmp_path / "b", **kw)
-    names = sorted(p.name for p in Path(a["smoke"]).iterdir())
-    assert len(names) == 10
-    assert names == sorted(p.name for p in Path(b["smoke"]).iterdir())  # deterministic
+    seen = []
+    r = _round(tmp_path, 100, seen=seen)
+    ran = set().union(*seen)
+    used = _names(r["tuning"]) | _names(r["gate"]) | _names(r["smoke"])
+    assert ran == used == _names(r["checked"]) and len(ran) < 100
+    assert sum(len(x) for x in seen) == len(ran)
+
+
+def test_round_corpus_never_uses_an_unfiltered_crasher(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    bad = {f"mut_{i:08d}" for i in range(0, 100, 3)}
+    r = _round(tmp_path, 100, bad)
+    for k in ("tuning", "gate", "smoke", "checked"):
+        assert not _names(r[k]) & bad, k
+
+
+def test_round_corpus_full_set_gate_filters_the_whole_harvest(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    monkeypatch.setattr(phase3_online.config, "ONLINE_GATE_FULL_SET", True)
+    r = _round(tmp_path, 100, {"mut_00000009"})
+    # sampled before filtering, so a crasher in the sample leaves it one short
+    assert len(_names(r["checked"])) == 99 and 29 <= len(_names(r["tuning"])) <= 30
+
+
+def test_round_corpus_smoke_is_five_percent_of_the_harvest(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "ONLINE_SMOKE_FRACTION", 0.05)
+    a = _round(tmp_path, 200, out="a")
+    b = _round(tmp_path, 200, out="b")
+    assert len(_names(a["smoke"])) == 10
+    assert _names(a["smoke"]) == _names(b["smoke"])      # deterministic
 
 
 def test_round_corpus_refuses_a_filter_that_did_not_run(tmp_path):
@@ -693,11 +731,7 @@ def test_round_corpus_sizes_by_the_gate_rate_when_known(tmp_path, monkeypatch):
     # measured rate wins: 5 inputs/s x 4s budget = 20, not the filter's 40.
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 4)
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
-    muts = _mutations(tmp_path, 100)
-    r = phase3_online.prepare_round_corpus(
-        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
-        fuzz_target="t", image="i", cpu=1, seed=7, replay_rate=5.0,
-        find_crashers_fn=_fake_find(set(), 10.0))
+    r = _round(tmp_path, 100, replay_rate=5.0)
     assert r["tuning_count"] == 20 and r["rate_source"] == "gate"
 
 
@@ -705,13 +739,8 @@ def test_gate_sample_is_tuning_sized_but_different_inputs(tmp_path, monkeypatch)
     # 10 inputs/s x 3s = 30 of 100: room for two disjoint samples.
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
-    muts = _mutations(tmp_path, 100)
-    r = phase3_online.prepare_round_corpus(
-        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
-        fuzz_target="t", image="i", cpu=1, seed=7,
-        find_crashers_fn=_fake_find(set(), 10.0))
-    tuning = {p.name for p in Path(r["tuning"]).iterdir()}
-    gate = {p.name for p in Path(r["gate"]).iterdir()}
+    r = _round(tmp_path, 100)
+    tuning, gate = _names(r["tuning"]), _names(r["gate"])
     assert len(gate) == len(tuning) == 30
     assert not gate & tuning and r["gate_overlap_with_tuning"] == 0
 
@@ -720,21 +749,319 @@ def test_gate_sample_overlaps_only_when_the_set_is_too_small(tmp_path, monkeypat
     # 70 of 100 each: only 30 untimed inputs exist, so 40 must be shared.
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 7)
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
-    muts = _mutations(tmp_path, 100)
-    r = phase3_online.prepare_round_corpus(
-        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
-        fuzz_target="t", image="i", cpu=1, seed=7,
-        find_crashers_fn=_fake_find(set(), 10.0))
-    tuning = {p.name for p in Path(r["tuning"]).iterdir()}
-    gate = {p.name for p in Path(r["gate"]).iterdir()}
+    r = _round(tmp_path, 100)
+    tuning, gate = _names(r["tuning"]), _names(r["gate"])
     assert len(gate) == 70 and len(gate & tuning) == 40
 
 
 def test_gate_is_the_full_set_when_nothing_needs_shrinking(tmp_path, monkeypatch):
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 180)
-    muts = _mutations(tmp_path, 50)
-    r = phase3_online.prepare_round_corpus(
-        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
-        fuzz_target="t", image="i", cpu=1, seed=7,
-        find_crashers_fn=_fake_find(set(), 1.0))
-    assert r["gate"] == r["tuning"] == r["full"]
+    r = _round(tmp_path, 50, rate=1.0)
+    assert r["gate"] == r["tuning"] == r["checked"]
+
+
+# ===========================================================================
+# Per-trial swap mirroring: optimizer k's hot swap signals ONLY baseline trial
+# k. On the old single global generation every baseline restarted on every
+# optimizer's swap, ~10x more than any one optimized trial.
+# ===========================================================================
+def test_hot_swap_one_signals_only_its_paired_baseline(monkeypatch, tmp_path):
+    from lib import swap_signal
+    sig = swap_signal.SwapSignal()
+    monkeypatch.setattr(phase3_online.swap_signal, "SIGNAL", sig)
+    monkeypatch.setattr(phase3_online, "_stop_one_and_overwrite", lambda *a, **k: None)
+    monkeypatch.setattr(phase3_online, "_fuzzer_state", lambda e, t: {})
+    monkeypatch.setattr(phase3_online, "_swap_extra_files", lambda e, f: ())
+    trial = types.SimpleNamespace(trial_id=3, container_id="c",
+                                  bin_dir_override=str(tmp_path / "bin_03"))
+    ctx = types.SimpleNamespace(trial=trial, iter_n=2, fuzz_target="t", entry={},
+                                experiment_id="e",
+                                swap_timeline_path=str(tmp_path / "tl.json"))
+    rel, ready = threading.Event(), threading.Event()
+    threading.Thread(target=lambda: ready.wait(10) and rel.set(), daemon=True).start()
+    state = types.SimpleNamespace(
+        trials={3: {"state": "running", "relaunched": rel, "relaunch_ready": ready}},
+        swap_timeline=[])
+    phase3_online.hot_swap_one(ctx, state, str(tmp_path / "iter_02"))
+    assert sig.generation_for(3) == 1
+    assert all(sig.generation_for(t) == 0 for t in range(10) if t != 3)
+
+
+# ===========================================================================
+# The swap row reads both clocks, so the plots can convert run_time to
+# wall-clock exactly: the stats write state_at_swap came from, the relaunch,
+# and (in the background) when the relaunched AFL's run_time resumed.
+# ===========================================================================
+def _swap_ctx(monkeypatch, tmp_path):
+    monkeypatch.setattr(phase3_online, "_stop_one_and_overwrite", lambda *a, **k: None)
+    monkeypatch.setattr(phase3_online, "_fuzzer_state", lambda e, t: {"run_time": "980"})
+    monkeypatch.setattr(phase3_online, "_swap_extra_files", lambda e, f: ())
+    monkeypatch.setattr(phase3_online.swap_signal.SIGNAL, "record_swap", lambda *a: 1)
+    trial = types.SimpleNamespace(trial_id=3, container_id="c",
+                                  bin_dir_override=str(tmp_path / "bin_03"))
+    ctx = types.SimpleNamespace(trial=trial, iter_n=2, fuzz_target="t", entry={},
+                                experiment_id="e",
+                                swap_timeline_path=str(tmp_path / "tl.json"))
+    rel, ready = threading.Event(), threading.Event()
+    threading.Thread(target=lambda: ready.wait(10) and rel.set(), daemon=True).start()
+    other = {"iter": 1, "ts": 1.0, "trial_id": 7}
+    state = types.SimpleNamespace(
+        trials={3: {"state": "running", "relaunched": rel, "relaunch_ready": ready}},
+        swap_timeline=[other])
+    return ctx, state, other
+
+
+def test_hot_swap_one_records_both_clocks(monkeypatch, tmp_path):
+    ctx, state, other = _swap_ctx(monkeypatch, tmp_path)
+    monkeypatch.setattr(phase3_online, "_stats_clock", lambda e, t: (500.0, 980.0))
+    started = []
+    monkeypatch.setattr(phase3_online, "_record_resume",
+                        lambda *a, **k: started.append(a))
+    phase3_online.hot_swap_one(ctx, state, str(tmp_path / "iter_02"))
+    row = state.swap_timeline[1]
+    assert row["stats_ts"] == 500.0 and row["state_at_swap"] == {"run_time": "980"}
+    assert row["relaunch_ts"] >= row["ts"]
+    assert state.swap_timeline[0] is other
+    assert json.loads((tmp_path / "tl.json").read_text())[1]["relaunch_ts"] == row["relaunch_ts"]
+    assert started and started[0][2] is row and started[0][3] == (500.0, 980.0)
+
+
+def test_record_resume_waits_for_the_relaunched_afl(monkeypatch, tmp_path):
+    ctx, state, _ = _swap_ctx(monkeypatch, tmp_path)
+    row = {"iter": 2, "ts": 501.0, "trial_id": 3, "stats_ts": 500.0}
+    state.swap_timeline.append(row)
+    # The stopped trial's own file first, then a pre-load write of the new
+    # process (run_time from 0), then the resumed one.
+    reads = iter([(500.0, 980.0), (640.0, 3.0), (760.0, 980.0)])
+    monkeypatch.setattr(phase3_online, "_stats_clock", lambda e, t: next(reads))
+    phase3_online._record_resume(ctx, state, row, (500.0, 980.0), poll=0.0)
+    new = state.swap_timeline[1]
+    assert (new["resumed_ts"], new["resumed_run_time"]) == (760.0, 980.0)
+    assert "resumed_ts" not in row          # replaced, never mutated in place
+    assert json.loads((tmp_path / "tl.json").read_text())[1]["resumed_ts"] == 760.0
+
+
+# ===========================================================================
+# swap_timeline.json is provenance: a failed write must never kill the
+# optimizer that just swapped, and the swap and the previous swap's background
+# _record_resume must not interleave their writes of the one file.
+# ===========================================================================
+def test_hot_swap_one_survives_a_failed_timeline_write(monkeypatch, tmp_path, caplog):
+    ctx, state, _ = _swap_ctx(monkeypatch, tmp_path)
+    monkeypatch.setattr(phase3_online, "_stats_clock", lambda e, t: (500.0, 980.0))
+    started = []
+    monkeypatch.setattr(phase3_online, "_record_resume",
+                        lambda *a, **k: started.append(a))
+
+    def _full(src, dst):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(phase3_online.os, "replace", _full)
+    phase3_online.hot_swap_one(ctx, state, str(tmp_path / "iter_02"))
+    # The swap completed: row recorded in memory, resume watcher started.
+    assert state.swap_timeline[1]["relaunch_ts"] >= state.swap_timeline[1]["ts"]
+    assert started
+    assert "No space left on device" in caplog.text
+    assert os.listdir(tmp_path) == []        # no temp file left behind
+
+
+def test_record_resume_survives_a_failed_timeline_write(monkeypatch, tmp_path):
+    ctx, state, _ = _swap_ctx(monkeypatch, tmp_path)
+    (tmp_path / "f").write_text("")
+    ctx.swap_timeline_path = str(tmp_path / "f" / "tl.json")   # parent is a file
+    row = {"iter": 2, "ts": 501.0, "trial_id": 3, "stats_ts": 500.0}
+    state.swap_timeline.append(row)
+    monkeypatch.setattr(phase3_online, "_stats_clock", lambda e, t: (760.0, 980.0))
+    phase3_online._record_resume(ctx, state, row, (500.0, 980.0), poll=0.0)
+    assert state.swap_timeline[1]["resumed_ts"] == 760.0
+
+
+def test_concurrent_timeline_writes_stay_valid_json(monkeypatch, tmp_path):
+    ctx, state, _ = _swap_ctx(monkeypatch, tmp_path)
+    path = tmp_path / "tl.json"
+    stop = threading.Event()
+    bad = []
+
+    def reader():
+        while not stop.is_set():
+            try:
+                json.loads(path.read_text())
+            except FileNotFoundError:
+                pass
+            except ValueError as e:
+                bad.append(e)
+
+    def writer(k):
+        for i in range(40):
+            state.swap_timeline.append({"iter": i, "ts": float(i), "trial_id": k,
+                                        "pad": "x" * 500})
+            phase3_online._write_swap_timeline(ctx, state)
+
+    r = threading.Thread(target=reader)
+    r.start()
+    ws = [threading.Thread(target=writer, args=(k,)) for k in range(4)]
+    for w in ws:
+        w.start()
+    for w in ws:
+        w.join()
+    stop.set()
+    r.join()
+    assert bad == []
+    # Serialised: the last write carried the whole, newest list.
+    assert json.loads(path.read_text()) == state.swap_timeline
+    assert sorted(os.listdir(tmp_path)) == ["tl.json"]
+
+
+# ===========================================================================
+# A reused experiment id must be refused BEFORE setup: AFL_AUTORESUME would
+# otherwise resume the previous campaign's queues in every "new" trial.
+# ===========================================================================
+def test_run_online_refuses_an_experiment_with_afl_state(monkeypatch, tmp_path, caplog):
+    import phase3_runner
+    from pathlib import Path
+    monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "NUM_TRIALS", 2)
+    monkeypatch.setattr(config, "ONLINE_PER_TRIAL_OPTIMIZER", True)
+    entry = {"project": "libxml2", "cve": "arvo-1972", "fuzz_target": "xml"}
+    stale = phase3_runner.Trial(project="libxml2", cve="arvo-1972",
+                                variant="optimized", trial_id=1, seed=1)
+    q = Path(phase3_runner.get_trial_dirs("exp", stale)["afl_out"]) / "default" / "queue"
+    q.mkdir(parents=True)
+
+    def setup_must_not_run(*a, **k):
+        raise AssertionError("setup ran on a stale experiment")
+
+    monkeypatch.setattr(phase3_online, "_extract_online_target", setup_must_not_run)
+    monkeypatch.setattr(phase3_runner, "start_trial", setup_must_not_run)
+    assert phase3_online.run_online(entry, "exp", duration=60) is False
+    assert str(q) in caplog.text
+
+
+# ===========================================================================
+# The agent cpuset is resolved ONCE, before setup. Resolved per optimizer at its
+# first round, a bad set raised inside _drive's catch-all and killed all ten
+# optimizers while the trials fuzzed on: two baseline arms posing as a campaign.
+# ===========================================================================
+def _online_entry(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "NUM_TRIALS", 2)
+    monkeypatch.setattr(config, "ONLINE_PER_TRIAL_OPTIMIZER", True)
+    monkeypatch.setattr(config, "PHASE2_SANDBOX", True)
+    monkeypatch.setattr(config, "ONLINE_TRIAL_CORES", "12-31")
+    monkeypatch.setattr(config, "ONLINE_OPTIMIZER_CORES", "2-11")
+    monkeypatch.setattr(config, "ONLINE_AGENT_CPUS", "")
+    return {"project": "libxml2", "cve": "arvo-1972", "fuzz_target": "xml"}
+
+
+def test_run_online_aborts_before_setup_on_a_bad_agent_cpuset(monkeypatch, tmp_path, caplog):
+    import phase3_runner
+    entry = _online_entry(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "ONLINE_AGENT_CPUS", "12")        # a trial core
+
+    def setup_must_not_run(*a, **k):
+        raise AssertionError("setup ran with an unplaceable agent")
+
+    monkeypatch.setattr(phase3_online, "_extract_online_target", setup_must_not_run)
+    monkeypatch.setattr(phase3_runner, "start_trial", setup_must_not_run)
+    assert phase3_online.run_online(entry, "exp", duration=60) is False
+    assert "agent containers" in caplog.text and "trial" in caplog.text
+    assert not (tmp_path / "exp").exists(), "nothing may be created before the abort"
+
+
+def test_run_online_pins_the_resolved_agent_cpuset_before_setup(monkeypatch, tmp_path):
+    import sandbox.session as s
+    entry = _online_entry(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(s, "resolve_agent_cpus",
+                        lambda *a, **k: calls.append(1) or "0-1,32-39")
+    monkeypatch.setattr(phase3_online.cpu_ledger, "set_ledger_path", lambda p: None)
+    monkeypatch.setattr(phase3_online.cpu_ledger, "set_round", lambda **k: None)
+
+    class _Setup(Exception):
+        pass
+
+    def setup(*a, **k):
+        # Pinned BEFORE setup: every later round's resolve_agent_cpus() takes
+        # the explicit path and returns this same set.
+        assert config.ONLINE_AGENT_CPUS == "0-1,32-39"
+        raise _Setup
+
+    monkeypatch.setattr(phase3_online, "_extract_online_target", setup)
+    with pytest.raises(_Setup):
+        phase3_online.run_online(entry, "exp", duration=60)
+    assert calls == [1]
+
+
+# ===========================================================================
+# A finished online trial's container is the only other copy of its console
+# log: removed only when that log was actually saved.
+# ===========================================================================
+def _finalize(monkeypatch, tmp_path, write_logs):
+    import phase3_runner
+    monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
+    trial = phase3_runner.Trial(project="libxml2", cve="arvo-1972",
+                                variant="optimized", trial_id=1, seed=1)
+    trial.container_id = "cid"
+    removed = []
+    monkeypatch.setattr(phase3_online.docker_util, "write_container_logs", write_logs)
+    monkeypatch.setattr(phase3_online.docker_util, "remove_container", removed.append)
+    phase3_online._finalize_online_trial(trial, "exp", 60, time.time() - 60, [])
+    meta = json.loads(open(phase3_runner.get_trial_dirs("exp", trial)["metadata"]).read())
+    return removed, meta
+
+
+def test_finalize_removes_the_container_once_its_log_is_saved(monkeypatch, tmp_path):
+    removed, meta = _finalize(monkeypatch, tmp_path, lambda cid, path, check=False: 10)
+    assert removed == ["cid"] and meta["console_log_saved"] is True
+
+
+def test_finalize_keeps_the_container_when_its_log_write_fails(monkeypatch, tmp_path, caplog):
+    def fail(cid, path, check=False):
+        assert check, "a caller that removes the container must ask for check=True"
+        raise RuntimeError("docker logs cid exited 1")
+
+    removed, meta = _finalize(monkeypatch, tmp_path, fail)
+    assert removed == [], "removing it would destroy the only copy of the log"
+    assert meta["console_log_saved"] is False
+    assert "keeping container cid" in caplog.text
+
+
+# ===========================================================================
+# run_online_pertrial.sh: an existing log is refused before the launcher
+# touches any file (EXP_ID or not); the pid file is per experiment, not project.
+# ===========================================================================
+_LAUNCHER = Path(__file__).resolve().parent.parent / "run_online_pertrial.sh"
+
+
+def _launch(tmp_path, exp_id):
+    import shutil
+    import subprocess
+    script = tmp_path / "run_online_pertrial.sh"
+    shutil.copy(_LAUNCHER, script)
+    env = {k: v for k, v in os.environ.items() if k not in ("EXP_ID", "EXP_PREFIX")}
+    env["EXP_ID"] = exp_id
+    return subprocess.run(["bash", str(script), "libxml2"], env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_launcher_refuses_an_existing_log_without_touching_it(tmp_path):
+    log = tmp_path / ".myexp.log"
+    log.write_text("the old campaign's only log\n")
+    r = _launch(tmp_path, "myexp")
+    assert r.returncode == 5, r.stderr
+    assert "already exists" in r.stderr
+    assert log.read_text() == "the old campaign's only log\n"
+    assert not list(tmp_path.glob(".online_pertrial_*.pid"))
+
+
+def test_launcher_passes_the_log_guard_when_no_log_exists(tmp_path):
+    # No log: the guard lets it through to the next check (the preflight, which
+    # fails here because the copy has no bootstrap_server.py beside it).
+    r = _launch(tmp_path, "freshexp")
+    assert r.returncode != 5, r.stderr
+    assert not (tmp_path / ".freshexp.log").exists()
+
+
+def test_launcher_pid_file_is_named_by_experiment_id():
+    text = _LAUNCHER.read_text()
+    assert '.online_pertrial_${exp}.pid"' in text
+    assert "online_pertrial_${PROJ}.pid" not in text

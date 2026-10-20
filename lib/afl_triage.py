@@ -30,6 +30,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib.afl import collect_crashes
+from lib.crash_classify import (replay_sanitizer_env, sanitizer_identity,
+                                ubsan_signature_matches)
 from prework.verify import classify_run
 
 logger = logging.getLogger(__name__)
@@ -76,8 +78,14 @@ def _replay(ctx: _Ctx, path: Path) -> tuple[str, str]:
         except OSError as e:
             logger.warning("triage: cannot stage %s: %s", path.name, e)
             return "did_not_run", ""
+        # UBSAN_OPTIONS: FuzzBench's replay set plus symbolize=1 (see
+        # crash_classify.replay_sanitizer_env). Without it a FuzzBench bug
+        # build's UBSan abort still fires, but this keeps the report identical
+        # to what afl-fuzz saw. ASAN_OPTIONS is unchanged.
+        env = replay_sanitizer_env("detect_leaks=0")
         cmd = [
             "docker", "run", "--rm", "--privileged",
+            "-e", f"UBSAN_OPTIONS={env['UBSAN_OPTIONS']}",
             "-v", f"{Path(ctx.out_dir).absolute()}:/out:ro",
             "-v", f"{staged}:/testcase:ro",
             "--entrypoint", "/bin/bash", ctx.image, "-lc",
@@ -91,7 +99,24 @@ def _replay(ctx: _Ctx, path: Path) -> tuple[str, str]:
         except subprocess.TimeoutExpired:
             return "did_not_run", ""
     blob = (r.stdout or "") + (r.stderr or "")
-    verdict = classify_run(blob, r.returncode, ctx.expected_signature,
+    return _verdict(blob, r.returncode, ctx)
+
+
+def _verdict(blob: str, returncode: int, ctx: _Ctx) -> tuple[str, str]:
+    """(verdict, detected_signature) for one replay's output.
+
+    A UBSan-only finding prints "SUMMARY: UndefinedBehaviorSanitizer:
+    undefined-behavior" -- the same label for all 16 checks -- and no stack, so
+    classify_run's label/stack comparison cannot identify it. Its identity is
+    the check plus file:line (crash_classify.ubsan_identity), matched against
+    expected_signature by ubsan_signature_matches. There is no ARVO reference
+    stack for a UBSan finding, so a reference never turns one into poc_crash.
+    """
+    ident = sanitizer_identity(blob)
+    if ident and ident.get("sanitizer") == "UndefinedBehaviorSanitizer":
+        hit = (not ctx.reference) and ubsan_signature_matches(ident, ctx.expected_signature)
+        return ("poc_crash" if hit else "other_crash"), ident["signature"]
+    verdict = classify_run(blob, returncode, ctx.expected_signature,
                            reference=ctx.reference or None)
     m = _SUMMARY_RE.search(blob)
     return verdict, (m.group(1).strip() if m else "")

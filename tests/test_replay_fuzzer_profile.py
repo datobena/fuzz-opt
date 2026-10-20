@@ -5,9 +5,11 @@ import types
 from pathlib import Path
 
 
-SCRIPTS_DIR = Path(
-    "/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts"
-)
+# Resolve the live skill scripts the way config.py does: prefer the Claude
+# install, fall back to the Codex one.
+_CLAUDE = Path("/home/sefcom/.claude/skills/profile-once-fuzz-folds/scripts")
+_CODEX = Path("/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts")
+SCRIPTS_DIR = _CLAUDE if _CLAUDE.exists() else _CODEX
 
 
 def _load_module(name):
@@ -37,7 +39,9 @@ def test_replay_profile_command_perf_records_a_readonly_replay_loop(tmp_path):
     assert cmd[:3] == ["docker", "run", "--rm"]
     assert "--cpuset-cpus" in cmd
     assert cmd[cmd.index("--cpuset-cpus") + 1] == "3"
-    assert "gcr.io/oss-fuzz-base/base-runner" in cmd
+    # The live script records in a kernel-matched profiler image (perf must match
+    # `uname -r`), configurable via FUZZ_SOURCE_FOLDS_PROFILER_IMAGE.
+    assert profile.PROFILER_IMAGE in cmd
 
     joined = " ".join(str(part) for part in cmd)
     # Corpus and binary are read-only: a profile pass must never mutate the
@@ -48,7 +52,13 @@ def test_replay_profile_command_perf_records_a_readonly_replay_loop(tmp_path):
 
     script = cmd[-1]
     assert "apt-get install -y linux-tools-generic" in script
-    assert "record -g --call-graph dwarf -F 997" in script
+    # Call graph records with LBR where available, falling back to FP -- never
+    # dwarf (empty under the -gline-tables-only OSS-Fuzz build). See the comment
+    # in replay_fuzzer_profile.py.
+    assert "--call-graph dwarf" not in script
+    assert "CG=fp" in script
+    assert "--call-graph lbr" in script
+    assert 'record -g --call-graph "$CG" -F 997' in script
     assert "-o /artifacts/perf.data --" in script
     # Replay loop: -runs=0, fixed seed, looped until the sample floor elapses.
     assert "/bin/bash -c '" in script
@@ -59,8 +69,12 @@ def test_replay_profile_command_perf_records_a_readonly_replay_loop(tmp_path):
     # Reports are generated in-container (symbol resolution).
     assert "report --stdio --no-children -g none --percent-limit 0.5" in script
     assert "report --stdio -g callee,0.5 --percent-limit 0.5" in script
+    # Inclusive (self + descendants) report so allocation cost is credited to the
+    # target functions that drive it, not just the uneditable __asan/libc leaves.
+    assert "report --stdio -g caller --children --percent-limit 0.5" in script
     assert "/artifacts/flat.txt" in script
     assert "/artifacts/callgraph.txt" in script
+    assert "/artifacts/children.txt" in script
     assert "chmod a+r /artifacts/perf.data /artifacts/fuzzer.log" in script
 
 
@@ -102,8 +116,10 @@ def test_run_replay_profile_writes_reports_and_metadata(tmp_path, monkeypatch):
         # (symbol-resolved flat.txt / callgraph.txt).
         artifact_dir.mkdir(parents=True, exist_ok=True)
         (artifact_dir / "perf.data").write_bytes(b"PERF")
+        # Real perf flat format; DSO must be the target so the live script's
+        # target-DSO-share validation sees a non-trivial share.
         (artifact_dir / "flat.txt").write_text(
-            "    13.00%  secilc-fuzzer  secilc-fuzzer  [.] hashtab_map\n"
+            "    13.00%  demo_fuzzer  demo_fuzzer  [.] hashtab_map\n"
         )
         (artifact_dir / "callgraph.txt").write_text("callgraph")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -149,7 +165,7 @@ def test_run_replay_profile_retries_once_on_transient_failure(tmp_path, monkeypa
             # Transient failure: container produced nothing.
             return subprocess.CompletedProcess(cmd, 1, "", "transient docker error")
         (artifact_dir / "perf.data").write_bytes(b"PERF")
-        (artifact_dir / "flat.txt").write_text("10% foo\n")
+        (artifact_dir / "flat.txt").write_text("    10.00%  t  t  [.] foo\n")
         (artifact_dir / "callgraph.txt").write_text("cg")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 

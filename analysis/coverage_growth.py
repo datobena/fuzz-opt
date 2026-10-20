@@ -40,9 +40,25 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 
 import config
-from prework.prework_build import prework_image_for
+from lib.provenance import experiment_image
 
 _TIME = re.compile(r"time:(\d+)")
+
+
+def discovery_ms(name: str) -> int | None:
+    """Discovery time of a queue entry, in AFL's milliseconds.
+
+    A relaunched online-arm AFL re-imports the previous queue as seeds, and
+    names each imported entry ``id:N,time:0,execs:0,orig:<its original name>``.
+    The FIRST ``time:`` is then the import (always 0) and the real discovery
+    time sits inside ``orig:``. Taking the first match collapsed whole corpora
+    onto t=0 -- mbedtls r2 put 969 of 997 inputs there, and the coverage panel
+    drew the optimized arm as a flat line at its final edge count from hour 0.
+    Take the LAST match: non-imported names carry exactly one, and nested
+    re-imports keep the oldest-named original innermost.
+    """
+    ms = _TIME.findall(name)
+    return int(ms[-1]) if ms else None
 
 
 def showmap_maps(image: str, baseline_bin: Path, fuzz_target: str,
@@ -50,6 +66,11 @@ def showmap_maps(image: str, baseline_bin: Path, fuzz_target: str,
     """One forkserver pass over the whole queue -> one edge map per input."""
     cmd = [
         "docker", "run", "--rm", "--privileged", "--cpuset-cpus", str(cpu),
+        # Capped like every other analysis container in the repo (cf.
+        # profile_stability_search.py): -m none lets the target allocate without
+        # limit, and --jobs of these run at once, so a single runaway input must
+        # die in its own cgroup instead of taking the host down.
+        "--memory", "4g", "--memory-swap", "4g",
         # As the invoking user: showmap writes one map per input, and root-owned
         # output cannot be read or cleaned up afterwards by a non-root caller.
         "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp",
@@ -66,6 +87,10 @@ def showmap_maps(image: str, baseline_bin: Path, fuzz_target: str,
         "-v", f"{out.parent.absolute()}:/w",
         "--entrypoint", "/bin/bash", image, "-lc",
         f"rmdir /w/{out.name} 2>/dev/null; "
+        # Large-map targets (FuzzBench bloaty/curl/php/...): afl-showmap aborts
+        # unless AFL_MAP_SIZE is set; take it from the target itself.
+        f"m=$(AFL_DUMP_MAP_SIZE=1 /out/{fuzz_target} 2>/dev/null); "
+        f'case "$m" in ""|*[!0-9]*) ;; *) export AFL_MAP_SIZE=$m;; esac; '
         f"/out/afl-showmap -i /queue -o /w/{out.name} -t 5000+ -m none -- "
         f"/out/{fuzz_target} >/dev/null 2>&1; ls /w/{out.name} | wc -l",
     ]
@@ -82,10 +107,10 @@ def growth_from_maps(maps: Path) -> list[tuple[float, int, int]]:
     for f in maps.iterdir():
         if not f.is_file():
             continue
-        m = _TIME.search(f.name)
-        if m is None:
+        ms = discovery_ms(f.name)
+        if ms is None:
             continue
-        entries.append((int(m.group(1)) / 1000.0, f))
+        entries.append((ms / 1000.0, f))
     entries.sort(key=lambda e: e[0])
 
     seen: set[int] = set()
@@ -155,7 +180,9 @@ def main() -> int:
         entry = resolve_entry(exp_dir.name, manifest)
         if entry is None:
             continue
-        image, target = prework_image_for(entry), entry["fuzz_target"]
+        # The image the campaign ran with: the bench-aflpp baseline binaries
+        # link that image's libc++.so.1 and would not load elsewhere.
+        image, target = experiment_image(exp_dir, entry), entry["fuzz_target"]
         # Namespaced by EXPERIMENT, not just by CVE. Two campaigns on the same
         # target (c1 cold builds vs c2 incremental) both resolve to the same CVE
         # directory, so the second silently overwrote the first's CSVs -- and

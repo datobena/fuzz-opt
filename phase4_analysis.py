@@ -141,19 +141,189 @@ def extract_execs_per_second(metadata: dict, trial_dir: str) -> float:
     return 0.0
 
 
+# --------------------------------------------------------------------------- #
+# Trial duration (the time-to-bug censoring cutoff)
+#
+# The duration is not a timeout: crashes at or after it are ignored and a trial
+# with no earlier crash is censored at it. Analysing a 24h campaign with a 6h
+# cutoff silently reports every bug first found after hour 6 as "not found", so
+# the cutoff comes from what each trial recorded, not from a config default.
+# --------------------------------------------------------------------------- #
+
+DURATION_SRC_OVERRIDE = "override"
+DURATION_SRC_METADATA = "metadata"
+DURATION_SRC_EXPERIMENT_MAX = "experiment_max"
+DURATION_SRC_CONFIG = "config_default"
+
+_DURATION_SRC_LABELS = {
+    DURATION_SRC_OVERRIDE: "--duration override",
+    DURATION_SRC_METADATA: "trial metadata",
+    DURATION_SRC_EXPERIMENT_MAX: "max recorded in this experiment (trial recorded none)",
+    DURATION_SRC_CONFIG: "config.TRIAL_DURATION_SECS default (no trial recorded one)",
+}
+
+
+def recorded_trial_duration(metadata: Optional[dict]) -> Optional[int]:
+    """The configured run length a trial's metadata.json recorded, or None.
+
+    Reads `duration_seconds` (the -max_total_time the trial ran under), not
+    `duration_s`, which is the measured wall time and overshoots the cutoff.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("duration_seconds")
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def check_duration_override(override: Optional[int]) -> None:
+    """Reject a non-positive override instead of quietly replacing it.
+
+    A 0 cutoff used to fall through `or config.TRIAL_DURATION_SECS` and become
+    6h while the report still said "--duration override".
+    """
+    if override is not None and int(override) <= 0:
+        raise ValueError(
+            f"duration override must be a positive number of seconds, "
+            f"got {override!r}"
+        )
+
+
+def resolve_trial_duration(
+    recorded: Optional[int],
+    override: Optional[int] = None,
+    experiment_max: Optional[int] = None,
+) -> tuple[int, str]:
+    """Pick one trial's censoring cutoff and say where it came from.
+
+    Order: explicit override, then the trial's own metadata, then the longest
+    duration any trial of the experiment recorded, then the config default.
+    """
+    check_duration_override(override)
+    if override is not None:
+        return int(override), DURATION_SRC_OVERRIDE
+    if recorded:
+        return int(recorded), DURATION_SRC_METADATA
+    if experiment_max:
+        return int(experiment_max), DURATION_SRC_EXPERIMENT_MAX
+    return int(config.TRIAL_DURATION_SECS), DURATION_SRC_CONFIG
+
+
+def describe_duration_sources(sources: list[str]) -> str:
+    """Human summary of where a set of trials' durations came from."""
+    counts: dict[str, int] = {}
+    for src in sources:
+        counts[src] = counts.get(src, 0) + 1
+    if not counts:
+        return _DURATION_SRC_LABELS[DURATION_SRC_CONFIG]
+    if len(counts) == 1:
+        return _DURATION_SRC_LABELS.get(next(iter(counts)), next(iter(counts)))
+    return ", ".join(
+        f"{_DURATION_SRC_LABELS.get(src, src)} ({n} trials)"
+        for src, n in counts.items()
+    )
+
+
+def format_duration(durations: list[int], source: str) -> str:
+    """'24.0 hours (86400s, from trial metadata)', or a mixed range."""
+    durations = sorted(set(durations))
+    if not durations:
+        return f"unknown ({source})"
+    if len(durations) == 1:
+        d = durations[0]
+        return f"{d / 3600:.1f} hours ({d}s, from {source})"
+    return (
+        f"MIXED {durations[0] / 3600:.1f}-{durations[-1] / 3600:.1f} hours "
+        f"({', '.join(str(d) for d in durations)}s, from {source})"
+    )
+
+
+def _assign_times_to_bug(pending: list[tuple], duration: Optional[int]) -> None:
+    """Resolve every trial's cutoff, then compute its time-to-bug.
+
+    Runs after all trials are loaded because the fallback for a trial with no
+    recorded duration is the longest duration the rest of the experiment
+    recorded.
+    """
+    recorded = [rec for *_, rec in pending if rec]
+    experiment_max = max(recorded) if recorded else None
+
+    counts: dict[str, int] = {}
+    for variant_data, crash_times, crash_type, trial_dir, rec in pending:
+        trial_duration, source = resolve_trial_duration(
+            rec, override=duration, experiment_max=experiment_max,
+        )
+        counts[source] = counts.get(source, 0) + 1
+        variant_data["durations"].append(trial_duration)
+        variant_data["duration_sources"].append(source)
+        variant_data["times"].append(find_time_to_target_bug(
+            crash_times, crash_type, trial_dir, trial_duration=trial_duration,
+        ))
+
+    if not pending:
+        return
+    if duration is not None:
+        disagree = sorted({rec for rec in recorded if rec != duration})
+        if disagree:
+            logger.warning(
+                "--duration %ds overrides the %s s recorded by %d trial(s): "
+                "crashes at/after %ds are ignored and those trials are "
+                "censored there",
+                duration, "/".join(str(d) for d in disagree),
+                sum(1 for rec in recorded if rec != duration), duration,
+            )
+        return
+    if len(set(recorded)) > 1:
+        logger.warning(
+            "Trials recorded DIFFERENT durations (%s s); each trial is censored "
+            "at its own, so censored times are not comparable across trials",
+            "/".join(str(d) for d in sorted(set(recorded))),
+        )
+    if counts.get(DURATION_SRC_EXPERIMENT_MAX):
+        logger.warning(
+            "%d trial(s) recorded no duration; censoring them at %ds, the "
+            "longest duration recorded in this experiment",
+            counts[DURATION_SRC_EXPERIMENT_MAX], experiment_max,
+        )
+    if counts.get(DURATION_SRC_CONFIG):
+        logger.warning(
+            "!!! NO trial metadata recorded a duration: censoring all %d "
+            "trials at config.TRIAL_DURATION_SECS=%ds (%.1fh). Any bug first "
+            "found after that is reported NOT FOUND. Pass --duration with the "
+            "real run length. !!!",
+            counts[DURATION_SRC_CONFIG], config.TRIAL_DURATION_SECS,
+            config.TRIAL_DURATION_SECS / 3600,
+        )
+
+
 def load_trial_data(
     experiment_id: str, manifest: list[dict],
     duration: int = None,
 ) -> dict[str, dict]:
     """Load all trial data for an experiment.
 
+    `duration` overrides every trial's censoring cutoff. Leave it None to use
+    the duration each trial recorded in its metadata.json (see
+    resolve_trial_duration for the fallbacks).
+
     Returns dict keyed by "{project}-{cve}" with structure:
     {
-        "baseline": {"times": [...], "exec_s": [...], "coverage": [...]},
-        "optimized": {"times": [...], "exec_s": [...], "coverage": [...]},
+        "baseline": {"times": [...], "durations": [...],
+                     "duration_sources": [...], "exec_s": [...],
+                     "coverage": [...]},
+        "optimized": {...same...},
     }
+    `times`, `durations` and `duration_sources` are parallel, one per trial.
     """
+    check_duration_override(duration)
     results = {}
+    # One entry per trial, in load order: (variant data, crash_times,
+    # crash_type, trial_dir, recorded duration). Times are filled in once
+    # every trial's recorded duration is known.
+    pending: list[tuple] = []
 
     for entry in manifest:
         project = entry["project"]
@@ -164,12 +334,16 @@ def load_trial_data(
         data = {
             "baseline": {
                 "times": [],
+                "durations": [],
+                "duration_sources": [],
                 "exec_s": [],
                 "coverage": [],
                 "trial_data": [],
             },
             "optimized": {
                 "times": [],
+                "durations": [],
+                "duration_sources": [],
                 "exec_s": [],
                 "coverage": [],
                 "trial_data": [],
@@ -206,40 +380,27 @@ def load_trial_data(
                 else:
                     crash_times = []
 
-                # Load metadata for exec/s and duration detection
+                # Load metadata for exec/s and the recorded run length
                 metadata_path = os.path.join(trial_dir, "metadata.json")
-                trial_duration = duration or config.TRIAL_DURATION_SECS
+                recorded = None
                 if os.path.exists(metadata_path):
                     with open(metadata_path) as f:
                         metadata = json.load(f)
                     exec_s = extract_execs_per_second(metadata, trial_dir)
                     data[variant]["exec_s"].append(exec_s)
                     data[variant]["trial_data"].append(metadata)
-                    # Detect actual duration from metadata
-                    if duration is None:
-                        meta_duration = metadata.get("duration_seconds")
-                        if meta_duration:
-                            trial_duration = int(meta_duration)
+                    recorded = recorded_trial_duration(metadata)
 
-                # Find time to the target bug
-                time_to_bug = find_time_to_target_bug(
-                    crash_times, crash_type, trial_dir,
-                    trial_duration=trial_duration,
+                # Time to the target bug needs the cutoff, which may fall back
+                # to other trials' metadata -- resolved after the scan.
+                pending.append(
+                    (data[variant], crash_times, crash_type, trial_dir, recorded)
                 )
-                data[variant]["times"].append(time_to_bug)
 
                 # Load coverage data if available
                 coverage = load_coverage_data(trial_dir)
                 if coverage:
                     data[variant]["coverage"].append(coverage)
-
-        # Validate: log trial counts
-        for variant in ["baseline", "optimized"]:
-            n = len(data[variant]["times"])
-            if n == 0:
-                logger.warning("%s/%s: no trials for %s", project, cve, variant)
-            else:
-                logger.info("%s/%s: %d trials for %s", project, cve, n, variant)
 
         # Deterministic corpus-replay speedup recorded in phase 2 (headline
         # throughput metric; apples-to-apples, unlike live exec/s).
@@ -254,6 +415,23 @@ def load_trial_data(
                 logger.warning("Could not read replay metric for %s: %s", key, exc)
 
         results[key] = data
+
+    _assign_times_to_bug(pending, duration)
+
+    # Validate: log trial counts and the cutoff each CVE was censored at
+    for key, data in results.items():
+        for variant in ["baseline", "optimized"]:
+            n = len(data[variant]["times"])
+            if n == 0:
+                logger.warning("%s: no trials for %s", key, variant)
+            else:
+                logger.info(
+                    "%s: %d trials for %s, duration %s", key, n, variant,
+                    format_duration(
+                        data[variant]["durations"],
+                        describe_duration_sources(data[variant]["duration_sources"]),
+                    ),
+                )
 
     return results
 
@@ -273,7 +451,14 @@ def find_time_to_target_bug(
     bug signature; the reproduction-based signature match lives in
     crash_classify.verify_crash_reproduces for when the binary is available.
     """
-    censored = float(trial_duration or config.TRIAL_DURATION_SECS)
+    if trial_duration is None:
+        trial_duration = config.TRIAL_DURATION_SECS
+    elif trial_duration <= 0:
+        raise ValueError(
+            f"trial_duration must be a positive number of seconds, "
+            f"got {trial_duration!r}"
+        )
+    censored = float(trial_duration)
     ttb = crash_classify.trial_time_to_bug(crash_times, censored)
     return ttb if ttb is not None else censored
 
@@ -368,13 +553,27 @@ def analyze_cve(
     baseline_stats = stats_util.summary_stats(baseline_times)
     optimized_stats = stats_util.summary_stats(optimized_times)
 
-    # Detect actual trial duration from the data
-    trial_dur = duration or config.TRIAL_DURATION_SECS
-    # If all times equal a round number, that's likely the censored duration
-    all_times = baseline_times + optimized_times
-    max_time = max(all_times) if all_times else trial_dur
-    if max_time < trial_dur:
-        trial_dur = int(max_time) if max_time == int(max_time) else trial_dur
+    # Each trial's censoring cutoff, as load_trial_data resolved it. A trial
+    # found the bug iff its time is below its OWN cutoff: comparing against
+    # one shared value miscounts as soon as two trials ran different lengths.
+    # `duration` is only the fallback for data that carries no per-trial
+    # cutoffs (callers building `data` by hand).
+    fallback_dur, fallback_src = resolve_trial_duration(None, override=duration)
+    per_variant_durs = {}
+    duration_sources = []
+    for variant, times in (("baseline", baseline_times),
+                           ("optimized", optimized_times)):
+        durs = data[variant].get("durations") or []
+        srcs = data[variant].get("duration_sources") or []
+        if len(durs) != len(times):
+            durs = [fallback_dur] * len(times)
+            srcs = [fallback_src] * len(times)
+        per_variant_durs[variant] = durs
+        duration_sources.extend(srcs)
+    all_durs = per_variant_durs["baseline"] + per_variant_durs["optimized"]
+    trial_dur = max(all_durs)
+    trial_durations = sorted(set(all_durs))
+    duration_source = describe_duration_sources(duration_sources)
 
     # Parse project/cve from key like "json-c-OSV-2020-252" or "re2-CVE-2019-18224"
     # The CVE/OSV ID follows a known pattern; everything before it is the project name.
@@ -402,12 +601,17 @@ def analyze_cve(
         "baseline_stats": baseline_stats,
         "optimized_stats": optimized_stats,
         "baseline_found_bug": sum(
-            1 for t in baseline_times if t < trial_dur
+            1 for t, d in zip(baseline_times, per_variant_durs["baseline"])
+            if t < d
         ),
         "optimized_found_bug": sum(
-            1 for t in optimized_times if t < trial_dur
+            1 for t, d in zip(optimized_times, per_variant_durs["optimized"])
+            if t < d
         ),
+        # Longest cutoff; `trial_durations` lists every distinct one.
         "trial_duration": trial_dur,
+        "trial_durations": trial_durations,
+        "trial_duration_source": duration_source,
     }
 
     # Generate plots
@@ -419,13 +623,16 @@ def analyze_cve(
         optimized_times, baseline_times,
         title=f"Time to Bug: {key}",
         output_path=os.path.join(project_report_dir, "time_to_bug_boxplot.png"),
+        duration_secs=trial_dur,
     )
 
-    # Survival curve
+    # Survival curve. The plot takes one cutoff; with mixed durations the
+    # shortest never marks a censored trial as a find (it can only under-count).
     stats_util.plot_survival_curve(
         optimized_times, baseline_times,
         title=f"Survival Curve: {key}",
         output_path=os.path.join(project_report_dir, "survival_curve.png"),
+        duration_secs=trial_durations[0],
     )
 
     # Exec/s comparison
@@ -507,8 +714,27 @@ def generate_report(
         for r in results
     )
 
-    # Detect actual trial duration from results
-    trial_dur = results[0].get("trial_duration", config.TRIAL_DURATION_SECS) if results else config.TRIAL_DURATION_SECS
+    # The censoring cutoff every CVE was analysed with, and where it came from.
+    # Results predating per-trial durations carry only `trial_duration`.
+    def _result_duration(r):
+        durs = r.get("trial_durations") or [
+            r.get("trial_duration", config.TRIAL_DURATION_SECS)
+        ]
+        src = r.get("trial_duration_source", "unrecorded source")
+        return format_duration(durs, src)
+
+    cve_durations = [_result_duration(r) for r in results]
+    mixed_durations = len(set(cve_durations)) > 1
+    duration_line = (
+        "MIXED across CVEs -- see each CVE below" if mixed_durations
+        else (cve_durations[0] if cve_durations
+              else format_duration([config.TRIAL_DURATION_SECS],
+                                   _DURATION_SRC_LABELS[DURATION_SRC_CONFIG]))
+    )
+    used_config_default = any(
+        _DURATION_SRC_LABELS[DURATION_SRC_CONFIG] in r.get("trial_duration_source", "")
+        for r in results
+    )
     trial_count = results[0].get("baseline_stats", {}).get("n", config.NUM_TRIALS) if results else config.NUM_TRIALS
 
     # Compute aggregate exec/s stats (secondary diagnostic only)
@@ -530,14 +756,25 @@ def generate_report(
         f"",
         f"**Experiment ID**: {experiment_id}",
         f"**Trials per variant**: {trial_count}",
-        f"**Duration per trial**: {trial_dur / 3600:.1f} hours",
+        f"**Duration per trial**: {duration_line}",
         f"**Engine**: {config.ENGINE}",
         f"**Sanitizer**: {config.SANITIZER}",
         f"",
+    ]
+    if used_config_default:
+        report_lines.extend([
+            f"> **WARNING**: no trial metadata recorded a run length, so trials "
+            f"were censored at the config default "
+            f"({config.TRIAL_DURATION_SECS / 3600:.1f}h). Any bug first found "
+            f"after that is counted as NOT FOUND. Re-run with --duration set "
+            f"to the real trial length.",
+            f"",
+        ])
+    report_lines.extend([
         f"## Summary",
         f"",
         f"- **CVEs tested**: {len(results)}",
-    ]
+    ])
 
     # Lead with the headline throughput metric: deterministic corpus replay.
     if replay_results:
@@ -565,7 +802,7 @@ def generate_report(
             f"- **Large effect size (A12 >= 0.71)**: {len(large_effect)}/{len(results)}",
         ])
     else:
-        report_lines.append(f"- **Bugs found**: 0/{len(results)} CVEs (neither baseline nor optimized found bugs in {trial_dur/3600:.1f}h)")
+        report_lines.append(f"- **Bugs found**: 0/{len(results)} CVEs (neither baseline nor optimized found bugs within {duration_line})")
 
     report_lines.extend([
         f"",
@@ -577,14 +814,15 @@ def generate_report(
         f"",
     ])
 
-    for r in results:
-        cve_dur = r.get("trial_duration", config.TRIAL_DURATION_SECS)
+    for r, cve_duration in zip(results, cve_durations):
         found_bug = r.get("baseline_found_bug", 0) > 0 or r.get("optimized_found_bug", 0) > 0
 
         report_lines.extend([
             f"### {r['project']} ({r['cve']})",
             f"",
         ])
+        if mixed_durations or len(r.get("trial_durations") or []) > 1:
+            report_lines.append(f"- Trial duration: {cve_duration}")
 
         # Lead with the headline deterministic replay speedup.
         if "replay_speedup" in r:
@@ -663,8 +901,14 @@ def main():
         help="Experiment ID",
     )
     parser.add_argument(
-        "--duration", type=int, default=config.TRIAL_DURATION_SECS,
-        help=f"Trial duration in seconds (default: {config.TRIAL_DURATION_SECS})",
+        "--duration", type=int, default=None,
+        help=(
+            "Time-to-bug censoring cutoff in seconds: crashes at/after it are "
+            "ignored. Default: the run length each trial recorded in its "
+            "metadata.json (falling back to the longest recorded, then "
+            f"{config.TRIAL_DURATION_SECS}s with a warning). Set it only to "
+            "override, e.g. to truncate a 24h campaign at 6h."
+        ),
     )
     parser.add_argument(
         "--output-dir", default=None,
@@ -675,6 +919,8 @@ def main():
         help="Only analyze a specific project",
     )
     args = parser.parse_args()
+    if args.duration is not None and args.duration <= 0:
+        parser.error("--duration must be a positive number of seconds")
 
     with open(args.manifest) as f:
         manifest = json.load(f)
@@ -713,7 +959,8 @@ def main():
             f"  {sig} {r['project']}: "
             f"speedup={r.get('speedup', 'N/A')}x, "
             f"p={r['p_value']:.4f}, "
-            f"A12={r['a12']:.3f} ({r['a12_label']})"
+            f"A12={r['a12']:.3f} ({r['a12_label']}), "
+            f"duration={format_duration(r['trial_durations'], r['trial_duration_source'])}"
         )
     print(f"\n  Report: {report_dir}/report.md")
     print()

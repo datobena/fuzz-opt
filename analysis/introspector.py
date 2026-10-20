@@ -521,7 +521,7 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     info = lec.discover(args.experiment)
-    image = lec.resolve_image(info["cve"], args.image)
+    image = lec.resolve_image(info["cve"], args.image, info)
     lec.scope_cache(info["cve"])
     target = args.target or (info.get("provenance") or {}).get("fuzz_target", "")
     if not target:

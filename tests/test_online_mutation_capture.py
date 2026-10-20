@@ -44,8 +44,8 @@ def test_capture_trials_load_the_shim(monkeypatch, tmp_path):
     joined = " ".join(_launch(monkeypatch, _trial(capture=True), tmp_path))
     assert "AFL_CUSTOM_MUTATOR_LIBRARY" in joined
     assert "MUTATION_DUMP_DIR=/mutations" in joined
-    # Default is prefix; reservoir is switched in via ONLINE_MUTATION_MODE.
-    assert "MUTATION_DUMP_MODE=prefix" in joined
+    # Default is reservoir; prefix is switched in via ONLINE_MUTATION_MODE.
+    assert "MUTATION_DUMP_MODE=reservoir" in joined
 
 
 def test_non_capture_trials_are_untouched(monkeypatch, tmp_path):

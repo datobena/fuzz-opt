@@ -35,7 +35,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 
 import config
-from prework.prework_build import prework_image_for
+from lib.provenance import experiment_image
 import phase3_k8s as p3
 from lib import crash_classify as cc
 
@@ -75,13 +75,17 @@ def _locate_artifact(trial_dir: str, name: str) -> str | None:
     return None
 
 
-def _target_image(project: str) -> str:
-    """Prework image for a project, falling back to the base runner."""
+def _target_image(project: str, cve_dir: str | None = None) -> str:
+    """The image the experiment ran with (provenance), else the prework image,
+    else the legacy tag, falling back to the base runner."""
     try:
         entry = next(e for e in json.loads(Path(config.MANIFEST_PATH).read_text())
                      if e["project"] == project)
-        return prework_image_for(entry)
     except Exception:  # noqa: BLE001 - a verification tool must not die on lookup
+        entry = None
+    try:
+        return experiment_image(cve_dir, entry) or cc.RUNNER_IMAGE
+    except Exception:  # noqa: BLE001
         return cc.RUNNER_IMAGE
 
 
@@ -163,7 +167,7 @@ def main():
             crashed, detected = cc.verify_crash_reproduces(
                 art, out_dir, ftgt.get(project, ""),
                 expected_signature=None, timeout=a.timeout,
-                image=_target_image(project))
+                image=_target_image(project, os.path.join(exp_dir, key)))
             if not crashed:
                 gold[k]["no_repro"] += 1
                 continue

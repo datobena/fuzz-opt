@@ -615,3 +615,171 @@ def test_run_phase_trials_dispatches_to_k8s(monkeypatch):
     assert run_benchmark._phase3_backend() == "k8s"
     monkeypatch.setattr(config, "PHASE3_BACKEND", "local")
     assert run_benchmark._phase3_backend() == "local"
+
+
+def _online_phase3(monkeypatch, tmp_path, run_online):
+    """run_phase_trials on the online path with run_online stubbed; returns
+    (ok, state, results_path) for experiment "exp"."""
+    import config
+    import phase3_online
+    import phase3_runner
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([{"project": "mruby", "cve": "fb-mruby",
+                                     "fuzz_target": "t"}]))
+    monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "MANIFEST_PATH", str(manifest))
+    monkeypatch.setattr(config, "ONLINE_ENABLED", True)
+    monkeypatch.setenv("PHASE3_BACKEND", "local")
+    monkeypatch.setattr(phase3_online, "run_online", run_online)
+    monkeypatch.setattr(phase3_runner, "collect_all_trial_results",
+                        lambda exp: [{"trial": "new"}])
+    results = tmp_path / "exp" / "trial_results.json"
+    results.parent.mkdir(parents=True)
+    results.write_text('[{"trial": "old campaign"}]')
+    state = {"phases_completed": [], "errors": []}
+    ok = run_benchmark.run_phase_trials("exp", state, duration=60, max_parallel=1,
+                                        project="mruby")
+    return ok, state, results
+
+
+def test_online_phase3_refusal_fails_the_phase(monkeypatch, tmp_path):
+    """run_online's False (e.g. a reused experiment id) is a failure: the old
+    campaign's trial_results.json survives, phase 3 is not marked complete, and
+    main() exits non-zero on the False."""
+    ok, state, results = _online_phase3(monkeypatch, tmp_path,
+                                        lambda entry, exp, duration=None: False)
+    assert ok is False
+    assert 3 not in state["phases_completed"]
+    assert json.loads(results.read_text()) == [{"trial": "old campaign"}]
+    assert state["errors"] and state["errors"][-1]["phase"] == 3
+
+
+def test_online_phase3_exception_fails_the_phase(monkeypatch, tmp_path):
+    def boom(entry, exp, duration=None):
+        raise RuntimeError("setup died")
+    ok, state, results = _online_phase3(monkeypatch, tmp_path, boom)
+    assert ok is False and 3 not in state["phases_completed"]
+    assert json.loads(results.read_text()) == [{"trial": "old campaign"}]
+
+
+def test_online_phase3_success_writes_results_and_completes(monkeypatch, tmp_path):
+    ok, state, results = _online_phase3(monkeypatch, tmp_path,
+                                        lambda entry, exp, duration=None: True)
+    assert ok is True and 3 in state["phases_completed"]
+    assert json.loads(results.read_text()) == [{"trial": "new"}]
+
+
+# --------------------------------------------------------------------------- #
+# --duration: phase 3 needs a run length (config default when not given);
+# phase 4 must get it ONLY when given, else it overrides every trial's recorded
+# length and cuts a 24h campaign at 6h.
+# --------------------------------------------------------------------------- #
+
+def _run_main(monkeypatch, tmp_path, argv, state=None):
+    """main() with phases 3/4 stubbed; returns {phase: duration passed}."""
+    import config
+    monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "TRIAL_DURATION_SECS", 21600)
+    monkeypatch.setattr(config, "ONLINE_ENABLED", False)
+    monkeypatch.setenv("PHASE3_BACKEND", "local")
+    if state is not None:
+        (tmp_path / "exp").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "exp" / config.STATE_FILE).write_text(json.dumps(state))
+    seen = {}
+
+    def fake_trials(experiment_id, state, duration, max_parallel,
+                    resume=False, project=None):
+        seen[3] = duration
+        return True
+
+    def fake_analysis(experiment_id, state, duration=None, project=None):
+        seen[4] = duration
+        return True
+
+    monkeypatch.setattr(run_benchmark, "run_phase_trials", fake_trials)
+    monkeypatch.setattr(run_benchmark, "run_phase_analysis", fake_analysis)
+    monkeypatch.setattr(sys, "argv",
+                        ["run_benchmark.py", "--experiment-id", "exp", *argv])
+    run_benchmark.main()
+    return seen
+
+
+def test_phase4_alone_gets_no_duration_override(monkeypatch, tmp_path):
+    assert _run_main(monkeypatch, tmp_path, ["--phase", "4"]) == {4: None}
+
+
+def test_skip_setup_keeps_phase3_default_and_phase4_uses_metadata(
+    monkeypatch, tmp_path
+):
+    seen = _run_main(monkeypatch, tmp_path, ["--skip-setup"])
+    assert seen == {3: 21600, 4: None}
+
+
+def test_resume_into_phase4_gets_no_duration_override(monkeypatch, tmp_path):
+    state = {"experiment_id": "exp", "phases_completed": [1, 2, 3],
+             "current_phase": None, "started_at": "x", "errors": []}
+    seen = _run_main(monkeypatch, tmp_path, ["--resume"], state=state)
+    assert seen == {4: None}
+
+
+def test_explicit_duration_reaches_both_phases(monkeypatch, tmp_path):
+    seen = _run_main(monkeypatch, tmp_path,
+                     ["--skip-setup", "--duration", "86400"])
+    assert seen == {3: 86400, 4: 86400}
+
+
+def test_online_pertrial_invocation_passes_duration_to_phase3(
+    monkeypatch, tmp_path
+):
+    # What run_online_pertrial.sh runs: --online --phase 3 --duration $DURATION.
+    seen = _run_main(monkeypatch, tmp_path, [
+        "--online", "--phase", "3", "--project", "mruby",
+        "--duration", "86400",
+    ])
+    assert seen == {3: 86400}
+
+
+def test_phase3_without_duration_uses_config_default(monkeypatch, tmp_path):
+    assert _run_main(monkeypatch, tmp_path, ["--phase", "3"]) == {3: 21600}
+
+
+def test_non_positive_duration_is_rejected(monkeypatch, tmp_path):
+    import pytest
+    for bad in ("0", "-5"):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(monkeypatch, tmp_path, ["--phase", "4", "--duration", bad])
+        assert exc.value.code == 2
+
+
+def test_phase4_on_24h_campaign_counts_late_finds(monkeypatch, tmp_path):
+    """End to end: `run_benchmark.py --phase 4` on 24h trials cuts at 24h."""
+    import config
+    key = "demo-CVE-0000-0009"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([
+        {"project": "demo", "cve": "CVE-0000-0009", "crash_type": "crash"},
+    ]))
+    monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "MANIFEST_PATH", str(manifest))
+    monkeypatch.setattr(config, "TRIAL_DURATION_SECS", 21600)
+    for variant, crash_ts in (("baseline", 36000.0), ("optimized", 600.0)):
+        trial_dir = tmp_path / "exp" / key / variant / "trial_00"
+        trial_dir.mkdir(parents=True)
+        (trial_dir / "crash_times.json").write_text(json.dumps([{
+            "timestamp_s": crash_ts, "artifact": "crash-" + "0" * 40,
+            "crash_type": "crash",
+        }]))
+        (trial_dir / "metadata.json").write_text(json.dumps({
+            "duration_s": 86400.5, "duration_seconds": 86400,
+            "final_stats": {"total_execs": 100, "final_exec_s": 10},
+        }))
+    monkeypatch.setattr(sys, "argv",
+                        ["run_benchmark.py", "--experiment-id", "exp",
+                         "--phase", "4"])
+    run_benchmark.main()
+
+    results = json.loads(
+        (tmp_path / "exp" / "report" / "results.json").read_text())
+    assert results[0]["trial_duration"] == 86400
+    assert results[0]["trial_duration_source"] == "trial metadata"
+    assert results[0]["baseline_found_bug"] == 1

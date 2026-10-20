@@ -1,4 +1,4 @@
-# Copyright 2020 Google LLC
+# Copyright 2018 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,45 +14,28 @@
 #
 ################################################################################
 
-ARG BASE
-FROM ${BASE}
-
-# ---- pinned toolchain (grafted from prework/targets/*) ----------------------
-# FuzzBench pins base-builder to an older digest and inherits whatever AFL++ that
-# image ships. Replace it with the benchmark's OWN pinned source built against
-# our base + AFL++ v5.02c, so this answers "does it build on the newest AFL++".
-# LLVM_VERSION is NOT set in base-builder -- the prework targets declare it as an
-# ARG, and without it the package names expand to "clang-" and apt exits 100.
-ARG LLVM_VERSION=18
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        make cmake autoconf automake libtool pkg-config python3 wget zip unzip \
-        bison flex gawk gettext texinfo nasm yasm ninja-build file \
-    && rm -rf /var/lib/apt/lists/*
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        "clang-${LLVM_VERSION}" "llvm-${LLVM_VERSION}-dev" \
-        "libclang-${LLVM_VERSION}-dev" "lld-${LLVM_VERSION}" \
-        "libc++-${LLVM_VERSION}-dev" "libc++abi-${LLVM_VERSION}-dev" \
-        "libclang-rt-${LLVM_VERSION}-dev" \
-    && rm -rf /var/lib/apt/lists/*
-RUN rm -rf "$SRC/aflplusplus" && \
-    git clone --depth 1 --branch "v5.02c" \
-        https://github.com/AFLplusplus/AFLplusplus "$SRC/aflplusplus" && \
-    cd "$SRC/aflplusplus" && \
-    unset CFLAGS CXXFLAGS && \
-    LLVM_CONFIG="llvm-config-${LLVM_VERSION}" make -j"$(nproc)" source-only; \
-    test -f libAFLDriver.a && test -x afl-fuzz && test -x afl-showmap && \
-    test -x afl-clang-fast
-
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 RUN apt-get update && apt-get install -y make cmake
 RUN apt-get update && apt-get install -y \
     python-all-dev \
     python3-all-dev \
     python3-pip  && \
-    ln -sf /usr/local/bin/pip3 /usr/local/bin/pip
+    ln -s /usr/local/bin/pip3 /usr/local/bin/pip
 
-RUN git clone --recursive -b development https://github.com/Mbed-TLS/mbedtls.git mbedtls && git -C mbedtls checkout 7c6b0e4464e1c39b2cfc572ac6bd0674a104ffc5
+RUN git clone --recursive -b development https://github.com/Mbed-TLS/mbedtls.git mbedtls
 
 RUN git clone --depth 1 https://github.com/google/boringssl.git boringssl
 RUN git clone --recursive https://github.com/openssl/openssl.git openssl
+# fuzz-opt deviation: pin boringssl to 671ccb1a98fae26bf9c115068b2993418cecc800 (2022-10-22) and openssl to
+# e251e7ba1ce85d11f3c342b3ae1326a35b7d0b4a (2022-10-25), nearest to benchmark commit_date -- upstream clones HEAD.
+# build.sh cp's their fuzz corpora under `bash -e`, so a layout change at HEAD breaks it.
+# openssl: -f because HEAD's fuzz/corpora submodule sits where the pinned tree has
+# tracked files (same `checkout -f` checkout_commit.py uses). --checkout: gost-engine
+# is `update = rebase` in .gitmodules, which needs a git identity; a plain checkout
+# of the recorded gitlink is what the upstream --recursive clone gives.
+RUN git -C boringssl fetch --depth 1 origin 671ccb1a98fae26bf9c115068b2993418cecc800 && \
+    git -C boringssl checkout FETCH_HEAD && \
+    git -C openssl checkout -f e251e7ba1ce85d11f3c342b3ae1326a35b7d0b4a && \
+    git -C openssl submodule update --init --recursive --checkout --force
 WORKDIR mbedtls
 COPY build.sh $SRC/

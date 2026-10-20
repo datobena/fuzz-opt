@@ -24,6 +24,15 @@ MEMORY_LIMIT_RETRY = "8g"
 RSS_LIMIT_MB = 3072
 MAX_FAILED_TRIALS = 3  # If more than this many trials fail, exclude CVE
 
+# afl-fuzz -t value for every fuzzing launch. "1000" is a FIXED 1 s per-exec
+# timeout: what FuzzBench's `-t 1000+` meant when it was written (classic AFL and
+# AFL++ <= 4.10c kept the timeout fixed; '+' only skipped seeds that time out at
+# startup). AFL++ 4.20c changed '+' to auto-pick 1.2x the slowest seed, capped at
+# the value and floored at 5 ms -- on bloaty that killed 76% of executions. Modern
+# AFL++ skips timing-out seeds whenever any -t is given, so plain "1000" is the old
+# `1000+` exactly. "5000+" reproduces the campaigns run before 2026-10-10.
+AFL_TIMEOUT_FLAG = os.environ.get("BENCHMARK_AFL_TIMEOUT", "1000")
+
 # Sanitizer options for every FUZZING run (trials, preflight smoke, mutation
 # capture): FuzzBench's bug-benchmark fuzz-run set, byte for byte
 # (common/sanitizer.py, set_sanitizer_options(is_fuzz_run=True)). The option that
@@ -288,6 +297,15 @@ OPTIMIZER_BACKEND = os.environ.get("BENCHMARK_OPTIMIZER", "claude").lower()
 # ~8 points (Opus 4.6: 33.33 default vs 41.18 high) -- larger than the gap
 # between adjacent model generations, so an unpinned effort would confound
 # any model comparison.
+#
+# REALITY CHECK (2026-10): that rationale argued for 4.8, but the online runs
+# did NOT use it. run_online_pertrial.sh exported BENCHMARK_CLAUDE_MODEL=opus
+# (an ALIAS), overriding this default, and the CLI resolved `opus` to
+# `claude-opus-5` at runtime (confirmed from the agent transcripts). Provenance
+# recorded the literal "opus", so this axis was effectively unpinned. The
+# online-24h-bug-{mruby,php-src,mbedtls} campaigns therefore ran claude-opus-5.
+# The launcher now pins a full id instead; always pass an explicit id for a
+# model comparison (e.g. claude-opus-4-8 vs claude-opus-5 vs claude-opus-5-5).
 PHASE2_CLAUDE_MODEL = os.environ.get("BENCHMARK_CLAUDE_MODEL", "claude-opus-4-8")
 PHASE2_CLAUDE_EFFORT = os.environ.get("BENCHMARK_CLAUDE_EFFORT", "xhigh")
 
@@ -334,6 +352,12 @@ ONLINE_ENABLED = os.environ.get("ONLINE_ENABLED", "0") == "1"
 # Minimum fuzz-time between binary swaps (rounds run sequentially; the optimizer
 # itself can take up to PHASE2_OPTIMIZER_TIMEOUT_SECS, so this is a floor).
 ONLINE_SWAP_INTERVAL_SECS = int(os.environ.get("ONLINE_SWAP_INTERVAL_SECS", "3600"))
+# Do not START a new optimizer round when fewer than this many seconds remain in
+# the fuzzing budget (default 1h). A round begun that late would finish after the
+# trials terminate, so its binary could never be hot-swapped in -- it would only
+# spend agent/API cost and stretch the wind-down. In-flight rounds are also capped
+# to the budget end (phase2_setup.optimize_and_build(deadline=...)). 0 disables.
+ONLINE_ROUND_MIN_LEAD_SECS = int(os.environ.get("ONLINE_ROUND_MIN_LEAD_SECS", "3600"))
 # Stop attempting new rounds after this many consecutive rounds produce no accepted
 # fold; fuzzing continues to the end of the budget regardless.
 # 0 (the default) never stops early -- rounds run until the trials terminate. A
@@ -350,6 +374,23 @@ ONLINE_SNAPSHOT_TRIAL_SELECTOR = os.environ.get("ONLINE_SNAPSHOT_TRIAL_SELECTOR"
 # per project in a parallel multi-project run so the timing gates don't collide on one
 # core. Default: the top reserved core. Empty -> RESERVED_CORES-1.
 ONLINE_PROFILE_CPU = os.environ.get("ONLINE_PROFILE_CPU", "")
+# Cpuset (e.g. "2-39") for the builds campaign SETUP runs before any trial starts:
+# extraction build, AFL baseline, ccache template (+ its noise build), noise-floor
+# rebuilds. build.sh's `make -j$(nproc)` sees the whole set, like FuzzBench's own
+# all-core builds. Only the builds: setup's replays and PoC checks stay on
+# ONLINE_PROFILE_CPU. A setup build that fails multi-core is retried once on
+# ONLINE_PROFILE_CPU (parallel-make races, e.g. woff2). Empty -> ONLINE_PROFILE_CPU.
+ONLINE_SETUP_BUILD_CPUS = os.environ.get("ONLINE_SETUP_BUILD_CPUS", "")
+# Cpuset for the sandboxed AGENT container (the Claude CLI, plus whatever it runs
+# in there -- the image has gcc). The broker already pins the agent's builds,
+# smokes and replays to its profile core; the container itself was unpinned, so
+# it could run on a trial core (stealing the cycles the arms are compared on) or
+# on a profile core mid-replay (skewing the gate). Empty -> derived: the host's
+# physical cores minus ONLINE_TRIAL_CORES and ONLINE_OPTIMIZER_CORES and their
+# hyperthread siblings (sandbox.session.resolve_agent_cpus; 0-1,32-39 under
+# run_online_pertrial.sh's layout). An empty derived set, or an explicit set that
+# touches a trial core, is an error: the agent never runs unpinned.
+ONLINE_AGENT_CPUS = os.environ.get("ONLINE_AGENT_CPUS", "")
 # (Removed) The soft attempt ledger's re-open thresholds. No mechanism skips or
 # re-opens a function any more -- the optimizer sees the current profile and may
 # retry any fold, including ones it previously reverted. See phase3_online.py.
@@ -362,18 +403,13 @@ ONLINE_LIVE_MUTATION_CAPTURE = os.environ.get(
     "ONLINE_LIVE_MUTATION_CAPTURE", "1") == "1"
 # reservoir = uniform over the whole inter-round window; prefix = first N only.
 #
-# Default is "prefix" as the initial configuration, with reservoir to be trialled
-# as a comparison. Both cost the same (benchmarked 7743 vs 7764 execs/s, 0.3%
-# apart against a ~30% within-mode spread), so this is a sampling-bias choice,
-# not a performance one.
-#
-# The bias is worth stating: at ~7k exec/s a 20k buffer fills in roughly 3
-# seconds, so prefix profiles the first ~3s of each inter-round window -- and
-# those are the seconds just after a hot-swap, while AFL re-calibrates its queue.
-# Over many rounds the sampled moments are spread across the campaign, which is
-# the argument for it being acceptable. Switch with ONLINE_MUTATION_MODE=reservoir
-# to compare hotspot rankings.
-ONLINE_MUTATION_MODE = os.environ.get("ONLINE_MUTATION_MODE", "prefix")
+# Default is reservoir: the profile should cover the whole window the current
+# binary fuzzed. Both modes cost the same (benchmarked 7743 vs 7764 execs/s, 0.3%
+# apart against a ~30% within-mode spread), so this is a sampling-bias choice.
+# Prefix is biased: at ~7k exec/s a 20k buffer fills in roughly 3 seconds, so it
+# profiles the first ~3s of each window -- the seconds just after a hot-swap,
+# while AFL re-calibrates its queue. ONLINE_MUTATION_MODE=prefix to compare.
+ONLINE_MUTATION_MODE = os.environ.get("ONLINE_MUTATION_MODE", "reservoir")
 
 # --- per-trial optimizer experiment (one project per experiment) -----------
 # Each optimized trial runs its OWN optimizer against its OWN source tree and
@@ -385,20 +421,27 @@ ONLINE_MUTATION_MODE = os.environ.get("ONLINE_MUTATION_MODE", "prefix")
 # independent optimizer draws.
 ONLINE_PER_TRIAL_OPTIMIZER = os.environ.get("ONLINE_PER_TRIAL_OPTIMIZER", "1") == "1"
 
-# Profiling corpus for optimizer i is trial i's OWN mutations, harvested once
-# and then held FIXED for every round that optimizer runs. Two consequences,
-# both intended: the "which trial do we snapshot" question disappears (it is
-# always the optimizer's own trial), and a given optimizer profiles against a
-# stationary workload, so a round-to-round speedup difference is attributable
-# to the edit rather than to the corpus having moved underneath it.
+# Profiling corpus for optimizer i is always trial i's OWN mutations. Off (the
+# default): every round harvests a fresh reservoir sample of what the trial ran
+# since its last dump or restart -- i.e. the current best binary's inter-round
+# window -- so each round optimizes the workload the fuzzer is executing NOW.
+# On: the first harvest is pinned and reused by every later round (a stationary
+# workload, so round-to-round speedups compare directly, but later rounds never
+# see the grown corpus). Each round's gate is measured against the previous best
+# on that round's own corpus, so acceptance is valid either way.
 ONLINE_FIXED_MUTATION_CORPUS = os.environ.get(
-    "ONLINE_FIXED_MUTATION_CORPUS", "1") == "1"
+    "ONLINE_FIXED_MUTATION_CORPUS", "0") == "1"
 
-# Optimization level for TARGET builds, applied identically to both arms.
-# "" keeps the OSS-Fuzz default (-O1, see base-builder's CFLAGS). "O3" rebuilds
-# both arms at -O3. This is a measurement-affecting knob, not a tuning one: the
-# whole b1..b6 corpus was produced at -O1, so a run at -O3 is comparable only to
-# other -O3 runs. Recorded in campaign provenance for exactly that reason.
+# Optimization-level OVERRIDE for ARVO target builds. "" (the default, and the
+# launcher's default) builds each target the way its benchmark does: the image's
+# own CFLAGS and build.sh exactly as ARVO/OSS-Fuzz compiled it (-O1 for these
+# sanitizer builds). "O3" rebuilds at -O3 instead -- both arms AND every agent
+# build through the broker, since all ARVO build paths share one env
+# (prework_build.arvo_compile_args). FuzzBench targets ignore it entirely (their
+# level is FuzzBench's own, FUZZBENCH_OPT_LEVEL below). A measurement-affecting
+# knob, not a tuning one: runs are comparable only at the same level, so campaign
+# provenance records the level that actually ran (prework_build.
+# build_opt_provenance).
 BUILD_OPT_LEVEL = os.environ.get("BUILD_OPT_LEVEL", "")
 
 # Seconds of offset between consecutive optimizers' first rounds. Without it all
@@ -550,4 +593,48 @@ PROVENANCE_CLASSIFY_ASAN_OPTIONS = os.environ.get(
 # number two campaigns of null results were uninterpretable.
 # Cost: one extra pristine rebuild per campaign (42s on assimp, ~570s on
 # graphicsmagick) plus two replay passes. Set 0 to skip.
-PROVENANCE_NOISE_FLOOR = _int_env("PROVENANCE_NOISE_FLOOR", 2)
+# Off by default (Oct 13): at setup there are no harvested mutations yet, so it
+# replays the seed corpus (1 file on mbedtls) and mostly times container startup;
+# nothing reads the result, and on php the two rebuilds cost ~3h on one core.
+# Re-enable once it measures round 1's harvested batch instead.
+PROVENANCE_NOISE_FLOOR = _int_env("PROVENANCE_NOISE_FLOOR", 0)
+
+
+# --- FuzzBench run parity ---
+# Run-side constants for manifest entries with "kind": "fuzzbench" (see
+# lib/afl_launch.py). ARVO launches never read these.
+# AFL_* env at fuzz time under FuzzBench's aflplusplus runner, in the order it is
+# set: runner.Dockerfile ENV, afl/fuzzer.py prepare_fuzz_environment, then
+# aflplusplus/fuzzer.py fuzz() (skip=False). Duplicates collapsed.
+FUZZBENCH_AFL_ENV = (
+    ("AFL_NO_UI", "1"),
+    ("AFL_SKIP_CPUFREQ", "1"),
+    ("AFL_NO_AFFINITY", "1"),
+    ("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1"),
+    ("AFL_SKIP_CRASHES", "1"),
+    ("AFL_SHUFFLE_QUEUE", "1"),
+    ("AFL_IGNORE_UNKNOWN_ENVS", "1"),
+    ("AFL_FAST_CAL", "1"),
+    ("AFL_NO_WARN_INSTABILITY", "1"),
+    ("AFL_DISABLE_TRIM", "1"),
+    ("AFL_CMPLOG_ONLY_NEW", "1"),
+    ("AFL_TESTCACHE_SIZE", "2"),
+)
+# runner.Dockerfile: ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/out" (empty base ->
+# ":/out") and PATH=$PATH:/out over ubuntu:focal's default PATH.
+FUZZBENCH_LD_LIBRARY_PATH = ":/out"
+FUZZBENCH_RUN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/out"
+# Trailing target argument: INT_MAX persistent iterations (afl/fuzzer.py).
+FUZZBENCH_PERSISTENT_ARG = "2147483647"
+# experiment/runner.py CORPUS_ELEMENT_BYTES_LIMIT: seeds above this are dropped.
+FUZZBENCH_SEED_BYTES_LIMIT = 1 * 1024 * 1024
+# fuzzers/utils.py create_seed_file_for_empty_corpus.
+FUZZBENCH_DEFAULT_SEED_NAME = "default_seed"
+FUZZBENCH_DEFAULT_SEED_CONTENT = b"hi"
+# Mutation-capture shim compiler inside the FuzzBench builder image
+# (base-builder@87ca1e9e: clang-15 at /usr/local/bin/clang, no clang-18).
+FUZZBENCH_SHIM_CC = os.environ.get("FUZZBENCH_SHIM_CC", "clang")
+# -O level fuzzers/utils.py set_compilation_flags uses per benchmark type.
+# BUILD_OPT_LEVEL never applies to FuzzBench builds; provenance records this.
+FUZZBENCH_OPT_LEVEL = {"bug": "-O1", "coverage": "-O3"}
+# --- end FuzzBench run parity ---

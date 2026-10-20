@@ -634,11 +634,32 @@ def run_phase_trials(
                 logger.error("Online optimization requires PHASE3_BACKEND=local")
                 return False
             import phase3_online
+            # run_online returns False when it refuses (reused experiment id,
+            # unplaceable agent cpuset) or fails before/while running. That used
+            # to be ignored: trial_results.json was rewritten -- over a reused
+            # id's PREVIOUS campaign -- phase 3 was marked complete, and the run
+            # exited 0 saying "complete". Any failed entry now fails the phase
+            # the way the offline path does: no results, not complete, exit 1.
+            failed = []
             for entry in manifest:
                 try:
-                    phase3_online.run_online(entry, experiment_id, duration=duration)
+                    ok = phase3_online.run_online(entry, experiment_id, duration=duration)
                 except Exception as e:  # noqa: BLE001
                     logger.error("Online run failed for %s: %s", entry.get("cve"), e)
+                    ok = False
+                if not ok:
+                    failed.append(entry.get("cve"))
+            if failed or not manifest:
+                logger.error("Phase 3 (online) FAILED for %s; trial_results.json "
+                             "not written, phase 3 not marked complete",
+                             ", ".join(map(str, failed)) or "an empty manifest")
+                state["errors"].append({
+                    "phase": 3,
+                    "error": f"online run failed for {failed or 'empty manifest'}",
+                    "timestamp": datetime.now().isoformat(),
+                })
+                save_state(state, experiment_id)
+                return False
             all_results = collect_all_trial_results(experiment_id)
             results_path = os.path.join(
                 config.RESULTS_DIR, experiment_id, "trial_results.json")
@@ -730,9 +751,13 @@ def run_phase_trials(
 
 def run_phase_analysis(
     experiment_id: str, state: dict,
-    duration: int, project: str = None,
+    duration: int = None, project: str = None,
 ) -> bool:
-    """Phase 4: Statistical analysis and report generation."""
+    """Phase 4: Statistical analysis and report generation.
+
+    `duration` overrides every trial's time-to-bug cutoff. Leave it None so
+    each trial is cut at the run length its metadata.json recorded.
+    """
     logger.info("=== Phase 4: Analysis ===")
     state["current_phase"] = 4
     save_state(state, experiment_id)
@@ -793,8 +818,13 @@ def main():
         help="Experiment identifier",
     )
     parser.add_argument(
-        "--duration", type=int, default=config.TRIAL_DURATION_SECS,
-        help=f"Trial duration in seconds (default: {config.TRIAL_DURATION_SECS})",
+        "--duration", type=int, default=None,
+        help=(
+            "Trial duration in seconds. Phase 3 runs each trial this long "
+            f"(default: {config.TRIAL_DURATION_SECS}). Phase 4 uses it as the "
+            "time-to-bug cutoff only when given; otherwise each trial is cut "
+            "at the run length it recorded."
+        ),
     )
     parser.add_argument(
         "--max-parallel", type=int, default=config.USABLE_CORES,
@@ -856,6 +886,16 @@ def main():
              "(baseline vs online, LOCAL backend). Forces PHASE3_BACKEND=local.",
     )
     args = parser.parse_args()
+    if args.duration is not None and args.duration <= 0:
+        parser.error("--duration must be a positive number of seconds")
+    # Phase 3 needs a run length, so it keeps the config default. Phase 4 must
+    # NOT get that default: it would override every trial's recorded length
+    # and cut a 24h campaign at 6h. It gets --duration only if it was given.
+    trial_duration = (
+        args.duration if args.duration is not None
+        else config.TRIAL_DURATION_SECS
+    )
+    analysis_duration = args.duration
 
     if args.online:
         os.environ["PHASE3_BACKEND"] = "local"
@@ -876,7 +916,11 @@ def main():
         state["started_at"] = datetime.now().isoformat()
 
     logger.info("Experiment: %s", experiment_id)
-    logger.info("Duration: %ds (%.1fh)", args.duration, args.duration / 3600)
+    logger.info("Duration: %ds (%.1fh)", trial_duration, trial_duration / 3600)
+    if analysis_duration is None:
+        logger.info("Phase 4 cutoff: each trial's recorded duration")
+    else:
+        logger.info("Phase 4 cutoff: --duration %ds override", analysis_duration)
     logger.info("Max parallel: %d", args.max_parallel)
     logger.info(
         "Phase 2 max parallel: %d (baseline profile=%ss, refresh profile=%ss)",
@@ -933,7 +977,7 @@ def main():
         elif phase == 3:
             if not run_phase_trials(
                 experiment_id, state,
-                duration=args.duration,
+                duration=trial_duration,
                 max_parallel=args.max_parallel,
                 resume=args.resume,
                 project=args.project,
@@ -945,7 +989,7 @@ def main():
         elif phase == 4:
             if not run_phase_analysis(
                 experiment_id, state,
-                duration=args.duration,
+                duration=analysis_duration,
                 project=args.project,
             ):
                 logger.error("Phase 4 failed")

@@ -43,9 +43,13 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import config
 from lib import afl, crash_classify
-from prework.prework_build import prework_image_for
+from lib.provenance import experiment_image
 
-_ASAN = re.compile(r"ERROR: AddressSanitizer: ([a-z-]+)")
+# Lowercase classes AND deadly signals (SEGV, BUS, FPE, ILL): "[a-z-]+" alone
+# never matched "AddressSanitizer: SEGV on unknown address". ABRT is left out
+# on purpose: FuzzBench's UBSAN_OPTIONS (handle_abort=2) makes every assert()
+# print an ASan ABRT report, and asserts are classified separately.
+_ASAN = re.compile(r"ERROR: AddressSanitizer: (?!ABRT\b)([A-Za-z][A-Za-z0-9_-]*)")
 _FRAME = re.compile(r"#\d+ 0x[0-9a-f]+ in ([A-Za-z_][A-Za-z0-9_:]*)")
 _RUNTIME = ("__asan", "__sanitizer", "__interceptor", "__lsan", "operator new",
             "malloc", "free", "realloc", "calloc")
@@ -57,10 +61,15 @@ def signature(out: str) -> str | None:
     The top frames are sanitizer interceptors (``__asan_memcpy`` and friends),
     identical for every overflow, so the first PROJECT frame is what separates
     one bug from another.
+
+    A UBSan finding (FuzzBench bug builds) has no "ERROR: AddressSanitizer"
+    line and no stack; its identity is "ubsan:<check>:<file>:<line>"
+    (crash_classify.ubsan_identity).
     """
     kind = _ASAN.search(out)
     if not kind:
-        return None
+        ub = crash_classify.ubsan_identity(out)
+        return ub["signature"] if ub else None
     for fn in _FRAME.findall(out):
         if not fn.startswith(_RUNTIME):
             return f"{kind.group(1)}:{fn}"
@@ -87,6 +96,10 @@ def replay(image: str, bin_dir: Path, fuzz_target: str, testcase: Path,
                # reconciles our assimp build with the upstream reference on
                # 3042/3042 artifacts, and OSS-Fuzz's own runner disables it too.
                "-e", "ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0",
+               # FuzzBench's UBSAN_OPTIONS + symbolize=1: a FuzzBench bug build
+               # reports UBSan exactly as under afl-fuzz, and symbolize=1 keeps
+               # ASan frame names (UBSAN_OPTIONS' symbolize=0 would strip them).
+               "-e", "UBSAN_OPTIONS=" + crash_classify.replay_sanitizer_env("")["UBSAN_OPTIONS"],
                "-v", f"{bin_dir.absolute()}:/out:ro",
                "-v", f"{staged}:/tc:ro",
                "--entrypoint", "/bin/bash", image, "-lc",
@@ -99,44 +112,10 @@ def replay(image: str, bin_dir: Path, fuzz_target: str, testcase: Path,
     return (r.stdout or "") + (r.stderr or "")
 
 
-def trial_online_dir(campaign_online: Path, trial_name: str) -> Path:
-    """This trial's own online dir, or the campaign one for legacy layouts.
-
-    Under the per-trial-optimizer design each optimized trial has its own
-    optimizer, its own swap timeline and its own iter_NN/bin snapshots at
-    ``optimized/online/trials/trial_XX``. Reading the campaign-level dir there
-    would resolve a crash against ANOTHER optimizer's binary -- silently, and
-    producing exactly the mislabelled "does not reproduce" verdicts that the
-    live_binary field exists to prevent.
-    """
-    m = re.search(r"trial_(\d+)", str(trial_name))
-    if m:
-        d = Path(campaign_online) / "trials" / f"trial_{int(m.group(1)):02d}"
-        if d.is_dir():
-            return d
-    return Path(campaign_online)
-
-
-def live_binary(online_dir: Path, trial_start: float, crash_t: float,
-                baseline_bin: Path) -> tuple[Path, str]:
-    """The binary the trial was executing when a crash at ``crash_t`` fired.
-
-    Before the first swap that is iter_00 (a copy of the baseline build); after
-    swap N it is iter_NN's archived binary.
-    """
-    wall = trial_start + crash_t
-    try:
-        timeline = json.loads((online_dir / "swap_timeline.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        timeline = []
-    live = None
-    for entry in sorted(timeline, key=lambda e: e.get("ts", 0)):
-        if entry.get("ts", 0) <= wall:
-            live = entry.get("iter")
-    if live is None:
-        return baseline_bin, "iter_00"
-    d = online_dir / f"iter_{int(live):02d}" / "bin"
-    return (d, f"iter_{int(live):02d}") if d.is_dir() else (baseline_bin, "iter_00")
+# Moved to lib/ so the orchestrator can import them without this script's
+# import-time sys.path edit and CLI dependencies. Re-exported under the old names:
+# dedup_crashes.py, cross_check_bugs.py and the tests call V.live_binary.
+from lib.live_binary import live_binary, trial_online_dir  # noqa: E402,F401
 
 
 def resolve_entry(exp_dir_name: str, manifest: dict) -> dict | None:
@@ -173,7 +152,7 @@ def main() -> int:
         entry = resolve_entry(exp_dir.name, manifest)
         if entry is None:
             continue
-        image = prework_image_for(entry)
+        image = experiment_image(exp_dir, entry)
         fuzz_target = entry["fuzz_target"]
         baseline_bin = exp_dir / "baseline" / "bin"
         online_dir = exp_dir / "optimized" / "online"

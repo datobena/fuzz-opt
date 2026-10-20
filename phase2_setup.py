@@ -1478,6 +1478,16 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
     # its crash filter passes libFuzzer flags the AFL driver does not understand,
     # so it never executed an input (bulk exit 0, nothing removed, every round).
     live = bool(combined and env.get("FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS"))
+    # Profile and corpus-build INSIDE the prework image. The skill's scripts
+    # default to base-runner, which cannot load a target linked against the
+    # pinned LLVM's libc++: the run dies at exit 127 before main, yet perf
+    # exits 0 and writes a profile anyway -- of ld.so and the timing loop.
+    # Every status signal reports success and the optimizer gets a hotspot
+    # list with no target symbols in it at all. Set before the branch: the
+    # profile step below needs it on the live-mutation path too.
+    _prebuild_env = dict(os.environ)
+    if env.get("PHASE2_PREWORK_IMAGE"):
+        _prebuild_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = env["PHASE2_PREWORK_IMAGE"]
     try:
         if live:
             frozen, _ = _freeze_corpus_snapshot(combined, fixed_dir)
@@ -1508,15 +1518,6 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
                 getattr(config, "PHASE2_CORPUS_REPLAY_BUDGET_SECS", 1800))
             filter_ncpu = int(getattr(config, "PHASE2_CRASH_FILTER_NCPU", 8))
             max_files = os.environ.get("FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES", "0")
-            # Profile and corpus-build INSIDE the prework image. The skill's scripts
-            # default to base-runner, which cannot load a target linked against the
-            # pinned LLVM's libc++: the run dies at exit 127 before main, yet perf
-            # exits 0 and writes a profile anyway -- of ld.so and the timing loop.
-            # Every status signal reports success and the optimizer gets a hotspot
-            # list with no target symbols in it at all.
-            _prebuild_env = dict(os.environ)
-            if env.get("PHASE2_PREWORK_IMAGE"):
-                _prebuild_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = env["PHASE2_PREWORK_IMAGE"]
             bc = subprocess.run(
                 ["python3", str(build_corpus),
                  "--out-dir", baseline_out, "--corpus-dir", corpus_dir,
@@ -2129,6 +2130,8 @@ def _save_agent_session_output(diff_output_dir: str, attempt: int,
             # comes from the transcript and is what actually ran.
             f.write(f"[model requested] {result.get('model_requested') or 'UNPINNED'}"
                     f"  [effort] {result.get('effort_requested') or 'UNPINNED'}\n")
+            if result.get("agent_cpus"):
+                f.write(f"[agent cpus] {result['agent_cpus']}\n")
             summary = _transcript_summary(result.get("transcripts"))
             f.write(f"[model served] {', '.join(summary['models']) or 'unknown (no transcript)'}\n")
             f.write(f"[assistant turns] {summary['assistant_turns']}  "
@@ -2282,6 +2285,26 @@ def _optimizer_timeout() -> int | None:
     except (TypeError, ValueError):
         return None
     return secs if secs > 0 else None
+
+
+def _deadline_capped_timeout(deadline: float | None) -> int | None:
+    """Per-invocation agent timeout, capped so no session runs past ``deadline``.
+
+    ``deadline`` is the absolute wall-clock time (time.time() units) the fuzzing
+    budget ends. An online optimizer round started before the budget's end must
+    not keep an agent running hours past it (it would swap into trials that have
+    already terminated). Cap the session timeout at the time remaining; recomputed
+    each attempt so a retry can't overshoot. Returns 1 (immediate) once the
+    deadline has passed, so an in-flight agent is stopped rather than left to its
+    full backstop. ``deadline is None`` falls back to the plain config cap.
+    """
+    base = _optimizer_timeout()
+    if deadline is None:
+        return base
+    remaining = int(deadline - time.time())
+    if remaining <= 0:
+        return 1
+    return remaining if base is None else min(base, remaining)
 
 
 _HEADLESS_SYNC_DIRECTIVE = (
@@ -2696,7 +2719,7 @@ def _invoke_agent_sandboxed(
     extra_env: dict[str, str] | None,
 ) -> dict:
     """Run one optimizer session in the container sandbox (sandbox/session.py)."""
-    from sandbox.session import run_sandboxed_optimizer
+    from sandbox.session import resolve_agent_cpus, run_sandboxed_optimizer
 
     # Config defaults, env-overridable -- same source optimizer_provenance()
     # reads, so the recorded pin is the pin that reached the CLI.
@@ -2740,16 +2763,25 @@ def _invoke_agent_sandboxed(
     except (TypeError, ValueError):
         broker_cpu = max(int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
 
+    # The agent CONTAINER's own cpuset (the CLI and anything it runs), distinct
+    # from broker_cpu above: off every trial and profile core, never unpinned
+    # (raises when no core is free). Same resolution optimizer_provenance()
+    # records, so the provenance names the cpuset that was actually used.
+    agent_cpus = resolve_agent_cpus()
+
     return run_sandboxed_optimizer(
         source_dir=source_dir, profile_dir=profile_dir, out_dir=out_dir,
         corpus_dir=corpus_dir, image=image, fuzz_target=fuzz_target,
         project=project, prompt=prompt, timeout=timeout, base_env=env,
         cpu=broker_cpu, harness=env.get("PHASE2_HARNESS_HOST_PATH", ""),
         model=model, effort=effort,
+        # FuzzBench per-trial ccache (phase3_online); host-side only, it is
+        # not on the agent env allowlist (sandbox/launch.ENV_ALLOWLIST).
+        ccache_dir=env.get("PHASE2_FB_CCACHE_DIR", ""),
         # Online rounds: the crash-filtered mutation sample `smoke` runs on.
-        # Host-side only: not on the agent env allowlist
-        # (sandbox/launch.ENV_ALLOWLIST).
+        # Host-side only, like the ccache dir.
         smoke_corpus_dir=env.get("FUZZ_SOURCE_FOLDS_SMOKE_CORPUS_DIR", ""),
+        agent_cpus=agent_cpus,
     )
 
 
@@ -2770,6 +2802,7 @@ def optimize_and_build(
     codex_extra_env: dict[str, str] | None = None,
     use_wrapper_validation: bool = False,
     extra_prompt_directives: str | None = None,
+    deadline: float | None = None,
 ) -> bool:
     """Run the full optimize→build→fix loop until the build succeeds.
 
@@ -2891,7 +2924,7 @@ def optimize_and_build(
             codex_result = _invoke_agent_capture(
                 source_dir, prompt, project=project, extra_env=codex_extra_env,
                 backend=backend,
-                timeout=_optimizer_timeout(),
+                timeout=_deadline_capped_timeout(deadline),
             )
             _info["timed_out"] = bool(codex_result["timed_out"])
         # Saved unconditionally and before any early return below, so a timeout,
@@ -3994,7 +4027,21 @@ def optimizer_provenance() -> dict:
         "model_pinned": bool(model),
         "reasoning_effort": effort,
         "skill": getattr(config, "PHASE2_OPTIMIZER_SKILL", None),
+        # Where the sandboxed agent container runs (ONLINE_AGENT_CPUS, or derived
+        # off the trial/profile cores) -- the resolution _invoke_agent_sandboxed
+        # hands the launch. None when unsandboxed (no container to pin).
+        "agent_cpus": _agent_cpus_provenance(),
     }
+
+
+def _agent_cpus_provenance() -> str | None:
+    if not getattr(config, "PHASE2_SANDBOX", True):
+        return None
+    from sandbox.session import resolve_agent_cpus
+    try:
+        return resolve_agent_cpus()
+    except Exception as e:  # noqa: BLE001 -- provenance must not kill a round
+        return f"ERROR: {e}"
 
 
 def _save_setup_metadata(

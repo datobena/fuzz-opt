@@ -44,7 +44,12 @@ cd ..
 
 # build libtiff.a
 cd libtiff
-./autogen.sh
+# fuzz-opt deviation: libtiff's autogen.sh ends by re-downloading config.guess and
+# config.sub from git.savannah.gnu.org (wget --timeout=5) and exits non-zero when that
+# host is unreachable (2026-10-11: connection timeouts, 0/40 fetches, 2/2 builds
+# failed). automake --add-missing has already installed both files by then, and
+# autogen.sh ignores every other step's exit status, so only the refresh is tolerated.
+./autogen.sh || { test -x config/config.guess && test -x config/config.sub && test -f configure; }
 ./configure --disable-shared --prefix=$SRC/install
 make -j$(nproc)
 make install

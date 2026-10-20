@@ -1619,3 +1619,86 @@ def test_retry_prompt_keeps_plain_compiler_errors():
     build_log = "parser.c:88:1: error: expected ';' after expression\n"
     prompt = phase2_setup._make_retry_prompt("demo_fuzzer", build_log)
     assert "expected ';' after expression" in prompt
+
+
+# --- agent container cpuset (sandbox) -----------------------------------------
+
+_HT80 = {c: frozenset({c % 40, c % 40 + 40}) for c in range(80)}
+
+
+def _pertrial_cores(monkeypatch):
+    import lib.core_lock as cl
+    monkeypatch.setattr(phase2_setup.config, "ONLINE_TRIAL_CORES", "12-31")
+    monkeypatch.setattr(phase2_setup.config, "ONLINE_OPTIMIZER_CORES", "2-11")
+    monkeypatch.setattr(phase2_setup.config, "ONLINE_AGENT_CPUS", "")
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_SANDBOX", True)
+    monkeypatch.setattr(cl, "thread_siblings", lambda *a: _HT80)
+
+
+def test_sandboxed_agent_gets_a_cpuset_off_trial_and_profile_cores(monkeypatch):
+    """_invoke_agent_sandboxed -> run_sandboxed_optimizer(agent_cpus=...): the
+    container's own cpuset, distinct from the broker's profile core."""
+    import sandbox.session as s
+    _pertrial_cores(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(s, "run_sandboxed_optimizer",
+                        lambda **kw: seen.update(kw) or {"ok": True})
+    env = {"FUZZ_SOURCE_FOLDS_OUT_DIR": "/o", "FUZZ_SOURCE_FOLDS_CORPUS_DIR": "/c",
+           "FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR": "/p",
+           "PHASE2_PREWORK_IMAGE": "bench-aflpp/x-arvo-1", "FUZZ_TARGET": "t",
+           "FUZZ_SOURCE_FOLDS_PROFILE_CPU": "4"}
+    phase2_setup._invoke_agent_sandboxed("/src", "p", timeout=None, project="x",
+                                         extra_env=env)
+    assert seen["agent_cpus"] == "0-1,32-39"
+    assert seen["cpu"] == 4
+
+
+def test_optimizer_provenance_records_the_agent_cpuset(monkeypatch):
+    _pertrial_cores(monkeypatch)
+    assert phase2_setup.optimizer_provenance()["agent_cpus"] == "0-1,32-39"
+    # Unresolvable -> recorded as an error, never raised out of provenance.
+    monkeypatch.setattr(phase2_setup.config, "ONLINE_TRIAL_CORES", "0-39")
+    assert phase2_setup.optimizer_provenance()["agent_cpus"].startswith("ERROR")
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_SANDBOX", False)
+    assert phase2_setup.optimizer_provenance()["agent_cpus"] is None
+
+
+def test_agent_session_output_names_the_agent_cpuset(tmp_path):
+    phase2_setup._save_agent_session_output(
+        str(tmp_path), 1, {"ok": True, "timed_out": False, "stdout": "",
+                           "agent_cpus": "0-1,32-39"})
+    assert "[agent cpus] 0-1,32-39" in (tmp_path / "agent_attempt_1.txt").read_text()
+
+
+def test_prebuild_live_mutations_skip_build_corpus_and_profile(monkeypatch, tmp_path):
+    """Online rounds freeze the live mutations as-is and go straight to the
+    profile. The profile step's env was once set only on the build_corpus
+    branch, so every live round died on an unbound local and the agent had to
+    build and profile on its own (libxml2 smoke, Oct 19)."""
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    env = _prebuild_env(tmp_path)
+    env["FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS"] = "1"
+    env["PHASE2_PREWORK_IMAGE"] = "prework:img"
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "m0").write_bytes(b"x")
+    monkeypatch.setattr(phase2_setup, "_augment_corpus_with_mutations",
+                        lambda e, t: str(live))
+    monkeypatch.setattr(phase2_setup, "_freeze_corpus_snapshot",
+                        lambda src, dst: (1, None))
+    seq = iter([False])
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: next(seq, True))
+
+    ran = []
+    def fake_run(cmd, **kw):
+        ran.append((cmd[1], kw.get("env", {}).get("FUZZ_SOURCE_FOLDS_RUNNER_IMAGE")))
+        prof = pathlib.Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
+        (prof / "profile_once").mkdir(parents=True, exist_ok=True)
+        (prof / "profile_once" / "flat.txt").write_text(
+            "    15.70%  demo_fuzz  demo_fuzzer  [.] xmlParseDoc\n")
+        return _proc(returncode=0)
+    monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
+
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is True
+    assert not any("build_corpus.py" in c for c, _ in ran)
+    assert [img for c, img in ran if "replay_fuzzer_profile.py" in c] == ["prework:img"]

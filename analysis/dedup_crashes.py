@@ -23,9 +23,21 @@ a fold that shifts allocation layout can make ASan trip ``use-after-poison``
 where the baseline reports ``heap-use-after-free`` at the same frame; that is one
 bug reported by two checks, not two bugs.
 
+The report used is the one from replaying the artifact on the BASELINE
+binary, for both arms. The optimized arm's binaries differ per trial and per
+round, and an edit to a file moves its lines and frames: php's assert at
+zend_compile.c:9852 reports 9855 or 9857 on some folded binaries. On one binary
+the same bug always gets the same identity. Each artifact is first replayed on
+the binary that found it, as a control; one that crashes there but not on the
+baseline was INTRODUCED by a fold and is listed separately, never counted.
+
 Two granularities are reported because neither is universally right: 1 frame
 merges different call paths into the same bug (can under-count), 3 frames splits
 one bug reached two ways (can over-count). The truth is bracketed by them.
+
+UBSan findings (FuzzBench type:bug builds) carry no stack under
+print_stacktrace=0; they are identified as ``(ubsan:<check>, [<file>:<line>])``
+-- see lib/crash_classify.ubsan_identity.
 
 Content-hash de-duplication is reported alongside as a lower bound on the
 restart effect: identical bytes re-saved after a relaunch are unambiguously the
@@ -54,11 +66,16 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import config
 import verify_crash_signatures as V
-from cross_check_bugs import _KIND_ALIAS
+from cross_check_bugs import _KIND_ALIAS, confirm_gap, warn_if_asserts_invisible
 from lib import afl
-from prework.prework_build import prework_image_for
+from lib.crash_classify import assert_crash_site, ubsan_identity
+from lib.provenance import experiment_image
 
-_ASAN = re.compile(r"ERROR: AddressSanitizer: ([a-z-]+)")
+# Lowercase classes AND deadly signals (SEGV, BUS, FPE, ILL): "[a-z-]+" alone
+# never matched "AddressSanitizer: SEGV on unknown address". ABRT is left out
+# on purpose: FuzzBench's UBSAN_OPTIONS (handle_abort=2) makes every assert()
+# print an ASan ABRT report, and asserts are classified separately.
+_ASAN = re.compile(r"ERROR: AddressSanitizer: (?!ABRT\b)([A-Za-z][A-Za-z0-9_-]*)")
 _FRAME = re.compile(r"#\d+ 0x[0-9a-f]+ in ([A-Za-z_][A-Za-z0-9_:]*)")
 _RUNTIME = ("__asan", "__sanitizer", "__interceptor", "__lsan", "operator new",
             "malloc", "free", "realloc", "calloc")
@@ -76,8 +93,6 @@ _RUNTIME = ("__asan", "__sanitizer", "__interceptor", "__lsan", "operator new",
 _OPTIMIZER_INSERTED = ("fold_",)
 
 
-_ASSERT = re.compile(r"assert(?:ion)?[^\n]*?failure[^\n]*?in\s+(\S+?)\((\d+)\)", re.I)
-_ASSERT2 = re.compile(r"Assertion\s+`[^\']*\'\s+failed\.", re.I)
 
 
 def abort_identity(out: str):
@@ -90,18 +105,24 @@ def abort_identity(out: str):
     they were invisible rather than excluded on purpose. Classify them so the
     caller can report them separately and deliberately.
     """
-    m = _ASSERT.search(out)
-    if m:
-        return "assert", [f"{Path(m.group(1)).name}:{m.group(2)}"]
-    if _ASSERT2.search(out):
-        return "assert", ["<libc-assert>"]
-    return None, []
+    site = assert_crash_site(out)
+    return ("assert", [site]) if site else (None, [])
 
 
 def report_identity(out: str, depth: int = 3):
-    """(kind, [top non-runtime frames]) from a sanitizer report."""
+    """(kind, [top non-runtime frames]) from a sanitizer report.
+
+    UBSan (FuzzBench bug builds, print_stacktrace=0) prints no stack, so its
+    identity is ("ubsan:<check>", ["<file>:<line>"]) and the 1-frame and 3-frame
+    granularities coincide. Stable for one binary; an optimizer edit to the
+    same file shifts the line, which is why bugs are keyed on the baseline
+    replay (see one()).
+    """
     m = _ASAN.search(out)
     if not m:
+        ub = ubsan_identity(out)
+        if ub:
+            return ub["kind"], [ub["location"]]
         return None, []
     kind = _KIND_ALIAS.get(m.group(1), m.group(1))
     frames = [f for f in _FRAME.findall(out)
@@ -109,20 +130,66 @@ def report_identity(out: str, depth: int = 3):
     return kind, frames[:depth]
 
 
-def one(task):
-    (arm, trial, path, ts, image, target, bin_dir, cpu, tries) = task
-    digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
-    last = ""
+def split_signature(sig: str):
+    """(kind, [frame]) from a cross_check signature -- the baseline's, so stable.
+
+    "ubsan:<check>:<file>:<line>" -> ("ubsan:<check>", ["<file>:<line>"]);
+    otherwise "<kind>:<rest>" -> ("<kind>", ["<rest>"]).
+    """
+    head, _, rest = sig.partition(":")
+    if head == "ubsan":
+        check, _, rest = rest.partition(":")
+        head = f"ubsan:{check}"
+    return head, ([rest] if rest else [])
+
+
+def identify(image, bin_dir, target, path, cpu, tries):
+    """(kind, frames) of the artifact replayed on ``bin_dir``; (None, []) if no crash."""
     for _ in range(tries):
         out = V.replay(image, Path(bin_dir), target, Path(path), cpu)
-        last = out or last
         kind, frames = report_identity(out)
+        if not kind:
+            # No sanitizer report: an assert abort is a crash too, not a
+            # non-reproducer. Checked per try, so a later empty or different
+            # run cannot hide an assert an earlier one printed.
+            kind, frames = abort_identity(out)
         if kind:
-            return arm, trial, Path(path).name, ts, digest, kind, frames
-    # No sanitizer report: distinguish a non-memory-safety abort (assert) from a
-    # genuine non-reproducer, rather than lumping both into "did not reproduce".
-    kind, frames = abort_identity(last)
-    return arm, trial, Path(path).name, ts, digest, kind, frames
+            return kind, frames
+    return None, []
+
+
+def one(task):
+    """Replay on the binary that found the crash (control), then on the baseline (key).
+
+    Returns (arm, trial, name, ts, digest, base_kind, base_frames, own_kind,
+    own_frames). The bug identity is the BASELINE replay: one binary for every
+    artifact, so a line or frame an optimizer edit moved cannot split one bug
+    into two (php's assert at zend_compile.c:9852 reports 9855/9857 on folded
+    binaries). own_kind None = did not reproduce even where it was found;
+    own_kind set but base_kind None = crashes only on the folded binary, i.e.
+    INTRODUCED by a fold -- reported, never counted as a find.
+    """
+    (arm, trial, path, ts, image, target, own_bin, base_bin, cpu, tries) = task
+    digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+    name = Path(path).name
+    own_kind, own_frames = identify(image, own_bin, target, path, cpu, tries)
+    if not own_kind:
+        return arm, trial, name, ts, digest, None, [], None, []
+    if Path(own_bin).resolve() == Path(base_bin).resolve():
+        return arm, trial, name, ts, digest, own_kind, own_frames, own_kind, own_frames
+    base_kind, base_frames = identify(image, base_bin, target, path, cpu, tries)
+    if not base_kind:
+        # A one-off miss on the baseline is not proof of a fold-made crash:
+        # re-test both binaries interleaved before filing it as INTRODUCED.
+        verdict, sig = confirm_gap(image, target, Path(path), Path(own_bin),
+                                   Path(base_bin), cpu, tries, with_sig=True)
+        if verdict == "flaky":         # no longer crashes reliably where found
+            return arm, trial, name, ts, digest, None, [], None, []
+        if verdict == "both":          # the baseline does crash after all
+            base_kind, base_frames = identify(image, base_bin, target, path, cpu, tries)
+            if not base_kind:          # flaked again: key on the crash confirm_gap saw
+                base_kind, base_frames = split_signature(sig)
+    return arm, trial, name, ts, digest, base_kind, base_frames, own_kind, own_frames
 
 
 def main() -> int:
@@ -132,7 +199,12 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=32)
     ap.add_argument("--tries", type=int, default=3)
     ap.add_argument("--json-out", default=None)
+    ap.add_argument("--count-asserts", action="store_true",
+                    help="count assertion aborts as bugs (keyed by assert site) instead "
+                         "of reporting them on their own line -- for targets whose "
+                         "benchmark bug has an assert form, e.g. php GH-9136")
     args = ap.parse_args()
+    warn_if_asserts_invisible()
 
     manifest = {e["project"]: e for e in json.loads(Path(config.MANIFEST_PATH).read_text())}
     root = Path(config.RESULTS_DIR) / args.experiment_id
@@ -142,7 +214,7 @@ def main() -> int:
         entry = V.resolve_entry(exp.name, manifest)
         if entry is None:
             continue
-        image, target = prework_image_for(entry), entry["fuzz_target"]
+        image, target = experiment_image(exp, entry), entry["fuzz_target"]
         base_bin = exp / "baseline" / "bin"
         online = exp / "optimized" / "online"
 
@@ -164,7 +236,7 @@ def main() -> int:
                          if arm == "optimized" else base_bin)
                     cpu = 4 + (len(tasks) % max(args.jobs, 1))
                     tasks.append((arm, trial.name, str(p), a["timestamp_s"],
-                                  image, target, str(b), cpu, args.tries))
+                                  image, target, str(b), str(base_bin), cpu, args.tries))
 
         print(f"\n=== {exp.name} ===  {len(tasks)} artifacts")
         rows = []
@@ -175,19 +247,21 @@ def main() -> int:
         summary = {}
         for arm in ("baseline", "optimized"):
             rs = [r for r in rows if r[0] == arm]
-            reproduced = [r for r in rs if r[5]]
+            own_ok = [r for r in rs if r[7]]
+            introduced = [r for r in own_ok if not r[5]]
+            reproduced = [r for r in own_ok if r[5]]
             # Assertion aborts are REAL and reproduce upstream, but they are not
             # memory-safety violations and exist only while asserts are compiled
             # in. Keep them out of the bug count and report them on their own
             # line, rather than silently discarding them as non-reproducers.
             asserts = [r for r in reproduced if r[5] == "assert"]
-            live = [r for r in reproduced if r[5] != "assert"]
+            live = [r for r in reproduced if r[5] != "assert" or args.count_asserts]
             assert_sites = collections.Counter(
                 (r[6][0] if r[6] else "?") for r in asserts)
             assert_trials = len({r[1] for r in asserts})
             by1 = collections.defaultdict(list)
             by3 = collections.defaultdict(list)
-            for _, trial, name, ts, digest, kind, frames in live:
+            for _, trial, name, ts, digest, kind, frames, _, _ in live:
                 by1[(kind, tuple(frames[:1]))].append((ts, trial))
                 by3[(kind, tuple(frames[:3]))].append((ts, trial))
             digests = {r[4] for r in live}
@@ -197,7 +271,15 @@ def main() -> int:
                 "assert_aborts": len(asserts),
                 "assert_trials": assert_trials,
                 "assert_sites": dict(assert_sites),
-                "non_reproducing": len(rs) - len(reproduced),
+                "reproduced_own_binary": len(own_ok),
+                "reproduced_on_baseline": len(reproduced),
+                "non_reproducing": len(rs) - len(own_ok),
+                # Crash on the folded binary, not on the baseline: the optimizer
+                # made them. Listed for the paper, excluded from every bug count.
+                "introduced": [
+                    {"trial": r[1], "artifact": r[2], "t_s": r[3],
+                     "signature": f"{r[7]}:{'<-'.join(r[8][:1]) or '?'}"}
+                    for r in sorted(introduced, key=lambda r: r[3])],
                 "unique_by_content": len(digests),
                 "unique_bugs_1frame": len(by1),
                 "unique_bugs_3frame": len(by3),
@@ -224,8 +306,11 @@ def main() -> int:
                      for (k, fr), v in by3.items()),
                     key=lambda d: -d["artifacts"]),
             }
+            # Campaigns run 9 or 10 trials per arm; count them, do not assume.
+            summary[arm]["n_trials"] = len(list((exp / arm).glob("trial_*")))
             s = summary[arm]
-            print(f"  {arm:9} raw {s['artifacts_raw']:5} -> sanitizer {s['poc_crash']:5}"
+            print(f"  {arm:9} raw {s['artifacts_raw']:5} -> on baseline {s['reproduced_on_baseline']:5}"
+                  f" -> counted {s['poc_crash']:5}"
                   f" -> unique inputs {s['unique_by_content']:5}"
                   f" -> DISTINCT BUGS {s['unique_bugs_1frame']:2} (1-frame)"
                   f" / {s['unique_bugs_3frame']:2} (3-frame)")
@@ -233,9 +318,14 @@ def main() -> int:
                 sites = ", ".join(f"{k} x{v}" for k, v in
                                   sorted(s["assert_sites"].items(), key=lambda x: -x[1])[:3])
                 print(f"  {'':9} + {s['assert_aborts']:5} assertion aborts in "
-                      f"{s['assert_trials']}/9 trials (NOT counted as bugs): {sites}")
+                      f"{s['assert_trials']}/{s['n_trials']} trials "
+                      f"({'counted as bugs' if args.count_asserts else 'NOT counted as bugs'}): {sites}")
             if s["non_reproducing"]:
-                print(f"  {'':9} + {s['non_reproducing']:5} did not reproduce")
+                print(f"  {'':9} + {s['non_reproducing']:5} did not reproduce on the binary that found them")
+            if s["introduced"]:
+                sigs = collections.Counter(x["signature"] for x in s["introduced"])
+                print(f"  {'':9} + {len(s['introduced']):5} INTRODUCED (crash on the folded binary only, "
+                      f"not counted): " + ", ".join(f"{k} x{v}" for k, v in sigs.most_common(3)))
 
         allbugs = sorted({b["signature"] for a in summary for b in summary[a]["bugs"]})
         print(f"\n  {'distinct bug (kind:top frame)':50} {'baseline':>18} {'optimized':>18}")
@@ -244,7 +334,7 @@ def main() -> int:
             cell = []
             for arm in ("baseline", "optimized"):
                 b = next((x for x in summary[arm]["bugs"] if x["signature"] == sig), None)
-                cell.append(f"{b['trials']}/9  {b['first_seen_s']/3600:5.1f}h" if b else "   -        -")
+                cell.append(f"{b['trials']}/{summary[arm]['n_trials']}  {b['first_seen_s']/3600:5.1f}h" if b else "   -        -")
             print(f"  {sig[:50]:50} {cell[0]:>18} {cell[1]:>18}")
         out_all[exp.name] = summary
 

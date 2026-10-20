@@ -1,0 +1,62 @@
+[
+  {
+    "project": "php-src",
+    "cve": "fuzzbench-900013",
+    "local_id": 900013,
+    "image": "fb-aflpp/php_php-fuzz-parser_0dbedb:latest",
+    "fuzz_target": "php-fuzz-parser",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "php_php-fuzz-parser_0dbedb"
+  },
+  {
+    "project": "bloaty",
+    "cve": "fuzzbench-900023",
+    "local_id": 900023,
+    "image": "fb-aflpp/bloaty_fuzz_target_52948c:latest",
+    "fuzz_target": "fuzz_target",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "bloaty_fuzz_target_52948c"
+  },
+  {
+    "project": "harfbuzz",
+    "cve": "fuzzbench-900024",
+    "local_id": 900024,
+    "image": "fb-aflpp/harfbuzz_hb-shape-fuzzer_17863b:latest",
+    "fuzz_target": "hb-shape-fuzzer",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "harfbuzz_hb-shape-fuzzer_17863b"
+  },
+  {
+    "project": "libxml2",
+    "cve": "fuzzbench-900025",
+    "local_id": 900025,
+    "image": "fb-aflpp/libxml2_xml_e85b9b:latest",
+    "fuzz_target": "xml",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "libxml2_xml_e85b9b"
+  },
+  {
+    "project": "mruby",
+    "cve": "fuzzbench-900026",
+    "local_id": 900026,
+    "image": "fb-aflpp/mruby_mruby_fuzzer_8c8bbd:latest",
+    "fuzz_target": "mruby_fuzzer",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "mruby_mruby_fuzzer_8c8bbd"
+  },
+  {
+    "project": "mbedtls",
+    "cve": "fuzzbench-900027",
+    "local_id": 900027,
+    "image": "fb-aflpp/mbedtls_fuzz_dtlsclient_7c6b0e:latest",
+    "fuzz_target": "fuzz_dtlsclient",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "mbedtls_fuzz_dtlsclient_7c6b0e"
+  }
+]

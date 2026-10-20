@@ -30,6 +30,7 @@ import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from lib import cpu_ledger
 from sandbox import broker as broker_mod
 from sandbox import egress
 from sandbox.launch import (
@@ -88,6 +89,74 @@ def build_sandbox_validation_env() -> dict[str, str]:
     }
 
 
+def resolve_agent_cpus(explicit: str | None = None, *,
+                       siblings: dict[int, frozenset[int]] | None = None) -> str:
+    """The cpuset the agent container runs on (config.ONLINE_AGENT_CPUS), as a
+    --cpuset-cpus string. Never empty: raises instead of letting the agent go
+    unpinned.
+
+    The broker pins the agent's builds/smokes/replays to its profile core, but the
+    container itself -- the Claude CLI, plus anything the agent runs in it (the
+    image has gcc) -- was unpinned, free to land on a trial core and steal the
+    cycles the two arms are compared on, or on a profile core in the middle of a
+    replay the gate is timing.
+
+    Unset -> derived: one logical cpu per PHYSICAL core (the lowest of its
+    hyperthreads, cpu*/topology/thread_siblings_list), minus every core that holds
+    a trial cpu (ONLINE_TRIAL_CORES) or a profile cpu (ONLINE_OPTIMIZER_CORES) on
+    either hyperthread. run_online_pertrial.sh's layout (trials 12-31, profile
+    2-11, sibling of c is c+40) gives 0-1,32-39. The idle HT half stays idle.
+    An explicit set is taken as given, except that touching a trial core or its
+    sibling is an error (a profile core only warns: it skews gate timing, it does
+    not bias the arms).
+    """
+    import config
+    from lib.core_lock import format_cpuset, parse_cpuset, thread_siblings
+
+    if explicit is None:
+        explicit = str(getattr(config, "ONLINE_AGENT_CPUS", "") or "")
+    sib = siblings if siblings is not None else thread_siblings()
+    if not sib:
+        # No topology (not Linux, /sys hidden): each logical cpu its own core.
+        # Still never on a trial or profile cpu, but HT siblings are unknown.
+        logger.warning("cpu topology unreadable; deriving the agent cpuset "
+                       "without hyperthread siblings")
+        sib = {c: frozenset({c}) for c in range(os.cpu_count() or 1)}
+
+    def _cores(spec) -> set[int]:
+        out: set[int] = set()
+        for c in parse_cpuset(spec):
+            out |= sib.get(c, frozenset({c}))
+        return out
+
+    trial = _cores(getattr(config, "ONLINE_TRIAL_CORES", ""))
+    profile = _cores(getattr(config, "ONLINE_OPTIMIZER_CORES", ""))
+
+    if explicit.strip():
+        cpus = set(parse_cpuset(explicit))
+        if cpus & trial:
+            raise RuntimeError(
+                f"ONLINE_AGENT_CPUS={explicit} overlaps the trial cores or their "
+                f"hyperthread siblings ({format_cpuset(cpus & trial)}); the agent "
+                "must never run on a trial core")
+        if cpus & profile:
+            logger.warning("ONLINE_AGENT_CPUS=%s overlaps optimizer profile cores "
+                           "(%s): the agent can perturb replay timing there",
+                           explicit, format_cpuset(cpus & profile))
+        return format_cpuset(cpus)
+
+    physical = {min(s) for s in sib.values()}
+    cpus = {c for c in physical if not (sib.get(c, frozenset({c})) & (trial | profile))}
+    if not cpus:
+        raise RuntimeError(
+            "no physical core is free for the agent container: trial cores "
+            f"{getattr(config, 'ONLINE_TRIAL_CORES', '')} and optimizer cores "
+            f"{getattr(config, 'ONLINE_OPTIMIZER_CORES', '')} (with hyperthread "
+            "siblings) cover every core. Set ONLINE_AGENT_CPUS explicitly; "
+            "refusing to run the agent unpinned.")
+    return format_cpuset(cpus)
+
+
 def _image_exists(image: str) -> bool:
     return subprocess.run(
         ["docker", "image", "inspect", image], capture_output=True
@@ -134,14 +203,21 @@ def run_sandboxed_optimizer(
     image: str, fuzz_target: str, project: str, prompt: str,
     cpu: int = 0, timeout: int | None = None, audit_log: str = "",
     base_env: dict | None = None, harness: str = "", model: str = "",
-    effort: str = "", smoke_corpus_dir: str = "",
+    effort: str = "", ccache_dir: str = "", smoke_corpus_dir: str = "",
+    agent_cpus: str | None = None,
 ) -> dict:
     """Run one optimizer session confined to a container.
 
     `image` is the pinned prework image the broker builds in -- NOT the image the
     agent runs in, which is AGENT_IMAGE and contains no project source at all.
+
+    ``agent_cpus`` pins the agent container (--cpuset-cpus); None resolves it here
+    (resolve_agent_cpus), so no caller can launch the agent unpinned. ``cpu`` is
+    the broker's core, a different thing: where the agent's builds/replays run.
     """
     assert_sandbox_available()
+    # Before the broker or proxy start: a bad cpuset fails the round up front.
+    agent_cpus = agent_cpus or resolve_agent_cpus()
     network = ensure_network()
 
     session_dir = Path(out_dir).parent / "sandbox"
@@ -168,13 +244,20 @@ def run_sandboxed_optimizer(
     # it so machine drift cancels. Off by setting FOLD_BRACKET_REPLAY=0.
     bracket = os.environ.get("FOLD_BRACKET_REPLAY", "1") != "0"
     baseline_ref_dir = str(session_dir / "baseline_ref") if bracket else ""
+    # The round's ledger identity, read HERE on the round's own thread: the
+    # broker serves from a new thread, which cannot see these thread-local tags.
+    _tags = cpu_ledger.current_tags()
     ctx = broker_mod.BrokerContext(
         image=image, source_dir=source_dir, out_dir=out_dir,
         corpus_dir=corpus_dir, fuzz_target=fuzz_target, project=project,
         cpu=cpu, audit_log=audit_log or str(session_dir / "broker_audit.log"),
         baseline_ref_dir=baseline_ref_dir,
+        # Host-side only: the trial's ccache (FuzzBench, verified targets).
+        ccache_dir=ccache_dir,
         # Online rounds: the crash-filtered mutation sample `smoke` runs on.
         smoke_corpus_dir=smoke_corpus_dir,
+        # Every broker_* ledger row is charged to this optimizer and round.
+        ledger_trial_id=_tags["trial_id"], ledger_iter=_tags["iter"],
     )
 
     stop = threading.Event()
@@ -219,6 +302,8 @@ def run_sandboxed_optimizer(
         sock=sock_path, network=network, env=env,
         skill=skill_dir, skill_name=skill_name, harness=harness,
         transcripts=str(transcripts_dir),
+        # Off the trial and profile cores (resolve_agent_cpus).
+        cpus=agent_cpus,
     )
     # Subscription OAuth: the credential is a FILE, mounted as a writable copy so
     # the CLI can refresh a short-lived access token without touching the host's.
@@ -275,6 +360,7 @@ def run_sandboxed_optimizer(
             "transcripts": sorted(str(f) for f in transcripts_dir.rglob("*.jsonl")),
             "model_requested": model or "",
             "effort_requested": effort or "",
+            "agent_cpus": agent_cpus,
         }
     except subprocess.TimeoutExpired:
         logger.warning("sandboxed optimizer timed out after %ss", timeout)
@@ -283,6 +369,7 @@ def run_sandboxed_optimizer(
             "transcripts": sorted(str(f) for f in transcripts_dir.rglob("*.jsonl")),
             "model_requested": model or "",
             "effort_requested": effort or "",
+            "agent_cpus": agent_cpus,
         }
     finally:
         # Fold any token refresh the session performed back into the store.

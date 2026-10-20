@@ -159,7 +159,10 @@ def main() -> int:
     def _describe(r: dict) -> str:
         d = r.get("design") or {}
         lvl = r.get("opt_level")
-        lvl = f"-{lvl}" if lvl else "-O1 (default, not recorded)"
+        # Older campaigns recorded the raw override ("O3"); newer ones record the
+        # level that ran ("-O1", "-O3": prework_build.build_opt_provenance).
+        lvl = ((lvl if lvl.startswith("-") else f"-{lvl}") if lvl
+               else "-O1 (default, not recorded)")
         shape = ("per-trial optimizers x%s" % d.get("optimizers")
                  if d.get("per_trial_optimizer") else "shared binary, 1 optimizer")
         n = len(r["arms"]["baseline"]["final_exec_s"])

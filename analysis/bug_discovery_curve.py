@@ -18,6 +18,7 @@ Writes <exp>/bug_discovery.json:
 import argparse
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -32,7 +33,13 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import config
 from lib import afl_triage
 from lib.afl import collect_crashes
+from lib.crash_classify import (SANITIZER_ERROR_RE, replay_sanitizer_env,
+                                ubsan_identity)
+from lib.provenance import experiment_image
 from prework.verify import report_identity
+
+_FRAME_RE = re.compile(r"#\d+ 0x[0-9a-f]+ in ([A-Za-z_][A-Za-z0-9_:]*)")
+_RUNTIME_FRAMES = ("__asan", "__sanitizer", "__interceptor", "__lsan")
 
 # Same normalisation dedup_crashes.py applies: a fold that shifts allocation
 # layout can make ASan trip use-after-poison where the reference build reports
@@ -44,9 +51,26 @@ _KIND_ALIASES = {
 
 
 def _identity(blob):
-    kind, frames = report_identity(blob or "")
-    if not kind:
+    """"<kind>:<top frame>" for ASan; "ubsan:<check>:<file>:<line>" for UBSan.
+
+    report_identity only knows lowercase ASan classes, so deadly signals
+    ("AddressSanitizer: SEGV") are read here too. ABRT is skipped: FuzzBench's
+    UBSAN_OPTIONS (handle_abort=2) turns every assert() into an ASan ABRT
+    report, and asserts are not counted as bugs here (as before).
+    """
+    blob = blob or ""
+    kind, frames = report_identity(blob)
+    if kind == "ABRT":
         return None
+    if not kind:
+        e = SANITIZER_ERROR_RE.search(blob)
+        if e and e.group(1) == "AddressSanitizer" and e.group(2) != "ABRT":
+            kind = e.group(2)
+            frames = [f for f in _FRAME_RE.findall(blob)
+                      if not f.startswith(_RUNTIME_FRAMES)]
+    if not kind:
+        ub = ubsan_identity(blob)
+        return ub["signature"] if ub else None
     return f"{_KIND_ALIASES.get(kind, kind)}:{frames[0] if frames else '?'}"
 
 
@@ -60,6 +84,8 @@ def replay_one(ctx, path):
         shutil.copyfile(path, staged)
         cmd = [
             "docker", "run", "--rm", "--privileged",
+            # FuzzBench UBSAN_OPTIONS + symbolize=1 (crash_classify.replay_sanitizer_env)
+            "-e", "UBSAN_OPTIONS=" + replay_sanitizer_env("")["UBSAN_OPTIONS"],
             "-v", f"{Path(ctx.out_dir).absolute()}:/out:ro",
             "-v", f"{staged}:/testcase:ro",
             "--entrypoint", "/bin/bash", ctx.image, "-lc",
@@ -117,7 +143,10 @@ def main():
             continue
         # Replay on each arm's OWN binary: the question is what that arm's
         # fuzzer actually hit, not how its inputs behave elsewhere.
-        ctx = afl_triage._Ctx(f"bench-aflpp/{key}", os.path.join(vdir, "bin"),
+        # The image the experiment ran with (recorded in its provenance), else
+        # prework_image_for(entry), else the legacy bench-aflpp tag.
+        image = experiment_image(root, entry) or f"bench-aflpp/{key}"
+        ctx = afl_triage._Ctx(image, os.path.join(vdir, "bin"),
                               entry["fuzz_target"], "", 120)
         for t in sorted(d for d in os.listdir(vdir) if d.startswith("trial_")):
             tasks.append((variant, t, os.path.join(vdir, t), ctx))

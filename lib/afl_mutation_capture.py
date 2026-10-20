@@ -23,6 +23,9 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import config
+from lib import afl_launch
+
 logger = logging.getLogger(__name__)
 
 SHIM_SRC = Path(__file__).resolve().parent.parent / "mutation_dump_afl.c"
@@ -35,29 +38,59 @@ def build_capture_command(
     fuzz_target: str, shim_src: str | Path = SHIM_SRC,
     duration: int = DEFAULT_DURATION, cap: int = DEFAULT_CAP,
     every: int = 1, seed: int = 1337, cpu: int | None = None,
-    llvm_version: int = 18,
+    llvm_version: int = 18, entry: dict | None = None,
 ) -> list[str]:
     """One container that compiles the shim, fuzzes, and leaves the dump behind.
 
     Compiled with the image's pinned clang rather than afl-clang-fast: the shim
     is a plain host-side .so that AFL dlopens, and instrumenting it would only
     add noise to the coverage map.
+
+    ``entry`` selects the launch flavour (lib/afl_launch). Without it, or for an
+    ARVO entry, the command is exactly what it always was. A FuzzBench entry gets
+    FuzzBench's afl-fuzz launch (cwd /out, its env and flags) and the shim is
+    built with the builder image's `clang` (there is no clang-18 there).
     """
-    script = (
-        f"set -e; "
-        f"clang-{llvm_version} -O2 -shared -fPIC -o /work/mutdump.so /work/shim.c; "
-        f"export AFL_NO_AFFINITY=1 AFL_SKIP_CPUFREQ=1 "
-        f"AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1; "
-        f"export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:symbolize=0; "
-        f"export AFL_CUSTOM_MUTATOR_LIBRARY=/work/mutdump.so; "
-        f"export MUTATION_DUMP_DIR=/work/dump MUTATION_DUMP_CAP={int(cap)} "
-        f"MUTATION_DUMP_EVERY={int(every)} MUTATION_DUMP_SEED={int(seed)}; "
-        f"mkdir -p /work/dump /work/aflout; "
-        f"/out/afl-fuzz -V {int(duration)} -s {int(seed)} -m none -t 5000+ "
-        f"-i /seeds -o /work/aflout -- /out/{shlex.quote(fuzz_target)} "
-        f"> /work/capture.log 2>&1 || true; "
-        f"chmod -R a+rX /work"
-    )
+    if afl_launch.is_fuzzbench(entry):
+        launch = afl_launch.build_afl_launch(
+            entry=entry, host_bin_dir=str(Path(out_dir).absolute()),
+            fuzz_target=fuzz_target, input_dir="/seeds", output_dir="/work/aflout",
+            duration=int(duration), seed=int(seed), autoresume=False)
+        exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in launch.env)
+        script = (
+            f"set -e; "
+            f"{afl_launch.shim_compiler(entry)} -O2 -shared -fPIC "
+            f"-o /work/mutdump.so /work/shim.c; "
+            f"export {exports}; "
+            f"export AFL_CUSTOM_MUTATOR_LIBRARY=/work/mutdump.so; "
+            f"export MUTATION_DUMP_DIR=/work/dump MUTATION_DUMP_CAP={int(cap)} "
+            f"MUTATION_DUMP_EVERY={int(every)} MUTATION_DUMP_SEED={int(seed)}; "
+            f"mkdir -p /work/dump /work/aflout; "
+            f"cd {launch.workdir}; "
+            f"{launch.shell()} > /work/capture.log 2>&1 || true; "
+            f"chmod -R a+rX /work"
+        )
+    else:
+        launch = afl_launch.build_afl_launch(
+            entry=entry, host_bin_dir=None, fuzz_target=shlex.quote(fuzz_target),
+            input_dir="/seeds", output_dir="/work/aflout", duration=int(duration),
+            seed=int(seed), autoresume=False,
+            arvo_order=afl_launch.ARVO_ORDER_CAPTURE)
+        afl_env = " ".join(f"{k}={v}" for k, v in launch.afl_env)
+        san_env = " ".join(f"{k}={v}" for k, v in launch.sanitizer_env)
+        script = (
+            f"set -e; "
+            f"clang-{llvm_version} -O2 -shared -fPIC -o /work/mutdump.so /work/shim.c; "
+            f"export {afl_env}; "
+            f"export {san_env}; "
+            f"export AFL_CUSTOM_MUTATOR_LIBRARY=/work/mutdump.so; "
+            f"export MUTATION_DUMP_DIR=/work/dump MUTATION_DUMP_CAP={int(cap)} "
+            f"MUTATION_DUMP_EVERY={int(every)} MUTATION_DUMP_SEED={int(seed)}; "
+            f"mkdir -p /work/dump /work/aflout; "
+            f"{launch.shell()} "
+            f"> /work/capture.log 2>&1 || true; "
+            f"chmod -R a+rX /work"
+        )
     cmd = ["docker", "run", "--rm", "--privileged"]
     if cpu is not None:
         cmd += ["--cpuset-cpus", str(cpu)]
@@ -75,7 +108,7 @@ def capture_mutations(
     *, image: str, out_dir: str, seeds_dir: str, work_dir: str,
     fuzz_target: str, duration: int = DEFAULT_DURATION, cap: int = DEFAULT_CAP,
     every: int = 1, seed: int = 1337, cpu: int | None = None,
-    timeout: int | None = None,
+    timeout: int | None = None, entry: dict | None = None,
 ) -> dict:
     """Run a capture. Returns {dump_dir, captured, ok, log_tail}.
 
@@ -90,7 +123,7 @@ def capture_mutations(
     cmd = build_capture_command(
         image=image, out_dir=out_dir, seeds_dir=seeds_dir, work_dir=str(work),
         fuzz_target=fuzz_target, duration=duration, cap=cap, every=every,
-        seed=seed, cpu=cpu,
+        seed=seed, cpu=cpu, entry=entry,
     )
     logger.info("capturing AFL mutations for %s (%ds, cap %d)",
                 fuzz_target, duration, cap)

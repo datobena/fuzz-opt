@@ -118,8 +118,37 @@ def discover(experiment: str) -> dict:
     return info
 
 
-def resolve_image(cve_name: str, override: str = "") -> str:
+def _manifest_entry(cve_name: str) -> dict | None:
+    """The manifest entry whose results dir is <project>-<cve> == cve_name."""
+    repo = Path(__file__).resolve().parent.parent
+    paths = [Path(os.environ.get("BENCHMARK_MANIFEST_PATH", repo / "manifest.json")),
+             *sorted((repo / "data" / "manifests").glob("manifest*.json"))]
+    for mp in paths:
+        try:
+            entries = json.loads(mp.read_text())
+        except (OSError, ValueError):
+            continue
+        for e in entries if isinstance(entries, list) else []:
+            if isinstance(e, dict) and e.get("project") and \
+                    f"{e['project']}-{e.get('cve', '')}".lower() == cve_name.lower():
+                return e
+    return None
+
+
+def _image_present(image: str) -> bool:
+    return subprocess.run(["docker", "image", "inspect", image],
+                          capture_output=True).returncode == 0
+
+
+def resolve_image(cve_name: str, override: str = "", info: dict | None = None) -> str:
     """Pick the project image, exact match first, and never guess between several.
+
+    Order: --image; the image the campaign RECORDED in its provenance (an
+    experiment's line coverage must come from the image it was fuzzed with,
+    so finished bench-aflpp experiments keep their bench-aflpp image even after
+    the FuzzBench-parity switch to fb-aflpp/<dir>); the manifest entry's
+    prework_image_for (fb-aflpp/<dir> for new FuzzBench entries) and legacy
+    tag; finally the name-matching search below over local bench-aflpp images.
 
     Several ARVO ids of the same project are usually present at once (three
     libxml2 images, two harfbuzz, lcms vs little-cms). A substring match silently
@@ -129,6 +158,19 @@ def resolve_image(cve_name: str, override: str = "") -> str:
     """
     if override:
         return override
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from lib.provenance import experiment_image, recorded_image  # noqa: PLC0415
+    rec = (((info or {}).get("provenance") or {}).get("baseline_toolchain") or {}).get("image") \
+        or recorded_image((info or {}).get("root"))
+    if rec and _image_present(rec):
+        return rec
+    if rec:
+        logger.warning("recorded image %s is not present locally; resolving another", rec)
+    entry = _manifest_entry(cve_name)
+    if entry:
+        img = experiment_image(None, entry)
+        if img and _image_present(img):
+            return img
     out = subprocess.run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
                          capture_output=True, text=True).stdout
     images = [l.strip() for l in out.splitlines() if l.startswith("bench-aflpp/")]
@@ -588,7 +630,7 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     info = discover(args.experiment)
-    image = resolve_image(info["cve"], args.image)
+    image = resolve_image(info["cve"], args.image, info)
     scope_cache(info["cve"])
 
     # Projects can ship several fuzz targets (libxml2 has two), so prefer the

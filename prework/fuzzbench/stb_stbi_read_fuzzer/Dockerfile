@@ -1,4 +1,4 @@
-# Copyright 2020 Google LLC
+# Copyright 2020 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,34 +14,7 @@
 #
 ################################################################################
 
-ARG BASE
-FROM ${BASE}
-
-# ---- pinned toolchain (grafted from prework/targets/*) ----------------------
-# FuzzBench pins base-builder to an older digest and inherits whatever AFL++ that
-# image ships. Replace it with the benchmark's OWN pinned source built against
-# our base + AFL++ v5.02c, so this answers "does it build on the newest AFL++".
-# LLVM_VERSION is NOT set in base-builder -- the prework targets declare it as an
-# ARG, and without it the package names expand to "clang-" and apt exits 100.
-ARG LLVM_VERSION=18
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        make cmake autoconf automake libtool pkg-config python3 wget zip unzip \
-        bison flex gawk gettext texinfo nasm yasm ninja-build file \
-    && rm -rf /var/lib/apt/lists/*
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        "clang-${LLVM_VERSION}" "llvm-${LLVM_VERSION}-dev" \
-        "libclang-${LLVM_VERSION}-dev" "lld-${LLVM_VERSION}" \
-        "libc++-${LLVM_VERSION}-dev" "libc++abi-${LLVM_VERSION}-dev" \
-        "libclang-rt-${LLVM_VERSION}-dev" \
-    && rm -rf /var/lib/apt/lists/*
-RUN rm -rf "$SRC/aflplusplus" && \
-    git clone --depth 1 --branch "v5.02c" \
-        https://github.com/AFLplusplus/AFLplusplus "$SRC/aflplusplus" && \
-    cd "$SRC/aflplusplus" && \
-    unset CFLAGS CXXFLAGS && \
-    LLVM_CONFIG="llvm-config-${LLVM_VERSION}" make -j"$(nproc)" source-only; \
-    test -f libAFLDriver.a && test -x afl-fuzz && test -x afl-showmap && \
-    test -x afl-clang-fast
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
 RUN apt-get update && \
     apt-get install -y \
@@ -59,11 +32,15 @@ RUN wget -O \
     $SRC/stbi/jpg.tar.gz https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/imagetestsuite/imagetestsuite-jpg-1.00.tar.gz
 RUN wget -O \
     $SRC/stbi/bmp.zip http://entropymine.com/jason/bmpsuite/releases/bmpsuite-2.6.zip
+# fuzz-opt deviation: pin tga_test_files to 606ced9f266727f248be4a45b86aa0963334b853
+# (2020-03-21, nearest to benchmark commit_date) -- upstream clones HEAD (master.zip).
 RUN wget -O \
-    $SRC/stbi/tga.zip https://github.com/richgel999/tga_test_files/archive/master.zip
+    $SRC/stbi/tga.zip https://github.com/richgel999/tga_test_files/archive/606ced9f266727f248be4a45b86aa0963334b853.zip
 
+# fuzz-opt deviation: pin mirrorer/afl to 2fb5a3482ec27b593c57258baae7089ebdc89043
+# (2017-11-05, nearest to benchmark commit_date; archived repo) -- upstream clones HEAD (master).
 RUN wget -O \
-    $SRC/stbi/gif.dict https://raw.githubusercontent.com/mirrorer/afl/master/dictionaries/gif.dict
+    $SRC/stbi/gif.dict https://raw.githubusercontent.com/mirrorer/afl/2fb5a3482ec27b593c57258baae7089ebdc89043/dictionaries/gif.dict
 
 # Maintain compatibility with master branch until a new release
 RUN cp \

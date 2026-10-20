@@ -1,0 +1,2 @@
+ub.c:8:12: runtime error: signed integer overflow: 2147483646 + 6 cannot be represented in type 'int'
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior ub.c:8:12 in 

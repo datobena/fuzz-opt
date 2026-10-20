@@ -14,35 +14,7 @@
 #
 ################################################################################
 
-ARG BASE
-FROM ${BASE}
-
-# ---- pinned toolchain (grafted from prework/targets/*) ----------------------
-# FuzzBench pins base-builder to an older digest and inherits whatever AFL++ that
-# image ships. Replace it with the benchmark's OWN pinned source built against
-# our base + AFL++ v5.02c, so this answers "does it build on the newest AFL++".
-# LLVM_VERSION is NOT set in base-builder -- the prework targets declare it as an
-# ARG, and without it the package names expand to "clang-" and apt exits 100.
-ARG LLVM_VERSION=18
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        make cmake autoconf automake libtool pkg-config python3 wget zip unzip \
-        bison flex gawk gettext texinfo nasm yasm ninja-build file \
-    && rm -rf /var/lib/apt/lists/*
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        "clang-${LLVM_VERSION}" "llvm-${LLVM_VERSION}-dev" \
-        "libclang-${LLVM_VERSION}-dev" "lld-${LLVM_VERSION}" \
-        "libc++-${LLVM_VERSION}-dev" "libc++abi-${LLVM_VERSION}-dev" \
-        "libclang-rt-${LLVM_VERSION}-dev" \
-    && rm -rf /var/lib/apt/lists/*
-RUN rm -rf "$SRC/aflplusplus" && \
-    git clone --depth 1 --branch "v5.02c" \
-        https://github.com/AFLplusplus/AFLplusplus "$SRC/aflplusplus" && \
-    cd "$SRC/aflplusplus" && \
-    unset CFLAGS CXXFLAGS && \
-    LLVM_CONFIG="llvm-config-${LLVM_VERSION}" make -j"$(nproc)" source-only; \
-    test -f libAFLDriver.a && test -x afl-fuzz && test -x afl-showmap && \
-    test -x afl-clang-fast
-
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
 # Curl will be checked out to the commit hash specified in benchmark.yaml.
 RUN git clone https://github.com/curl/curl-fuzzer /src/curl_fuzzer
@@ -51,6 +23,14 @@ RUN git clone --depth 1 https://github.com/curl/curl.git /src/curl
 
 # Use curl-fuzzer's scripts to get latest dependencies.
 RUN $SRC/curl_fuzzer/scripts/ossfuzzdeps.sh
+# fuzz-opt deviation: pin zlib to 1.2.13 (released 2022-10-13, the zlib.net release
+# at benchmark commit_date) -- upstream's build fetches https://zlib.net/zlib.tar.gz
+# (latest release) via curl_fuzzer/scripts/download_zlib.sh. handle_x.sh skips the
+# download when /src/zlib exists; this reproduces download_zlib.sh's layout.
+RUN wget -qO /tmp/zlib.tar.gz https://zlib.net/fossils/zlib-1.2.13.tar.gz && \
+    echo "b3a24de97a8fdbc835b9833169501030b8977031bcb54b3b3ac13740f846ab30  /tmp/zlib.tar.gz" | sha256sum -c && \
+    tar -xf /tmp/zlib.tar.gz --directory /tmp && \
+    mv /tmp/zlib-1.2.13 /src/zlib && rm /tmp/zlib.tar.gz
 
 WORKDIR $SRC/curl_fuzzer
 COPY build.sh $SRC/

@@ -226,3 +226,22 @@ def test_socket_survives_garbage(tmp_path):
     reply = json.loads(c.recv(65536).decode())
     c.close()
     assert reply["ok"] is False
+
+
+def test_timed_out_container_is_killed(monkeypatch):
+    """A timeout must kill the container, not just the `docker run` client."""
+    import subprocess
+    import sandbox.broker as b
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(b.subprocess, "run", fake_run)
+    rc, blob = b._run(["docker", "run", "--rm", "img", "true"], 5)
+    assert (rc, blob) == (124, "timeout")
+    name = calls[0][calls[0].index("--name") + 1]
+    assert calls[1] == ["docker", "rm", "-f", name]

@@ -27,7 +27,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
-from lib import afl, crash_classify, docker_util, provenance, swap_signal
+from lib import afl, afl_launch, crash_classify, docker_util, provenance, swap_signal
 from prework.build_image import image_tag
 
 logging.basicConfig(
@@ -54,11 +54,19 @@ class Trial:
     # per-trial-optimizer design, where each trial runs a binary its own
     # optimizer produced. None means "use the shared <variant>/bin".
     bin_dir_override: str | None = None
+    # The manifest entry this trial belongs to. Its "kind" selects the launch
+    # flavour (FuzzBench vs ARVO, see lib/afl_launch.py) and the runtime image.
+    # Optional: _trial_entry() falls back to a manifest lookup by project/cve.
+    entry: dict | None = field(default=None, repr=False, compare=False)
     cpu: int = -1
     container_id: str = ""
     status: str = "pending"  # pending, running, completed, failed
     start_time: float = 0.0
     end_time: float = 0.0
+    # The experiment this trial runs under. Set by _launch_container (the one
+    # place every launch and relaunch goes through) and used ONLY to name the
+    # docker container; results paths still come from get_trial_dirs.
+    experiment_id: str = field(default="", compare=False)
 
     @property
     def name(self) -> str:
@@ -66,7 +74,30 @@ class Trial:
 
     @property
     def container_name(self) -> str:
-        return f"bench_{self.name}"
+        return trial_container_name(self.experiment_id, self.name)
+
+
+# Docker accepts [a-zA-Z0-9][a-zA-Z0-9_.-]* for a container name.
+_DOCKER_NAME_BAD = re.compile(r"[^a-zA-Z0-9_.-]")
+
+
+def trial_container_name(experiment_id: str, trial_name: str) -> str:
+    """Docker container name for one trial of one experiment.
+
+    The experiment id is part of the name because _launch_container starts with
+    `docker rm -f <name>`. Named by trial alone (bench_<project>-<cve>-<variant>-
+    trial_NN), a second campaign on the same project -- a smoke run next to a
+    24h run, or two EXP_PREFIXes -- force-removed the first campaign's live
+    trials on its first launch, and that campaign's monitors then read the
+    removal as the trial ending. Characters docker rejects become '_'.
+
+    An empty experiment id gives the pre-fix name, which is also what
+    tools/recover_online_harvest.py falls back to for campaigns launched
+    before this change.
+    """
+    name = _DOCKER_NAME_BAD.sub("_", trial_name)
+    exp = _DOCKER_NAME_BAD.sub("_", experiment_id or "")
+    return f"bench_{exp}_{name}" if exp else f"bench_{name}"
 
 
 def generate_trials(manifest: list[dict]) -> list[Trial]:
@@ -89,6 +120,7 @@ def generate_trials(manifest: list[dict]) -> list[Trial]:
                 project=project,
                 cve=cve,
                 local_id=local_id,
+                entry=entry,
                 variant="baseline",
                 trial_id=trial_id,
                 seed=baseline_seed,
@@ -104,6 +136,7 @@ def generate_trials(manifest: list[dict]) -> list[Trial]:
                 project=project,
                 cve=cve,
                 local_id=local_id,
+                entry=entry,
                 variant="optimized",
                 trial_id=trial_id,
                 seed=optimized_seed,
@@ -115,6 +148,24 @@ def generate_trials(manifest: list[dict]) -> list[Trial]:
 
     logger.info("Generated %d trials across %d CVEs", len(trials), len(manifest))
     return trials
+
+
+def _trial_entry(trial) -> dict:
+    """The manifest entry of a trial: the one it carries, else looked up by
+    project/cve in config.MANIFEST_PATH. {} when neither is available, which
+    selects the ARVO launch (the pre-existing behaviour)."""
+    entry = getattr(trial, "entry", None)
+    if entry:
+        return entry
+    try:
+        with open(config.MANIFEST_PATH) as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    for e in manifest:
+        if e.get("project") == trial.project and e.get("cve") == trial.cve:
+            return e
+    return {}
 
 
 def get_trial_dirs(experiment_id: str, trial: Trial) -> dict[str, str]:
@@ -245,11 +296,68 @@ def _ensure_executable(path: str) -> bool:
         return False
 
 
+def existing_afl_state(experiment_id: str, trial: Trial) -> Optional[str]:
+    """First AFL-state path already in this trial's afl_out, or None.
+
+    State = an instance dir (`default/`, or any -M/-S name) holding fuzzer_stats
+    or queue/. That is what AFL_AUTORESUME=1 picks up: given one, afl-fuzz
+    resumes the old queue and counters instead of starting from -i.
+    """
+    afl_out = get_trial_dirs(experiment_id, trial)["afl_out"]
+    try:
+        instances = sorted(os.listdir(afl_out))
+    except OSError:
+        return None
+    for inst in instances:
+        for marker in ("fuzzer_stats", "queue"):
+            path = os.path.join(afl_out, inst, marker)
+            if os.path.exists(path):
+                return path
+    return None
+
+
+def stale_afl_state(experiment_id: str, trials) -> list[str]:
+    """AFL state left in any of `trials`' afl_out dirs, logged as an error each.
+
+    For the FRESH start of a campaign, checked before any trial starts. Every
+    launch sets AFL_AUTORESUME=1 (relaunches need it) and start_trial wipes
+    corpus/ and crashes/ but never afl_out/, so a reused experiment id silently
+    resumed the previous campaign's queue, coverage and run_time: the new
+    "trial" started hours in, on someone else's corpus, and nothing said so.
+    Refusing is the only safe answer: wiping could destroy a result someone
+    still wants, and resuming is exactly the silent failure.
+    """
+    found = []
+    for t in trials:
+        path = existing_afl_state(experiment_id, t)
+        if path:
+            logger.error(
+                "Refusing to start %s: %s already holds AFL state from an "
+                "earlier run of experiment %r, and AFL_AUTORESUME would resume "
+                "it instead of starting fresh. Use a new experiment id "
+                "(run_online_pertrial.sh dates them) or move the old results "
+                "away.", t.name, path, experiment_id)
+            found.append(path)
+    return found
+
+
 def start_trial(
-    trial: Trial, experiment_id: str, duration: int = config.TRIAL_DURATION_SECS
+    trial: Trial, experiment_id: str, duration: int = config.TRIAL_DURATION_SECS,
+    *, allow_existing_afl_state: bool = False,
 ) -> bool:
-    """Start a single fuzzing trial in a Docker container."""
+    """Start a single fuzzing trial in a Docker container, from its seeds.
+
+    A FRESH start: refuses (returns False) when afl_out already holds AFL
+    state, see stale_afl_state. Relaunches inside a run go through
+    relaunch_preserving_corpus, which resumes on purpose and never comes here.
+    `allow_existing_afl_state` is for run_all_trials_slot(resume=True) only,
+    which re-runs a trial interrupted in an earlier invocation.
+    """
     dirs = get_trial_dirs(experiment_id, trial)
+
+    if not allow_existing_afl_state and stale_afl_state(experiment_id, [trial]):
+        trial.status = "failed"
+        return False
 
     # Clean trial input/output dirs from any previous run, then recreate them.
     for d in [dirs["corpus"], dirs["crashes"]]:
@@ -289,7 +397,6 @@ def start_trial(
         trial.status = "failed"
         return False
 
-    container_name = trial.container_name
     trial._docker_image = docker_image
     trial._bin_dir = bin_dir
     trial._fuzz_target_name = fuzz_target_name
@@ -304,6 +411,10 @@ def _launch_container(
     trial: Trial, experiment_id: str, duration: int,
 ) -> bool:
     """Launch the Docker container for a trial."""
+    # Name the container by experiment as well as trial (see
+    # trial_container_name): the `docker rm -f` below must only ever hit this
+    # campaign's own previous incarnation of this trial.
+    trial.experiment_id = experiment_id
     container_name = trial.container_name
     docker_image = trial._docker_image
     bin_dir = trial._bin_dir
@@ -326,11 +437,14 @@ def _launch_container(
     #               the first one, truncating every trial at the measured event.
     #   -s <seed>   deterministic RNG, replacing libFuzzer's -seed
     #   -m none     ASAN reserves a huge address space; any memory cap kills it
-    #   -t 5000+    per-exec timeout, '+' lets AFL scale it from calibration
+    #   -t <ms>     fixed per-exec timeout (config.AFL_TIMEOUT_FLAG). No '+':
+    #               since AFL++ 4.20c it auto-picks from the seeds with a 5 ms
+    #               floor, which discarded 76% of bloaty's executions
     #   AFL_NO_AFFINITY  the container is already pinned via --cpuset-cpus, and
     #               AFL's own binding on top of that fails to find a free core
-    #   abort_on_error=1  AFL detects a crash by the process dying; without this
-    #               ASAN reports and exits cleanly and the crash is invisible
+    #   ASAN/UBSAN_OPTIONS  FuzzBench's fuzz-run set (config.FUZZ_ASAN_OPTIONS);
+    #               it carries abort_on_error=1, without which ASAN reports and
+    #               exits cleanly and AFL never sees the crash
     # Live mutation capture. Only trials flagged for it carry the shim; see
     # capture_mutations_enabled(). The .so is compiled at launch rather than baked
     # into the prework image so the capture logic can change without rebuilding
@@ -341,6 +455,23 @@ def _launch_container(
                             "mutation_dump_afl.c")
     if capture:
         os.makedirs(mutations_dir, exist_ok=True)
+
+    # argv/env/cwd come from the one shared builder (lib/afl_launch.py): ARVO
+    # trials get exactly the launch they always had, FuzzBench trials get
+    # FuzzBench's aflplusplus runner launch (-w /out, its AFL_* env, -d,
+    # -x afl++.dict, -c cmplog, options dict, trailing 2147483647).
+    entry = _trial_entry(trial)
+    try:
+        launch = afl_launch.build_afl_launch(
+            entry=entry, host_bin_dir=bin_dir, fuzz_target=fuzz_target_name,
+            input_dir="/corpus", output_dir="/afl_out", duration=duration,
+            seed=seed, autoresume=True, arvo_order=afl_launch.ARVO_ORDER_RUNNER)
+    except ValueError as e:
+        # FuzzBench semantics: a broken <t>.options dict= is fatal to the trial.
+        logger.error("Cannot build afl-fuzz launch for %s: %s", trial.name, e)
+        trial.status = "failed"
+        return False
+    trial._afl_launch = launch.record()
 
     cmd = [
         "docker", "run", "-d",
@@ -375,11 +506,8 @@ def _launch_container(
         # The prework image has no passwd entry for that uid, so HOME is unset and
         # anything that expands ~ writes to /.
         "-e", "HOME=/tmp",
-        "-e", "AFL_NO_AFFINITY=1",
-        "-e", "AFL_SKIP_CPUFREQ=1",
-        "-e", "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1",
-        "-e", "AFL_AUTORESUME=1",
-        "-e", "ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:symbolize=0",
+        *launch.docker_env_args(),
+        *launch.docker_workdir_args(),
         "-v", f"{bin_dir}:/out:ro",
         "-v", f"{dirs['corpus']}:/corpus",
         "-v", f"{afl_out}:/afl_out",
@@ -400,17 +528,14 @@ def _launch_container(
             # Build the capture shim first when enabled. A failure here must NOT
             # take the trial down: losing mutation capture costs an optimization
             # round, losing the trial costs a data point.
-            (f"clang-{getattr(config, 'PREWORK_LLVM_VERSION', 18)} -O2 -shared -fPIC "
+            # The compiler must exist in the image: clang-18 in the ARVO prework
+            # images, `clang` (clang-15) in the FuzzBench builder image.
+            (f"{afl_launch.shim_compiler(entry)} -O2 -shared -fPIC "
              f"-o /tmp/mutdump.so /tmp/mutation_dump_afl.c 2>/tmp/shim_build.log "
              f"&& export AFL_CUSTOM_MUTATOR_LIBRARY=/tmp/mutdump.so "
              f"|| echo 'mutation shim build FAILED; continuing without capture';"
              if capture else "")
-            + f" /out/afl-fuzz -i /corpus -o /afl_out"
-            f" -V {duration}"
-            f" -s {seed}"
-            f" -m none"
-            f" -t 5000+"
-            f" -- /out/{fuzz_target_name}"
+            + f" {launch.shell()}"
             f" 2>&1 | tee /tmp/fuzzer.log;"
             f" cp /tmp/fuzzer.log /afl_out/fuzzer.log 2>/dev/null || true"
         ),
@@ -456,6 +581,20 @@ def _resolve_trial_image(trial: Trial) -> Optional[str]:
     is what the mutation-capture shim is compiled against at launch.
     """
     candidate_images = []
+    entry = _trial_entry(trial)
+    if afl_launch.is_fuzzbench(entry):
+        # FuzzBench builds are run in the image that built them
+        # (fb-aflpp/<fuzzbench_dir>), never the old bench-aflpp/<p>-arvo-<id>
+        # tag, which may still exist on the host from the pre-parity chain.
+        from prework.prework_build import prework_image_for
+        try:
+            candidate_images.append(prework_image_for(entry))
+        except (KeyError, ValueError) as e:
+            logger.error("No prework image for fuzzbench trial %s: %s", trial.name, e)
+            return None
+        img = candidate_images[0]
+        check = subprocess.run(["docker", "image", "inspect", img], capture_output=True)
+        return img if check.returncode == 0 else None
     if trial.local_id:
         candidate_images.append(image_tag(trial.project, int(trial.local_id)))
     if trial.variant == "optimized":
@@ -520,14 +659,83 @@ def _log_has_content(log_path: str, log_bytes: int, probe: int = 4096) -> bool:
         return False
 
 
+def _save_log_tail(container_id: str, dest: str, lines: int = 200) -> Optional[str]:
+    """The last `lines` lines of a container's output, streamed to dest.
+
+    Bounded by line count and never held in memory (see
+    docker_util.write_container_logs). AFL's output goes through a pipe here,
+    so it prints newline-terminated status lines, and its PROGRAM ABORT
+    message -- the usual answer to "why did it die" -- is at the end.
+    """
+    try:
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        with open(dest, "wb") as f:
+            subprocess.run(["docker", "logs", "--tail", str(lines), container_id],
+                           stdout=f, stderr=subprocess.STDOUT, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("Could not save log tail of %s: %s", container_id[:12], e)
+        return None
+    return dest
+
+
+def _early_death_record(trial: Trial, dirs: dict, n: int, *, at_s: float,
+                        segment_s: float, remaining_s: float) -> dict:
+    """What is known about a container that stopped before its budget.
+
+    Taken BEFORE the relaunch, because the relaunch's `docker rm -f` destroys
+    the container, and with it ExitCode, OOMKilled and the log. Docker's exit
+    code alone says little: the container's shell ends in `cp ... || true`, so
+    an AFL abort exits 0 and only a kill (137, OOM) shows up there.
+    """
+    state = docker_util.inspect_container_state(trial.container_id)
+    if not isinstance(state, dict):
+        state = {}
+    tail = _save_log_tail(trial.container_id,
+                          os.path.join(dirs["base"], f"early_death_{n:02d}.log"))
+    return {
+        "n": n,
+        "container_id": (trial.container_id or "")[:12],
+        "at_s": round(at_s, 1),            # since the trial's first launch
+        "segment_s": round(segment_s, 1),  # how long this container was up
+        "remaining_s": int(remaining_s),
+        "exit_code": state.get("ExitCode"),
+        "oom_killed": state.get("OOMKilled"),
+        "docker_error": state.get("Error") or state.get("error") or None,
+        "started_at": state.get("StartedAt"),
+        "finished_at": state.get("FinishedAt"),
+        "log_tail": tail,
+        "action": None,
+    }
+
+
 def monitor_trial(
     trial: Trial, experiment_id: str,
     duration: int = config.TRIAL_DURATION_SECS,
 ) -> dict:
-    """Monitor a running trial until completion.
+    """Monitor a running trial until its budget is spent, then harvest it.
 
-    If the trial exits early (before duration), restarts the container
-    with the remaining time so the full budget is used.
+    Used for the baseline arm of the online loop and for both arms of the
+    plain (offline) phase 3. Three ways a container comes back up mid-trial,
+    all through relaunch_preserving_corpus (same afl_out, AFL_AUTORESUME, the
+    REMAINING budget as -V, trial start kept fixed so crash times stay
+    cumulative):
+
+      early death   the container stopped with more than
+                    TRIAL_RELAUNCH_MIN_REMAINING_SECS of budget left. Every death
+                    is recorded in metadata["early_deaths"] (time, exit code,
+                    OOMKilled, docker error, a log tail). After
+                    TRIAL_RELAUNCH_MAX_QUICK_DEATHS consecutive deaths within
+                    TRIAL_RELAUNCH_QUICK_DEATH_SECS of launch it is a crash loop:
+                    the trial is finalized short (end_reason "crash_loop").
+      scheduled     BASELINE_RESTART_INTERVAL_SECS cadence (restart_arm only).
+      mirrored      BASELINE_RESTART_MIRROR_SWAPS: once per hot swap of the
+                    PAIRED optimized trial (per-trial mode) or of the shared
+                    binary (legacy mode); see lib/swap_signal.
+
+    Until early deaths were handled here, this docstring already promised a
+    restart while the loop simply finalized: a baseline that died at 3h was
+    scored as a 3h trial against optimized trials that the online monitor
+    relaunched to the full 24h.
     """
     dirs = get_trial_dirs(experiment_id, trial)
     afl_out = dirs.get("afl_out") or os.path.join(dirs["base"], "afl_out")
@@ -590,21 +798,82 @@ def monitor_trial(
     next_restart = (overall_start + restart_every) if (restart_every and not mirror_swaps) else None
     # Start level with whatever has already happened, so a trial that begins
     # after a swap does not immediately fire a backlog of restarts.
-    seen_generation = swap_signal.SIGNAL.generation if mirror_swaps else 0
+    #
+    # generation_for(trial_id), not the global generation: in per-trial mode
+    # baseline trial k mirrors only optimized trial k's swaps (its seed pair);
+    # in the legacy shared-binary mode it counts every shared swap, as before.
+    seen_generation = (swap_signal.SIGNAL.generation_for(trial.trial_id)
+                       if mirror_swaps else 0)
+
+    # Early-death relaunch (see the docstring). Below min_left a relaunch would
+    # spend its whole budget re-calibrating the queue, and the container ending
+    # there is AFL's own -V expiring, i.e. the normal end of a trial.
+    relaunch_min_left = float(getattr(config, "TRIAL_RELAUNCH_MIN_REMAINING_SECS", 60))
+    quick_death_s = float(getattr(config, "TRIAL_RELAUNCH_QUICK_DEATH_SECS", 60))
+    # 0 turns early-death relaunch off (the first death finalizes the trial).
+    max_quick_deaths = int(getattr(config, "TRIAL_RELAUNCH_MAX_QUICK_DEATHS", 3))
+    deaths: list[dict] = []
+    quick_deaths = 0
+    # When the CURRENT container was launched; trial.start_time is moved by
+    # every relaunch, overall_start is not.
+    segment_start = trial.start_time
+    end_reason = "budget"
 
     while True:
         if not docker_util.container_is_running(trial.container_id):
-            break
+            scan_crashes()
+            now = time.time()
+            remaining = duration - (now - overall_start)
+            if remaining <= relaunch_min_left:
+                break
+            death = _early_death_record(trial, dirs, len(deaths) + 1,
+                                        at_s=now - overall_start,
+                                        segment_s=now - segment_start,
+                                        remaining_s=remaining)
+            quick_deaths = quick_deaths + 1 if death["segment_s"] < quick_death_s else 0
+            crash_loop = 0 < max_quick_deaths <= quick_deaths
+            if crash_loop or max_quick_deaths <= 0:
+                death["action"] = "gave_up"
+                deaths.append(death)
+                end_reason = "crash_loop" if crash_loop else "died"
+                logger.error(
+                    "Trial %s: container died at %.2fh (exit %s, OOMKilled=%s; "
+                    "%d death(s) in a row within %.0fs of launch) -- %s. "
+                    "Finalized short with %ds of budget unused", trial.name,
+                    death["at_s"] / 3600, death["exit_code"], death["oom_killed"],
+                    quick_deaths, quick_death_s,
+                    "crash loop, NOT relaunching" if crash_loop
+                    else "early-death relaunch is disabled", int(remaining))
+                break
+            logger.warning(
+                "Trial %s: container died early at %.2fh after %.0fs up (exit %s, "
+                "OOMKilled=%s); relaunching on its own queue with %ds left "
+                "(early death #%d)", trial.name, death["at_s"] / 3600,
+                death["segment_s"], death["exit_code"], death["oom_killed"],
+                int(remaining), death["n"])
+            ok = relaunch_preserving_corpus(trial, experiment_id, int(remaining))
+            death["action"] = "relaunched" if ok else "relaunch_failed"
+            deaths.append(death)
+            if not ok:
+                end_reason = "relaunch_failed"
+                logger.error("Trial %s: relaunch after early death FAILED; "
+                             "finalizing short", trial.name)
+                break
+            segment_start = trial.start_time
+            continue
         scan_crashes()
         now = time.time()
         elapsed_since_start = now - overall_start
+        # A container that outlived the quick-death window breaks the streak.
+        if quick_deaths and now - segment_start >= quick_death_s:
+            quick_deaths = 0
 
         # Leave >5 min of budget, else a restart costs more than it measures.
         restart_due = False
         pending_generation = seen_generation
         if trial.variant == restart_arm and (duration - elapsed_since_start) > 300:
             if mirror_swaps:
-                pending_generation = swap_signal.SIGNAL.generation
+                pending_generation = swap_signal.SIGNAL.generation_for(trial.trial_id)
                 restart_due = pending_generation > seen_generation
             elif next_restart and now >= next_restart:
                 restart_due = True
@@ -620,6 +889,7 @@ def monitor_trial(
             docker_util.remove_container(trial.container_id)
             if relaunch_preserving_corpus(trial, experiment_id, remaining):
                 restarts_done += 1
+                segment_start = trial.start_time
                 if mirror_swaps:
                     # Advance to the generation we OBSERVED, not +1: if several
                     # swaps landed inside one poll the baseline restarts once,
@@ -631,15 +901,20 @@ def monitor_trial(
                 logger.error(
                     "Trial %s: scheduled restart FAILED; not retrying, the trial "
                     "is left stopped and will be harvested short", trial.name)
+                end_reason = "restart_failed"
                 break
             continue
 
-        poll_interval = 2 if elapsed_since_start < 30 else 10
+        # Measured from the current container's launch, so a relaunch that dies
+        # at once is noticed within 2s too, not only the first launch.
+        poll_interval = 2 if (now - segment_start) < 30 else 10
         time.sleep(poll_interval)
 
     # Final scan after container exits
     scan_crashes()
 
+    # The LAST container's lifetime. It is the whole trial only if nothing was
+    # relaunched; see duration_s below.
     actual_duration = docker_util.get_container_duration_seconds(trial.container_id)
 
     # Collect logs. Streamed to disk, never held in memory -- see
@@ -665,6 +940,18 @@ def monitor_trial(
     observed_duration = round(trial.end_time - overall_start, 2)
     if not actual_duration or actual_duration <= 0:
         actual_duration = observed_duration
+    last_container_s = actual_duration
+
+    # Once the trial has been relaunched (early death, scheduled or mirrored
+    # restart) the last container covers only the final segment, while AFL's
+    # execs_done carries across resumes. Dividing one by the other overstated
+    # exec/s by the share of the trial before the last relaunch -- 6x for a
+    # death relaunched at 20h of 24h. Use wall time since the first launch,
+    # which is what the online arm's _finalize_online_trial records too.
+    death_relaunches = sum(1 for d in deaths if d.get("action") == "relaunched")
+    relaunched = bool(restarts_done or death_relaunches)
+    if relaunched:
+        actual_duration = observed_duration
 
     if actual_duration > 0 and final_stats.get("total_execs"):
         final_stats["final_exec_s"] = round(
@@ -686,11 +973,12 @@ def monitor_trial(
 
     # Heuristic flag: a "ghost" startup failure produces no log output, no
     # stats, and exits in under 5 seconds. Helps downstream reporting skip
-    # these so they don't pollute baseline/optimized success ratios.
+    # these so they don't pollute baseline/optimized success ratios. Judged on
+    # the last container, so a ghost relaunched into a crash loop still counts.
     failed_start = (
-        actual_duration is not None
-        and actual_duration > 0
-        and actual_duration < 5
+        last_container_s is not None
+        and last_container_s > 0
+        and last_container_s < 5
         and not final_stats
         and not crash_times
         and not _log_has_content(log_path, log_bytes)
@@ -715,7 +1003,7 @@ def monitor_trial(
         "final_stats": final_stats,
         "failed_start": failed_start,
         # What the run actually ran with, recorded while it ran.
-        "sanitizer_options": _trial_env_record(),
+        "sanitizer_options": _trial_env_record(trial),
         "toolchain": _trial_toolchain(trial),
         "crash_classification": _classify_trial_crashes(trial, crash_times, dirs),
         "failed_start_detail": failed_start,
@@ -727,13 +1015,27 @@ def monitor_trial(
             inspect_state.get("OOMKilled")
             if isinstance(inspect_state, dict) else None
         ),
+        # Every early death in order, with what was done about it: "relaunched",
+        # "gave_up" (crash loop) or "relaunch_failed". [] = no container of this
+        # trial ever stopped before its budget except by schedule.
+        "early_deaths": deaths,
+        "death_relaunches": death_relaunches,
+        "scheduled_restarts": restarts_done,
+        # budget | crash_loop | relaunch_failed | restart_failed | died (relaunch
+        # disabled). Anything but "budget" means the trial was harvested short
+        # of duration_seconds.
+        "end_reason": end_reason,
+        "duration_source": ("wall_since_first_launch" if relaunched
+                            else "container"),
     }
     with open(dirs["metadata"], "w") as f:
         json.dump(metadata, f, indent=2)
 
     logger.info(
-        "Trial %s completed: %d crashes in %.1f seconds",
-        trial.name, len(crash_times), actual_duration,
+        "Trial %s completed (%s): %d crashes in %.1f seconds, %d early "
+        "death(s), %d scheduled restart(s)",
+        trial.name, end_reason, len(crash_times), actual_duration,
+        len(deaths), restarts_done,
     )
 
     return {
@@ -779,7 +1081,9 @@ def _classify_trial_crashes(trial, crash_times, dirs) -> dict:
                    "detect_leaks=0:alloc_dealloc_mismatch=0")
     # Reserved cores only (0..RESERVED_CORES-1): trials own everything above.
     cpu = max(int(getattr(config, "RESERVED_CORES", 1)) - 1, 0)
-    counts = {"sanitizer": 0, "assert": 0, "nocrash": 0, "infra": 0}
+    counts = {"sanitizer": 0, "assert": 0, "abort": 0, "nocrash": 0, "infra": 0}
+    # classify_artifact's UBSan default; recorded so the provenance names both.
+    ubsan_opts = config.REPLAY_UBSAN_OPTIONS + ":symbolize=1"
     first_real = None
     ordered = sorted(crash_times, key=lambda e: e.get("timestamp_s") or 0)
     for entry in ordered[:cap]:
@@ -788,7 +1092,8 @@ def _classify_trial_crashes(trial, crash_times, dirs) -> dict:
         if not art:
             continue
         res = provenance.classify_artifact(image, bin_dir, target, art,
-                                           cpu=cpu, asan_options=opts)
+                                           cpu=cpu, asan_options=opts,
+                                           ubsan_options=ubsan_opts)
         entry["classified"] = res["class"]
         entry["sanitizer_kind"] = res["kind"]
         entry["crash_frame"] = res["frame"]
@@ -801,26 +1106,42 @@ def _classify_trial_crashes(trial, crash_times, dirs) -> dict:
         "capped_at": cap,
         "counts": counts,
         "asan_options": opts,
+        "ubsan_options": ubsan_opts,
         # The honest time-to-bug: first artifact that is actually a sanitizer
         # crash, not merely the first file AFL wrote into crashes/.
         "time_to_first_sanitizer_crash_s": first_real,
     }
 
 
-def _trial_env_record() -> dict:
+def _trial_env_record(trial=None) -> dict:
     """The sanitizer/AFL environment a trial actually ran under.
 
     ARVO's runner sets alloc_dealloc_mismatch=0 and this benchmark did not; that
     one difference accounts for 5845 assimp artifacts. It belongs next to the
     results it shaped, not only in the source that produced them.
+
+    For a FuzzBench trial the record is the full launch (argv, env, cwd, which
+    optional -x/-c flags were present) as built by lib/afl_launch, since that
+    set varies per benchmark and per build.
     """
+    launch = getattr(trial, "_afl_launch", None) if trial is not None else None
+    if launch and launch.get("kind") == "fuzzbench":
+        env = launch.get("env") or {}
+        return {
+            "ASAN_OPTIONS": env.get("ASAN_OPTIONS", config.FUZZ_ASAN_OPTIONS),
+            "UBSAN_OPTIONS": env.get("UBSAN_OPTIONS", config.FUZZ_UBSAN_OPTIONS),
+            "AFL_ENV": {k: v for k, v in env.items() if k.startswith("AFL_")},
+            "afl_flags": launch.get("flags") or {},
+            "launch": launch,
+        }
     return {
-        "ASAN_OPTIONS": "detect_leaks=0:abort_on_error=1:symbolize=0",
+        "ASAN_OPTIONS": config.FUZZ_ASAN_OPTIONS,
+        "UBSAN_OPTIONS": config.FUZZ_UBSAN_OPTIONS,
         "AFL_ENV": {
             "AFL_NO_AFFINITY": "1", "AFL_SKIP_CPUFREQ": "1",
             "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1", "AFL_AUTORESUME": "1",
         },
-        "afl_flags": {"-m": "none", "-t": "5000+"},
+        "afl_flags": {"-m": "none", "-t": config.AFL_TIMEOUT_FLAG},
     }
 
 
@@ -832,9 +1153,23 @@ def _trial_toolchain(trial) -> dict:
     if not (bin_dir and image and target):
         return {}
     try:
-        return provenance.binary_fingerprint(image, bin_dir, target)
+        fp = provenance.binary_fingerprint(image, bin_dir, target)
     except Exception as e:  # noqa: BLE001 - provenance must not kill a trial
         return {"error": f"{type(e).__name__}: {e}"}
+    entry = _trial_entry(trial)
+    if afl_launch.is_fuzzbench(entry) and isinstance(fp, dict):
+        # binary_fingerprint reads CFLAGS from the image ENV, but FuzzBench sets
+        # the real flags inside fuzzer.build(); record what actually applied.
+        fp = dict(fp)
+        fp["fuzzbench"] = {
+            "benchmark_type": entry.get("type"),
+            "fuzzbench_dir": entry.get("fuzzbench_dir"),
+            "opt_level": afl_launch.fuzzbench_opt_level(entry),
+            "build_opt_level_applied": False,
+            "cmplog_present": os.path.isfile(os.path.join(bin_dir, "cmplog", target)),
+            "aflpp_dict_present": os.path.isfile(os.path.join(bin_dir, "afl++.dict")),
+        }
+    return fp
 
 
 def classify_crash(crash_path: str) -> str:
@@ -1068,6 +1403,18 @@ def run_all_trials_slot(
         logger.info("No trials to run")
         return collect_all_trial_results(experiment_id)
 
+    # A fresh campaign must not inherit AFL state (see stale_afl_state). Checked
+    # for every trial BEFORE any starts, so a reused id fails whole rather than
+    # half the trials starting fresh and half resuming. --resume re-runs the
+    # trials an interrupted invocation left incomplete, so it is let through.
+    if not resume:
+        stale = stale_afl_state(experiment_id, all_trials)
+        if stale:
+            raise RuntimeError(
+                f"experiment {experiment_id!r}: {len(stale)} trial afl_out dir(s) "
+                f"already hold AFL state (first: {stale[0]}); refusing to start "
+                f"a fresh campaign on top of them")
+
     pending = deque(all_trials)
     running = {}  # cpu -> (trial, future)
     completed_results = []
@@ -1097,7 +1444,8 @@ def run_all_trials_slot(
                 cpu = available_cpus.popleft()
                 trial.cpu = cpu
 
-                if start_trial(trial, experiment_id, duration):
+                if start_trial(trial, experiment_id, duration,
+                               allow_existing_afl_state=resume):
                     future = executor.submit(monitor_trial, trial, experiment_id, duration)
                     running[cpu] = trial
                     monitor_futures[future] = (cpu, trial)

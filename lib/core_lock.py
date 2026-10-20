@@ -79,3 +79,77 @@ def core_lock(cpu: int | None, *, timeout: float | None = None):
             except OSError:
                 pass
         os.close(fd)
+
+
+def parse_cpuset(spec) -> list[int]:
+    """'2-5,9' / '7' / 7 -> sorted unique core ids ([] for None or '')."""
+    if spec is None:
+        return []
+    cpus: set[int] = set()
+    for tok in str(spec).split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "-" in tok:
+            a, b = tok.split("-", 1)
+            cpus.update(range(int(a), int(b) + 1))
+        else:
+            cpus.add(int(tok))
+    return sorted(cpus)
+
+
+@contextlib.contextmanager
+def cpuset_lock(spec, *, timeout: float | None = None):
+    """core_lock for every core of a cpuset spec (an int, '7' or '2-39').
+
+    A multi-core setup build occupies all of its cores, so it takes all of their
+    locks, always in ascending order so two holders can never deadlock. None or
+    '' -> no-op, like core_lock(None)."""
+    with contextlib.ExitStack() as stack:
+        for c in parse_cpuset(spec):
+            stack.enter_context(core_lock(c, timeout=timeout))
+        yield
+
+
+def format_cpuset(cpus) -> str:
+    """[0, 1, 32, 33, ..., 39] -> '0-1,32-39' (the inverse of parse_cpuset)."""
+    out: list[str] = []
+    run: list[int] = []
+    for c in sorted(set(int(x) for x in cpus)):
+        if run and c == run[-1] + 1:
+            run.append(c)
+            continue
+        if run:
+            out.append(f"{run[0]}-{run[-1]}" if len(run) > 1 else str(run[0]))
+        run = [c]
+    if run:
+        out.append(f"{run[0]}-{run[-1]}" if len(run) > 1 else str(run[0]))
+    return ",".join(out)
+
+
+SYS_CPU_DIR = "/sys/devices/system/cpu"
+
+
+def thread_siblings(sys_cpu_dir: str = SYS_CPU_DIR) -> dict[int, frozenset[int]]:
+    """{logical cpu: every logical cpu on the same PHYSICAL core, itself included}.
+
+    Read from cpu*/topology/thread_siblings_list (this host: 80 logical, sibling of
+    c is c+40 -> {0: {0, 40}, 40: {0, 40}, ...}). Two hyperthreads share one core's
+    execution units, so "not on core c" has to mean "not on c or its sibling".
+    Empty dict when the topology cannot be read; the caller decides what that means.
+    """
+    sib: dict[int, frozenset[int]] = {}
+    try:
+        names = os.listdir(sys_cpu_dir)
+    except OSError:
+        return {}
+    for name in names:
+        if not (name.startswith("cpu") and name[3:].isdigit()):
+            continue
+        path = os.path.join(sys_cpu_dir, name, "topology", "thread_siblings_list")
+        try:
+            with open(path) as f:
+                sib[int(name[3:])] = frozenset(parse_cpuset(f.read().strip()))
+        except (OSError, ValueError):
+            continue                                # offline cpu: no topology
+    return sib
