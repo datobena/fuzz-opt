@@ -1,0 +1,121 @@
+{
+  "_comment": "Verified PoCs for the six FuzzBench bug benchmarks (Oct 15 2026). A PoC reproduces when the one-shot run's output contains EVERY string in `expect`; a negative control must contain none of the sanitizer markers. Checked by tools/check_fuzzbench_pocs.py.",
+  "mbedtls_fuzz_dtlsclient_7c6b0e": {
+    "fuzz_target": "fuzz_dtlsclient",
+    "bug": "64-byte memory leak: mbedtls_x509_get_name() does not free its name chain on a parse error; reached from ssl_parse_certificate_request(). Fixed upstream by Mbed-TLS PR #6391.",
+    "bug_class": "memory-leak",
+    "live_detectable_by_aflpp": false,
+    "pocs": {
+      "poc_fuzzer_found.bin": [
+        "Direct leak of 64 byte",
+        "mbedtls_x509_get_name",
+        "ssl_parse_certificate_request"
+      ],
+      "poc_handbuilt.bin": [
+        "Direct leak of 64 byte",
+        "mbedtls_x509_get_name",
+        "ssl_parse_certificate_request"
+      ]
+    },
+    "negatives": [
+      "neg_seed.bin"
+    ],
+    "notes": "poc_fuzzer_found.bin: queue id:001019 of online-24h-bug-mbedtls baseline trial_00 (9.31h). poc_handbuilt.bin = `python3 make_handbuilt.py neg_seed.bin out.bin 009c`."
+  },
+  "bloaty_fuzz_target_52948c": {
+    "fuzz_target": "fuzz_target",
+    "bug": "NULL dereference: CU::ReadTopLevelDIE passes a NULL abbrev to DIEReader::ReadAttributes when a .debug_info compile unit has a header and no DIE. Fixed upstream by google/bloaty f8561877e2.",
+    "bug_class": "null-deref (SEGV)",
+    "live_detectable_by_aflpp": true,
+    "pocs": {
+      "poc_handbuilt.elf": [
+        "src/dwarf/debug_info.h:360",
+        "ReadTopLevelDIE"
+      ],
+      "poc_fuzzer_found_r2.elf": [
+        "src/dwarf/debug_info.h:360",
+        "ReadTopLevelDIE"
+      ]
+    },
+    "negatives": [
+      "neg_control.elf"
+    ],
+    "notes": "Hand-built: `gcc -g -gdwarf-4 -nostdlib -static -Wl,-e,f t.c`, then `objcopy --remove-section=.debug_aranges --update-section .debug_info=di.bin`. Matches FuzzBench SBFT'23 crash key Null-dereference:bloaty::dwarf::CU::ReadTopLevelDIE. Parity builds (FuzzBench UBSan, -fno-sanitize-recover=null) report it as UBSan 'member access within null pointer' at debug_info.h:360 and abort; the old bench-fb build reports an ASan SEGV at the same line. poc_fuzzer_found_r2.elf: smallest target-bug crash of online-24h-r2-bloaty (baseline trial_06, 20.1h, 3080 B)."
+  },
+  "harfbuzz_hb-shape-fuzzer_17863b": {
+    "fuzz_target": "hb-shape-fuzzer",
+    "bug": "Wild out-of-bounds read: OT::avar::map_coords walks `count` (coords given) instead of axisCount SegmentMaps before the avar v2 tail, so VariationStore::create_cache follows a garbage offset. Fixed upstream by harfbuzz 32c85b8c (oss-fuzz 49407).",
+    "bug_class": "wild-read (SEGV)",
+    "live_detectable_by_aflpp": true,
+    "pocs": {
+      "poc_clusterfuzz_4523349576908800": [
+        "AddressSanitizer: SEGV",
+        "map_coords"
+      ]
+    },
+    "negatives": [
+      "neg_control"
+    ],
+    "notes": "Upstream ClusterFuzz minimized testcase 4523349576908800 (the id in benchmark.yaml), from the fix commit."
+  },
+  "libxml2_xml_e85b9b": {
+    "fuzz_target": "xml",
+    "bug": "Heap use-after-free in xmlXIncludeCopyXPointer: nested XIncludes free a node still in an XPath node set. Introduced by 7f04e297, fixed by its revert 938105b5.",
+    "bug_class": "heap-use-after-free",
+    "live_detectable_by_aflpp": true,
+    "pocs": {
+      "poc_fuzzer_found.xml": [
+        "heap-use-after-free",
+        "xmlXIncludeCopyXPointer"
+      ]
+    },
+    "negatives": [
+      "neg_control.xml"
+    ],
+    "notes": "Smallest of 710 crashes from online-24h-bug-libxml2 (baseline trial_09)."
+  },
+  "mruby_mruby_fuzzer_8c8bbd": {
+    "fuzz_target": "mruby_fuzzer",
+    "bug": "size_t underflow in mpz_div_2exp on a bigint right shift wider than the number -> ~2^64-byte realloc (sibling: huge left shifts in mpz_mul_2exp). Fixed upstream by mruby 54fbf6c3e.",
+    "bug_class": "allocation-size-too-big",
+    "live_detectable_by_aflpp": true,
+    "pocs": {
+      "poc_handbuilt.rb": [
+        "allocation-size-too-big",
+        "mpz_div_2exp"
+      ],
+      "poc_clusterfuzz.rb": [
+        "allocation-size-too-big",
+        "mpz_div_2exp"
+      ],
+      "poc_fuzzer_found_mul2exp.rb": [
+        "AddressSanitizer",
+        "mpz_mul_2exp"
+      ]
+    },
+    "negatives": [
+      "neg_control.rb"
+    ],
+    "notes": "poc_clusterfuzz.rb is the input quoted in the fix commit; poc_fuzzer_found_mul2exp.rb is online-24h-bug-mruby baseline trial_01 crash id:000000 (sibling path)."
+  },
+  "php_php-fuzz-parser_0dbedb": {
+    "fuzz_target": "php-fuzz-parser",
+    "bug": "Property fetch in a constant expression skips const-expr folding (from GH-8344): NULL deref in zend_ast_evaluate_ex on [,]->e, and ZEND_ASSERT aborts on magic constants. Fixed upstream by php-src 966d22b1bda + 7b43d819c86.",
+    "bug_class": "null-deref (SEGV) + assertion abort",
+    "live_detectable_by_aflpp": true,
+    "pocs": {
+      "poc_gh9138_segv.php": [
+        "zend_ast.c:697",
+        "zend_ast_evaluate_ex"
+      ],
+      "poc_gh9136_assert.php": [
+        "zend_compile_const_expr_magic_const",
+        "Assertion"
+      ]
+    },
+    "negatives": [
+      "neg_control.php"
+    ],
+    "notes": "Upstream reproducers of GH-9138 and GH-9136. Parity builds (FuzzBench UBSan, -fno-sanitize-recover=null) report GH-9138 as UBSan 'member access within null pointer' at zend_ast.c:697 and abort; the old bench-fb build reports an ASan SEGV at the same line."
+  }
+}
