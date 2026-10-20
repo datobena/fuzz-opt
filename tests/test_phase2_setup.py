@@ -341,6 +341,31 @@ def test_download_seed_corpus_falls_back_to_local_cache(monkeypatch, tmp_path):
     assert any(str(cache) == s for s in captured.get("srcs", []))
 
 
+def test_run_replay_speedup_uses_a_given_corpus_whole(monkeypatch, tmp_path):
+    """Online rounds hand the gate their full filtered set and forbid the
+    speed cap: the corpus was sized before the agent ran."""
+    given = tmp_path / "full"
+    given.mkdir()
+    for i in range(5):
+        (given / f"u{i}").write_text("x")
+    monkeypatch.setattr(phase2_setup, "_replay_unit_cap", lambda *a, **k: 2)
+    seen = []
+
+    def fake_measure(*, out_dir, corpus_dir, **_):
+        seen.append(len(list(Path(corpus_dir).iterdir())))
+        return {"median_time_s": 2.0 if "base" in str(out_dir) else 1.0,
+                "executed_units": 5, "partial": False}
+
+    r = phase2_setup.run_replay_speedup(
+        diff_output_dir=tmp_path / "diff", baseline_bin_dir=tmp_path / "base",
+        optimized_bin_dir=tmp_path / "opt", fuzz_target="t",
+        experiment_dir=tmp_path / "exp", profile_cpu=1, repeats=1,
+        measure_fn=fake_measure, corpus_dir=given, cap=False)
+    assert seen == [5, 5]
+    assert r["corpus_source"] == "given" and r["partial"] is False
+    assert r["replay_speedup"] == 2.0
+
+
 def test_run_replay_speedup_returns_none_without_corpus(tmp_path):
     result = phase2_setup.run_replay_speedup(
         diff_output_dir=tmp_path / "diff",
@@ -1576,23 +1601,17 @@ def test_setup_cve_arvo_records_bug_removal_and_keeps_the_fold(monkeypatch, tmp_
     assert not optimized_bin.exists() or optimized_bin.read_text() != "BASELINE"
 
 
-def test_retry_prompt_scrubs_sanitizer_traces_from_the_build_log():
-    """The retry prompt feeds the failed build's tail back to the agent.
-
-    A failing build can end in a sanitizer report, which names the bug's file,
-    line, and function outright -- handing the agent exactly what the sandbox
-    exists to withhold.
-    """
+def test_retry_prompt_passes_the_build_log_through_unscrubbed():
+    """The retry prompt feeds the failed build's tail back to the agent as it
+    is, sanitizer output included: the agent may see any bug the run has hit."""
     build_log = (
         "valid.c:120:5: error: use of undeclared identifier 'foo'\n"
         "==10==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7f\n"
-        "    #1 0x64b872 in xmlSnprintfElementContent /src/libxml2/valid.c:1279:3\n"
         "SUMMARY: AddressSanitizer: stack-buffer-overflow /src/libxml2/valid.c:1279\n"
     )
     prompt = phase2_setup._make_retry_prompt("demo_fuzzer", build_log)
-    for leak in ("xmlSnprintfElementContent", "AddressSanitizer",
-                 "stack-buffer-overflow", "valid.c:1279"):
-        assert leak not in prompt, f"{leak!r} leaked into the retry prompt"
+    assert "use of undeclared identifier" in prompt
+    assert "valid.c:1279" in prompt
 
 
 def test_retry_prompt_keeps_plain_compiler_errors():

@@ -189,10 +189,35 @@ def test_phase2_reuses_live_mutations_without_refuzzing(tmp_path, monkeypatch):
 
     from pathlib import Path
     files = list(Path(combined).iterdir())
-    assert len(files) == 13, "expected 1 seed + 12 mutations"
-    assert any(f.name.startswith("seed_") for f in files)
-    assert any(f.name.startswith("mut_") for f in files)
+    assert len(files) == 12, "expected the 12 mutations alone"
+    assert all(f.name.startswith("mut_") for f in files)
     assert env["FUZZ_SOURCE_FOLDS_CORPUS_DIR"] == combined
+
+
+def test_live_mutations_leave_the_queue_out(tmp_path, monkeypatch):
+    """The online corpus is the mutation sample alone. The queue was added on
+    top, one unweighted copy per entry, although AFL rarely executes an entry
+    as-is -- so it skewed the profile and the gate toward inputs the fuzzer
+    seldom runs (about half the php-src corpus)."""
+    import phase2_setup
+    from pathlib import Path
+
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "mut_00000000").write_bytes(b"m")
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    for i in range(5):
+        (queue / f"id:{i:06d}").write_bytes(b"q")
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    env = {
+        "FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS": str(live),
+        "FUZZ_SOURCE_FOLDS_CORPUS_DIR": str(queue),
+        "FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR": str(profiles),
+    }
+    combined = phase2_setup._augment_corpus_with_mutations(env, "demo_fuzzer")
+    assert [f.read_bytes() for f in Path(combined).iterdir()] == [b"m"]
 
 
 def test_empty_live_dir_does_not_short_circuit(tmp_path, monkeypatch, caplog):

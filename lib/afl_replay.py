@@ -103,3 +103,34 @@ def measure_binary(
         "times_s": times,
         "runner": "afl-showmap",
     }
+
+
+def find_crashers(*, out_dir: str | Path, corpus_dir: str | Path, fuzz_target: str,
+                  cpu: int, image: str) -> dict:
+    """Run every input in ``corpus_dir`` once on ``out_dir``; name the crashers.
+
+    Same forkserver, timeout and sanitizer env as measure_binary, so "crashes
+    here" means "crashes under the replay gate". See broker.scan_for_crashers
+    for the result shape; ``ok`` is False unless every input was run.
+    """
+    from sandbox.broker import BrokerContext, scan_for_crashers
+
+    ctx = BrokerContext(
+        image=image, source_dir="", out_dir=str(out_dir),
+        corpus_dir=str(corpus_dir), fuzz_target=fuzz_target, project="",
+        cpu=int(cpu),
+    )
+    return scan_for_crashers(ctx, str(out_dir), str(corpus_dir))
+
+
+def crash_report(*, out_dir: str | Path, corpus_dir: str | Path, fuzz_target: str,
+                 cpu: int, image: str, names: list[str]) -> str:
+    """Symbolized sanitizer reports for the first few crashing ``names``."""
+    from sandbox.broker import BrokerContext, crash_report as _report
+
+    ctx = BrokerContext(
+        image=image, source_dir="", out_dir=str(out_dir),
+        corpus_dir=str(corpus_dir), fuzz_target=fuzz_target, project="",
+        cpu=int(cpu),
+    )
+    return _report(ctx, str(out_dir), str(corpus_dir), names)

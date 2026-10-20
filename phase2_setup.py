@@ -35,7 +35,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 from prework.prework_build import prework_image_for, rebuild_with_prework_image
 from lib import tracked_git
-from sandbox.scrub import scrub
 from lib import corpus as corpus_util
 from lib import cpu_ledger
 from lib import docker_util
@@ -1292,12 +1291,20 @@ def _augment_corpus_with_mutations(env: dict[str, str], fuzz_target: str) -> str
     # fuzzing, so re-fuzzing here would regenerate work that has been done --
     # ~600s per round, ~4h per target over a 24h run. Reuse them and skip
     # straight to combining.
+    #
+    # Mutations ONLY, no queue. The shim samples in afl_custom_post_process,
+    # i.e. every input right before it executes, so the batch is already a
+    # uniform sample of what the fuzzer runs -- queue-derived work included, at
+    # its real weight. Adding the queue on top put each entry in once,
+    # unweighted, although AFL rarely executes a queue entry as-is: 7-20% of the
+    # mbedtls corpus, ~50% of php-src's, all of it skewing the profile and the
+    # gate toward deep inputs the fuzzer seldom runs.
     prebuilt = env.get("FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS")
     if prebuilt and _dir_has_files(prebuilt):
         n = sum(1 for _ in Path(prebuilt).rglob("*") if _.is_file())
-        logger.info("reusing %d live-captured mutations from %s (no re-fuzz)",
-                    n, prebuilt)
-        return _combine_seed_and_mutations(env, Path(prebuilt))
+        logger.info("reusing %d live-captured mutations from %s (no re-fuzz, "
+                    "no queue)", n, prebuilt)
+        return _combine_seed_and_mutations(env, Path(prebuilt), include_seeds=False)
 
     def _fail(msg: str, exc: Exception | None = None):
         """Hard-fail when required, else fall back to seed-only (return None)."""
@@ -1364,15 +1371,19 @@ def _augment_corpus_with_mutations(env: dict[str, str], fuzz_target: str) -> str
     return _combine_seed_and_mutations(env, Path(frozen_dir))
 
 
-def _combine_seed_and_mutations(env: dict[str, str], mutations_dir: Path) -> str | None:
+def _combine_seed_and_mutations(env: dict[str, str], mutations_dir: Path,
+                                *, include_seeds: bool = True) -> str | None:
     """Flatten seeds + mutations into the one corpus that is profiled AND gated.
 
     Shared by phase 2's own capture and by the online loop's live capture, so both
     produce an identically-shaped corpus -- what gets profiled is exactly what the
     replay-timing gate measures.
+
+    ``include_seeds=False`` (the online loop's live capture) leaves the seed dir
+    out, so the corpus is the mutations alone.
     """
     profiles = Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
-    seed_dir = env.get("FUZZ_SOURCE_FOLDS_CORPUS_DIR", "")
+    seed_dir = env.get("FUZZ_SOURCE_FOLDS_CORPUS_DIR", "") if include_seeds else ""
     mut_files = [p for p in sorted(Path(mutations_dir).rglob("*")) if p.is_file()]
     if not mut_files:
         return None
@@ -1461,63 +1472,74 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
     except (TypeError, ValueError):
         dur_int = 0
 
+    # Live online mutations arrive already crash-filtered against the round's
+    # previous-best binary (phase3_online.prepare_round_corpus) and already sized
+    # to the replay budget, so they are frozen as-is. build_corpus.py is skipped:
+    # its crash filter passes libFuzzer flags the AFL driver does not understand,
+    # so it never executed an input (bulk exit 0, nothing removed, every round).
+    live = bool(combined and env.get("FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS"))
     try:
-        logger.info("Phase-2 prebuild: grow+freeze fixed corpus (duration=%ss) for %s",
-                    dur_int, fuzz_target)
-        # The crash-filter runs every seed through the baseline; for large corpora
-        # (libavc ~18k, assimp ~11k files) the per-unit pass needs well over an hour,
-        # so raise build_corpus.py's own --filter-timeout (default 5400s) too. The
-        # harness is not turn-limited, so it can wait; the wrapper timeout below
-        # covers filter + grow + overhead.
-        filter_timeout = int(config.PHASE2_CRASH_FILTER_TIMEOUT_SECS)
-        # Time-budgeted corpus sizing: cap the corpus to the largest N whose full
-        # replay-gate measurement fits the budget, so profiling/gate/filter stay
-        # tractable on slow targets. --replay-repeats must match the gate's
-        # PHASE2_REPLAY_REPEATS or N is mis-sized. Optional absolute ceiling from
-        # FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES is applied on top (min of the two).
-        # When mutations were captured, generation was already time-capped
-        # (PHASE2_MUTATION_DURATION_SECS, ~5min), so the corpus replays within that
-        # bound -- skip the probe-and-size calculation (budget 0 = no sizing).
-        # Overridable (PHASE2_MUTATION_SKIP_SIZING=0) for slow-rebuild targets that
-        # hit the cap: sizing keeps the per-fold gate tractable so the optimizer can
-        # iterate (see config.PHASE2_MUTATION_SKIP_SIZING).
-        _skip_sizing = getattr(config, "PHASE2_MUTATION_SKIP_SIZING", True)
-        replay_budget = 0 if (combined and _skip_sizing) else int(
-            getattr(config, "PHASE2_CORPUS_REPLAY_BUDGET_SECS", 1800))
-        filter_ncpu = int(getattr(config, "PHASE2_CRASH_FILTER_NCPU", 8))
-        max_files = os.environ.get("FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES", "0")
-        # Profile and corpus-build INSIDE the prework image. The skill's scripts
-        # default to base-runner, which cannot load a target linked against the
-        # pinned LLVM's libc++: the run dies at exit 127 before main, yet perf
-        # exits 0 and writes a profile anyway -- of ld.so and the timing loop.
-        # Every status signal reports success and the optimizer gets a hotspot
-        # list with no target symbols in it at all.
-        _prebuild_env = dict(os.environ)
-        if env.get("PHASE2_PREWORK_IMAGE"):
-            _prebuild_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = env["PHASE2_PREWORK_IMAGE"]
-        bc = subprocess.run(
-            ["python3", str(build_corpus),
-             "--out-dir", baseline_out, "--corpus-dir", corpus_dir,
-             "--evolving-corpus-dir", grow_dir, "--snapshot-dir", fixed_dir,
-             "--artifact-dir", artifact_dir, "--fuzz-target", fuzz_target,
-             "--duration", str(dur_int), "--cpu", cpu,
-             "--filter-timeout", str(filter_timeout),
-             "--filter-ncpu", str(filter_ncpu),
-             "--replay-budget-secs", str(replay_budget),
-             "--replay-repeats", str(int(getattr(config, "PHASE2_REPLAY_REPEATS", 3))),
-             "--probe-sample", str(int(getattr(config, "PHASE2_CORPUS_PROBE_SAMPLE", 100))),
-             "--sizing-margin", str(getattr(config, "PHASE2_CORPUS_SIZING_MARGIN", 0.7)),
-             "--n-min", str(int(getattr(config, "PHASE2_CORPUS_N_MIN", 200))),
-             "--probe-timeout", "900",
-             "--max-corpus-files", str(max_files if max_files else "0")],
-            # wrapper covers sizing probe (2 containers <=900s) + filter + grow + overhead
-            capture_output=True, text=True, env=_prebuild_env,
-            timeout=dur_int + filter_timeout + 1800 + 3600,
-        )
-        if bc.returncode != 0 or not _dir_has_files(fixed_dir):
-            logger.warning("Phase-2 prebuild corpus failed (rc=%s); agent will build it. "
-                           "tail: %s", bc.returncode, (bc.stderr or "")[-400:])
-            return False
+        if live:
+            frozen, _ = _freeze_corpus_snapshot(combined, fixed_dir)
+            logger.info("Phase-2 prebuild: froze %d crash-filtered live mutations "
+                        "into %s", frozen, fixed_dir)
+        else:
+            logger.info("Phase-2 prebuild: grow+freeze fixed corpus (duration=%ss) for %s",
+                        dur_int, fuzz_target)
+            # The crash-filter runs every seed through the baseline; for large corpora
+            # (libavc ~18k, assimp ~11k files) the per-unit pass needs well over an hour,
+            # so raise build_corpus.py's own --filter-timeout (default 5400s) too. The
+            # harness is not turn-limited, so it can wait; the wrapper timeout below
+            # covers filter + grow + overhead.
+            filter_timeout = int(config.PHASE2_CRASH_FILTER_TIMEOUT_SECS)
+            # Time-budgeted corpus sizing: cap the corpus to the largest N whose full
+            # replay-gate measurement fits the budget, so profiling/gate/filter stay
+            # tractable on slow targets. --replay-repeats must match the gate's
+            # PHASE2_REPLAY_REPEATS or N is mis-sized. Optional absolute ceiling from
+            # FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES is applied on top (min of the two).
+            # When mutations were captured, generation was already time-capped
+            # (PHASE2_MUTATION_DURATION_SECS, ~5min), so the corpus replays within that
+            # bound -- skip the probe-and-size calculation (budget 0 = no sizing).
+            # Overridable (PHASE2_MUTATION_SKIP_SIZING=0) for slow-rebuild targets that
+            # hit the cap: sizing keeps the per-fold gate tractable so the optimizer can
+            # iterate (see config.PHASE2_MUTATION_SKIP_SIZING).
+            _skip_sizing = getattr(config, "PHASE2_MUTATION_SKIP_SIZING", True)
+            replay_budget = 0 if (combined and _skip_sizing) else int(
+                getattr(config, "PHASE2_CORPUS_REPLAY_BUDGET_SECS", 1800))
+            filter_ncpu = int(getattr(config, "PHASE2_CRASH_FILTER_NCPU", 8))
+            max_files = os.environ.get("FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES", "0")
+            # Profile and corpus-build INSIDE the prework image. The skill's scripts
+            # default to base-runner, which cannot load a target linked against the
+            # pinned LLVM's libc++: the run dies at exit 127 before main, yet perf
+            # exits 0 and writes a profile anyway -- of ld.so and the timing loop.
+            # Every status signal reports success and the optimizer gets a hotspot
+            # list with no target symbols in it at all.
+            _prebuild_env = dict(os.environ)
+            if env.get("PHASE2_PREWORK_IMAGE"):
+                _prebuild_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = env["PHASE2_PREWORK_IMAGE"]
+            bc = subprocess.run(
+                ["python3", str(build_corpus),
+                 "--out-dir", baseline_out, "--corpus-dir", corpus_dir,
+                 "--evolving-corpus-dir", grow_dir, "--snapshot-dir", fixed_dir,
+                 "--artifact-dir", artifact_dir, "--fuzz-target", fuzz_target,
+                 "--duration", str(dur_int), "--cpu", cpu,
+                 "--filter-timeout", str(filter_timeout),
+                 "--filter-ncpu", str(filter_ncpu),
+                 "--replay-budget-secs", str(replay_budget),
+                 "--replay-repeats", str(int(getattr(config, "PHASE2_REPLAY_REPEATS", 3))),
+                 "--probe-sample", str(int(getattr(config, "PHASE2_CORPUS_PROBE_SAMPLE", 100))),
+                 "--sizing-margin", str(getattr(config, "PHASE2_CORPUS_SIZING_MARGIN", 0.7)),
+                 "--n-min", str(int(getattr(config, "PHASE2_CORPUS_N_MIN", 200))),
+                 "--probe-timeout", "900",
+                 "--max-corpus-files", str(max_files if max_files else "0")],
+                # wrapper covers sizing probe (2 containers <=900s) + filter + grow + overhead
+                capture_output=True, text=True, env=_prebuild_env,
+                timeout=dur_int + filter_timeout + 1800 + 3600,
+            )
+            if bc.returncode != 0 or not _dir_has_files(fixed_dir):
+                logger.warning("Phase-2 prebuild corpus failed (rc=%s); agent will build it. "
+                               "tail: %s", bc.returncode, (bc.stderr or "")[-400:])
+                return False
 
         logger.info("Phase-2 prebuild: profiling baseline over the fixed corpus")
         rp = subprocess.run(
@@ -1656,8 +1678,15 @@ def run_replay_speedup(
     repeats: int | None = None,
     measure_fn=None,
     image: str | None = None,
+    corpus_dir: str | Path | None = None,
+    cap: bool = True,
 ) -> dict | None:
     """Headline throughput metric: deterministic corpus-replay speedup.
+
+    ``corpus_dir`` replaces the fixed corpus as the replayed set (online rounds
+    pass their full crash-filtered mutation set). ``cap=False`` replays it whole
+    instead of shrinking it to PHASE2_REPLAY_BUDGET_SECS -- online rounds size
+    their corpus before the agent runs, so the gate does not shrink it again.
 
     Freezes the fixed corpus snapshot (falling back to the merged seed corpus)
     into an immutable snapshot, then replays that identical input set on the
@@ -1701,7 +1730,10 @@ def run_replay_speedup(
 
         fixed = _phase2_fixed_corpus_dir(diff_output_dir)
         merged = Path(experiment_dir) / "seed_corpus" / "merged"
-        source_corpus = fixed if _dir_has_files(fixed) else merged
+        if corpus_dir is not None:
+            source_corpus = Path(corpus_dir)
+        else:
+            source_corpus = fixed if _dir_has_files(fixed) else merged
         if not _dir_has_files(source_corpus):
             logger.warning("Replay speedup skipped: no corpus available")
             return None
@@ -1709,7 +1741,7 @@ def run_replay_speedup(
         snapshot_dir = Path(diff_output_dir) / "profiles" / "replay_snapshot"
         snapshot_count, snapshot_capped = _freeze_corpus_snapshot(
             source_corpus, snapshot_dir,
-            max_units=_replay_unit_cap(experiment_dir, fuzz_target),
+            max_units=_replay_unit_cap(experiment_dir, fuzz_target) if cap else 0,
         )
 
         if profile_cpu is None:
@@ -1759,7 +1791,8 @@ def run_replay_speedup(
             "baseline": baseline,
             "optimized": optimized,
             "corpus_file_count": snapshot_count,
-            "corpus_source": "fixed" if source_corpus == fixed else "merged",
+            "corpus_source": ("given" if corpus_dir is not None
+                              else "fixed" if source_corpus == fixed else "merged"),
         }
     except Exception as exc:  # never let the metric break setup
         logger.warning("Replay speedup measurement failed: %s", exc)
@@ -2324,6 +2357,13 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
             "smoke command depends on build artifacts from the build command.",
         )
         validation_lines.append(
+            "The smoke command runs your build on a sample of the fuzzer's own "
+            "inputs. Inputs that crash the round-start binary were removed first, "
+            "so if smoke reports a crash, your edit caused it: read the sanitizer "
+            "report it prints, then fix or revert that fold. The final check "
+            "after you finish runs every input, not just the sample.",
+        )
+        validation_lines.append(
             "Treat those commands as the real historical-image build/smoke "
             "loop for this extracted tree. If they remain unusable for a "
             "pre-existing reason, output exactly BLOCKED_LOW_CONFIDENCE and "
@@ -2365,12 +2405,9 @@ def _make_retry_prompt(
     extra_prompt_directives: str | None = None,
 ) -> str:
     """Build the follow-up agent prompt after an outer phase-2 build failure."""
-    # Scrub before the log reaches the agent. The tail of a failed build can
-    # carry a sanitizer report, which names the bug's file, line, and function
-    # outright (leak inventory items 1 and 11). sandbox.scrub keeps compiler
-    # diagnostics -- what the agent actually needs to fix its own edit -- and
-    # withholds everything when a report is present.
-    error_excerpt = "\n".join(scrub(build_log).strip().split("\n")[-200:])
+    # The raw tail of the build log, sanitizer output included: the agent may
+    # see any bug the run has hit, and needs the real error to fix its edit.
+    error_excerpt = "\n".join(build_log.strip().split("\n")[-200:])
     if use_wrapper_validation:
         validation_text = (
             "The wrapper-provided historical validation commands remain "
@@ -2709,6 +2746,10 @@ def _invoke_agent_sandboxed(
         project=project, prompt=prompt, timeout=timeout, base_env=env,
         cpu=broker_cpu, harness=env.get("PHASE2_HARNESS_HOST_PATH", ""),
         model=model, effort=effort,
+        # Online rounds: the crash-filtered mutation sample `smoke` runs on.
+        # Host-side only: not on the agent env allowlist
+        # (sandbox/launch.ENV_ALLOWLIST).
+        smoke_corpus_dir=env.get("FUZZ_SOURCE_FOLDS_SMOKE_CORPUS_DIR", ""),
     )
 
 

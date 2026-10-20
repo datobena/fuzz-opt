@@ -38,6 +38,7 @@ from lib import afl
 from lib import corpus as corpus_util
 from lib import tracked_git
 from lib import cpu_ledger, crash_classify, docker_util
+from lib import afl_replay
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,119 @@ def collect_round_mutations(dump_dirs, dest, *, cap: int, seed: int = 1337) -> i
     return written
 
 
+def _copy_units(files, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        shutil.copy2(f, dest / f.name)
+
+
+def _gate_replay_rate(experiment_dir) -> float | None:
+    """Inputs/s the replay gate last measured on this target, or None."""
+    try:
+        d = json.loads(phase2_setup._replay_rate_path(experiment_dir).read_text())
+        return float(d.get("units_per_s") or 0) or None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def prepare_round_corpus(*, mutations_dir, out_root, previous_best_bin, fuzz_target,
+                         image, cpu, seed, replay_rate=None,
+                         find_crashers_fn=None) -> dict | None:
+    """Turn a round's harvested mutations into the sets the round uses.
+
+    1. full    -- every mutation that does NOT crash the previous-best binary.
+                  The fuzzer runs a vulnerable binary, and its sampled stream
+                  includes the inputs that crash it; dropping them here is what
+                  makes any later crash on the new build the agent's own doing.
+                  Used by the gate's crash check (and its timing only when
+                  ONLINE_GATE_FULL_SET=1).
+    2. tuning  -- ``full`` capped to what one replay pass can run in
+                  PHASE2_REPLAY_BUDGET_SECS at this target's speed. Used by the
+                  profile and every agent replay, so the agent never times a set
+                  the budget does not fit. Speed is ``replay_rate`` (what the
+                  gate last measured) when known; else the filter pass's own
+                  rate, which runs ~2x faster than a timing pass (bloaty: 617
+                  vs 308 inputs/s), so round 1 may overshoot the budget.
+    3. gate    -- what the final gate times: the same size as ``tuning`` but a
+                  different sample of ``full``, inputs the agent never timed
+                  first (it overlaps ``tuning`` only when ``full`` is too small
+                  for two disjoint samples). Equal to ``full`` when nothing
+                  needed shrinking.
+    4. smoke   -- ONLINE_SMOKE_FRACTION of ``full``: what the agent's smoke runs.
+
+    Samples are deterministic per round (``seed``). Returns None when the filter
+    pass did not run over every input or nothing survived it -- the round must
+    not go on to blame the agent for crashes the round-start binary already has.
+    """
+    find = find_crashers_fn or afl_replay.find_crashers
+    mutations_dir, out_root = Path(mutations_dir), Path(out_root)
+    scan = find(out_dir=previous_best_bin, corpus_dir=mutations_dir,
+                fuzz_target=fuzz_target, cpu=cpu, image=image)
+    if not scan["ok"]:
+        logger.warning("crash filter did not cover the mutation set (%s of %s "
+                       "inputs): %s", scan.get("scanned"), scan.get("expected"),
+                       (scan.get("log") or "")[-400:])
+        return None
+    crashers = set(scan["crashers"])
+    files = sorted(p for p in mutations_dir.iterdir()
+                   if p.is_file() and p.stat().st_size > 0 and p.name not in crashers)
+    if not files:
+        return None
+
+    full = out_root / "full"
+    if full.exists():
+        shutil.rmtree(full)
+    _copy_units(files, full)
+
+    filter_rate = (scan["scanned"] / scan["seconds"]) if scan.get("seconds") else 0.0
+    rate = replay_rate or filter_rate
+    budget = int(getattr(config, "PHASE2_REPLAY_BUDGET_SECS", 0))
+    manual = int(getattr(config, "PHASE2_REPLAY_MAX_UNITS", 0))
+    n_tune = len(files)
+    if budget > 0 and rate > 0:
+        n_tune = min(n_tune, max(1, int(budget * rate)))
+    if manual > 0:
+        n_tune = min(n_tune, manual)
+    gate_overlap = n_tune
+    if n_tune < len(files):
+        tuning_files = random.Random(seed).sample(files, n_tune)
+        tuned = set(tuning_files)
+        rest = [f for f in files if f not in tuned]
+        pick = random.Random(seed + 2)
+        if len(rest) >= n_tune:
+            gate_files = pick.sample(rest, n_tune)
+        else:
+            gate_files = rest + pick.sample(tuning_files, n_tune - len(rest))
+        gate_overlap = len(tuned.intersection(gate_files))
+        tuning, gate = out_root / "tuning", out_root / "gate"
+        for d, fs in ((tuning, tuning_files), (gate, gate_files)):
+            if d.exists():
+                shutil.rmtree(d)
+            _copy_units(sorted(fs), d)
+    else:
+        tuning = gate = full
+
+    frac = float(getattr(config, "ONLINE_SMOKE_FRACTION", 0.05))
+    n_smoke = min(len(files), max(1, int(round(frac * len(files)))))
+    smoke = out_root / "smoke"
+    if smoke.exists():
+        shutil.rmtree(smoke)
+    _copy_units(sorted(random.Random(seed + 1).sample(files, n_smoke)), smoke)
+
+    return {
+        "full": str(full), "tuning": str(tuning), "gate": str(gate),
+        "smoke": str(smoke),
+        "harvested": scan["expected"], "crashers_removed": len(crashers),
+        "crashers": sorted(crashers)[:50],
+        "full_count": len(files), "tuning_count": n_tune, "gate_count": n_tune,
+        "gate_overlap_with_tuning": gate_overlap, "smoke_count": n_smoke,
+        "units_per_s": round(rate, 2),
+        "rate_source": "gate" if replay_rate else "filter",
+        "filter_units_per_s": round(filter_rate, 2), "budget_secs": budget,
+        "filter_seconds": round(scan["seconds"], 2),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Trial selection (which live trial's corpus feeds a round)
 # ---------------------------------------------------------------------------
@@ -288,14 +402,15 @@ def select_snapshot_trial(trials, corpus_count_fn):
 # ---------------------------------------------------------------------------
 # Per-round env (reuse phase-2 with the corpus + replay-baseline overrides)
 # ---------------------------------------------------------------------------
-def build_round_env(*, experiment_dir, diff_dir, opt_bin_dir, snapshot_dir,
+def build_round_env(*, experiment_dir, diff_dir, opt_bin_dir, corpus_dir,
                     entry, previous_best_bin, profile_cpu: int | None = None) -> dict:
     """Env for one online round.
 
-    Reuse phase-2's env builder but override the profiling corpus to the live
-    snapshot (so mutations are captured from the *accumulated* corpus, not the bundled
-    seeds) and anchor the replay-timing gate on the previous-best binary, giving
-    cumulative "each fold must beat the previous best" semantics.
+    Reuse phase-2's env builder but override the profiling corpus with
+    ``corpus_dir`` -- the round's harvested mutations, or (re-fuzz fallback only)
+    the live queue snapshot the re-fuzz seeds from, never the bundled seeds -- and
+    anchor the replay-timing gate on the previous-best binary, giving cumulative
+    "each fold must beat the previous best" semantics.
 
     Sampling: online rounds use PURE RESERVOIR sampling of the fuzzer's real (weighted)
     mutation stream and disable the guaranteed queue-pass pool. The queue pass mutates
@@ -314,7 +429,7 @@ def build_round_env(*, experiment_dir, diff_dir, opt_bin_dir, snapshot_dir,
     """
     env = phase2_setup._make_phase2_profile_env(
         experiment_dir, diff_dir, opt_bin_dir,
-        corpus_dir=snapshot_dir, entry=entry, baseline_out_dir=previous_best_bin,
+        corpus_dir=corpus_dir, entry=entry, baseline_out_dir=previous_best_bin,
         profile_cpu=profile_cpu,
     )
     # Reservoir-only: turn OFF the uncapped guaranteed queue pass (reservoir stays on
@@ -914,8 +1029,8 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     """One online optimization round on the persistent cumulative source tree.
 
     Returns (accepted, iter_bin_dir). Mirrors setup_cve_arvo_image's gate wiring, but
-    the profiling corpus is a live-trial snapshot and the replay baseline is the
-    previous-best binary (cumulative). A rejected round reverts the tree to prev_tag so
+    the profiling corpus is the mutations the live trial executed and the replay
+    baseline is the previous-best binary (cumulative). A rejected round reverts the tree to prev_tag so
     the next round never builds on a rejected edit.
     """
     ctx.iter_n = iter_n
@@ -926,33 +1041,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     os.makedirs(diff_dir, exist_ok=True)
     os.makedirs(opt_bin_dir, exist_ok=True)
 
-    # 1. snapshot the live corpus this optimizer profiles against.
-    #
-    # Per-trial mode: always THIS optimizer's own trial. The old
-    # select_snapshot_trial("largest") existed only because one optimizer served
-    # ten trials and had to pick one; profiling trial 8's corpus and then
-    # swapping the result into trials 0..9 meant nine trials ran a binary tuned
-    # for a workload they never executed. Owning one trial removes the choice.
-    if ctx.trial is not None:
-        chosen = ctx.trial
-    else:
-        chosen = select_snapshot_trial(
-            ctx.online_trials, lambda t: _corpus_file_count(ctx.experiment_id, t))
-    src_corpus = phase3_runner.get_live_corpus_dir(ctx.experiment_id, chosen)
-    snap_dir = os.path.join(iter_dir, "corpus_snapshot")
-    with cpu_ledger.timed("corpus_snapshot", cores=1) as _info:
-        meta = snapshot_live_corpus(src_corpus, snap_dir, now=time.time())
-        _info["files"] = meta["file_count"]
-    meta["trial_id"] = chosen.trial_id
-    _write_json(os.path.join(iter_dir, "corpus_snapshot_meta.json"), meta)
-    logger.info("online round %d: snapshot trial_%02d -> %d files (%d skipped in-flight)",
-                iter_n, chosen.trial_id, meta["file_count"], meta["skipped_in_flight"])
-    if meta["file_count"] == 0:
-        logger.warning("online iter %d: empty corpus snapshot; skipping round", iter_n)
-        _record_ledger(ctx, iter_n, diff_dir, "no-corpus", None)
-        return (False, None, False)      # nothing was measured
-
-    # 1b. Harvest the mutations the live trials already executed, and re-arm the
+    # 1. Harvest the mutations the live trials already executed, and re-arm the
     # shim for the next round. This is what removes the redundant re-fuzz: phase 2
     # would otherwise spend PHASE2_MUTATION_DURATION_SECS regenerating mutations
     # these trials had already produced.
@@ -1049,17 +1138,77 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 "online round %d: no completed mutation batch yet; falling back "
                 "to phase-2 capture for this round", iter_n)
 
-    # 2. env: profile the snapshot; anchor the replay gate on the previous best
+    # 2. The profiling corpus: the harvested mutations ALONE. The trial's queue
+    # is not read at all -- see _augment_corpus_with_mutations for why it was
+    # dropped. Only the fallback below (no harvest, so phase 2 re-fuzzes) still
+    # snapshots the queue, and only as the seed that re-fuzz starts from.
+    round_corpus = None
+    if live_mutations:
+        # Filter against the previous best, then size (see prepare_round_corpus).
+        with cpu_ledger.timed("crash_filter", cores=1) as _info:
+            round_corpus = prepare_round_corpus(
+                mutations_dir=live_mutations, out_root=os.path.join(iter_dir, "corpus"),
+                previous_best_bin=ctx.previous_best_bin, fuzz_target=ctx.fuzz_target,
+                image=prework_image_for(ctx.entry), cpu=ctx.profile_cpu,
+                seed=config.BASE_SEED + iter_n,
+                replay_rate=_gate_replay_rate(ctx.experiment_dir))
+            _info["ok"] = round_corpus is not None
+        if round_corpus is None:
+            logger.warning("online round %d: crash filter failed; skipping round "
+                           "(the agent would be blamed for crashes the previous "
+                           "best already has)", iter_n)
+            _record_ledger(ctx, iter_n, diff_dir, "corpus-prep-failed", None)
+            return (False, None, False)      # nothing was measured
+        _write_json(os.path.join(iter_dir, "round_corpus_meta.json"), round_corpus)
+        logger.info("online round %d: %d mutations, %d crash the previous best -> "
+                    "full %d, tuning %d (%.0f inputs/s, %ds budget), smoke %d",
+                    iter_n, round_corpus["harvested"], round_corpus["crashers_removed"],
+                    round_corpus["full_count"], round_corpus["tuning_count"],
+                    round_corpus["units_per_s"], round_corpus["budget_secs"],
+                    round_corpus["smoke_count"])
+        live_mutations = round_corpus["tuning"]
+        corpus_dir = live_mutations
+    else:
+        # Per-trial mode: always THIS optimizer's own trial. The old
+        # select_snapshot_trial("largest") existed only because one optimizer
+        # served ten trials and had to pick one; profiling trial 8's corpus and
+        # then swapping the result into trials 0..9 meant nine trials ran a
+        # binary tuned for a workload they never executed.
+        if ctx.trial is not None:
+            chosen = ctx.trial
+        else:
+            chosen = select_snapshot_trial(
+                ctx.online_trials, lambda t: _corpus_file_count(ctx.experiment_id, t))
+        src_corpus = phase3_runner.get_live_corpus_dir(ctx.experiment_id, chosen)
+        corpus_dir = os.path.join(iter_dir, "corpus_snapshot")
+        with cpu_ledger.timed("corpus_snapshot", cores=1) as _info:
+            meta = snapshot_live_corpus(src_corpus, corpus_dir, now=time.time())
+            _info["files"] = meta["file_count"]
+        meta["trial_id"] = chosen.trial_id
+        _write_json(os.path.join(iter_dir, "corpus_snapshot_meta.json"), meta)
+        logger.info("online round %d: snapshot trial_%02d -> %d files (%d skipped "
+                    "in-flight) as the re-fuzz seed", iter_n, chosen.trial_id,
+                    meta["file_count"], meta["skipped_in_flight"])
+        if meta["file_count"] == 0:
+            logger.warning("online iter %d: empty corpus snapshot; skipping round",
+                           iter_n)
+            _record_ledger(ctx, iter_n, diff_dir, "no-corpus", None)
+            return (False, None, False)      # nothing was measured
+
+    # 3. env: profile the corpus; anchor the replay gate on the previous best
     env = build_round_env(
         experiment_dir=ctx.experiment_dir, diff_dir=diff_dir,
         opt_bin_dir=os.path.join(iter_dir, "validation_out"),
-        snapshot_dir=snap_dir, entry=ctx.entry,
+        corpus_dir=corpus_dir, entry=ctx.entry,
         previous_best_bin=ctx.previous_best_bin, profile_cpu=ctx.profile_cpu)
     env.update(ctx.wrapper_env_fn(ctx.source_root, os.path.join(iter_dir, "validation")))
     if live_mutations:
         # Hand phase 2 the already-captured mutations; its own capture step sees
         # this and skips the re-fuzz.
         env["FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS"] = live_mutations
+    if round_corpus:
+        # Host-side only (not on the agent env allowlist): the broker's smoke set.
+        env["FUZZ_SOURCE_FOLDS_SMOKE_CORPUS_DIR"] = round_corpus["smoke"]
 
     # No attempt-history block is injected into the optimizer prompt. A previous
     # design listed already-tried folds and told the agent to AVOID them unless a
@@ -1130,15 +1279,59 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 optimization_ready=optimization_ready,
                 baseline_reproduced=bool(ctx.poc_path), opt_crashes=opt_crashes,
                 baseline_bin_dir=ctx.previous_best_bin, optimized_bin_dir=opt_bin_dir)
+    crash_check = None
+    if optimization_ready and round_corpus:
+        # Every filtered mutation, once, on the new build. None of them crashes
+        # the previous best, so any crash here is the round's edits -- the 5%
+        # smoke sample misses a fold that breaks only a few inputs.
+        with cpu_ledger.timed("crash_check", cores=1):
+            scan = afl_replay.find_crashers(
+                out_dir=opt_bin_dir, corpus_dir=round_corpus["full"],
+                fuzz_target=ctx.fuzz_target, cpu=ctx.profile_cpu,
+                image=prework_image_for(ctx.entry))
+        crash_check = {k: scan[k] for k in ("ok", "scanned", "expected")}
+        crash_check["crashers"] = scan["crashers"][:50]
+        crash_check["crash_count"] = len(scan["crashers"])
+        if scan["crashers"]:
+            report = afl_replay.crash_report(
+                out_dir=opt_bin_dir, corpus_dir=round_corpus["full"],
+                fuzz_target=ctx.fuzz_target, cpu=ctx.profile_cpu,
+                image=prework_image_for(ctx.entry), names=scan["crashers"])
+            with open(os.path.join(diff_dir, "new_crashes.txt"), "w") as f:
+                f.write(f"{len(scan['crashers'])} of {scan['expected']} inputs crash "
+                        f"the new build and not the previous best:\n"
+                        + "\n".join(scan["crashers"]) + "\n\n" + report)
+            optimization_ready = False
+            opt_rej = {"stage": "new_crashes",
+                       "reason": f"{len(scan['crashers'])} inputs crash the new "
+                                 f"build but not the previous best"}
+        elif not scan["ok"]:
+            optimization_ready = False
+            opt_rej = {"stage": "crash_check_failed",
+                       "reason": f"crash check ran {scan['scanned']} of "
+                                 f"{scan['expected']} inputs"}
+        logger.info("online round %d: crash check %s (%d of %d inputs crash)",
+                    iter_n, "FAILED" if not optimization_ready else "passed",
+                    crash_check["crash_count"], scan["expected"])
     if optimization_ready:
         # The replay gate times both binaries on ctx.profile_cpu, one core each,
         # run sequentially -- so its core-seconds are its wall-seconds.
+        #
+        # Online rounds already sized their corpus, so the gate never shrinks it
+        # again (cap=False). It times the round's gate sample -- same size as
+        # the set the agent tuned on, different inputs -- or, with
+        # ONLINE_GATE_FULL_SET=1, the full filtered set.
+        gate_corpus = None
+        if round_corpus:
+            gate_corpus = round_corpus[
+                "full" if getattr(config, "ONLINE_GATE_FULL_SET", False) else "gate"]
         with cpu_ledger.timed("replay_gate", cores=1):
             replay = phase2_setup.run_replay_speedup(
                 diff_output_dir=diff_dir, baseline_bin_dir=ctx.previous_best_bin,
                 optimized_bin_dir=opt_bin_dir, fuzz_target=ctx.fuzz_target,
                 experiment_dir=ctx.experiment_dir, profile_cpu=ctx.profile_cpu,
-                image=prework_image_for(ctx.entry))
+                image=prework_image_for(ctx.entry),
+                corpus_dir=gate_corpus, cap=not round_corpus)
         optimization_ready, replay_rej = phase2_setup._reject_if_no_replay_speedup(
             project=ctx.project, cve=ctx.entry["cve"],
             optimization_ready=optimization_ready, replay=replay,
@@ -1149,6 +1342,10 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         outcome = "kept"
     elif opt_rej and opt_rej.get("stage") == "optimized_poc_verify":
         outcome = "rejected-removed-bug"
+    elif opt_rej and opt_rej.get("stage") == "new_crashes":
+        outcome = "rejected-new-crashes"
+    elif opt_rej and opt_rej.get("stage") == "crash_check_failed":
+        outcome = "crash-check-failed"
     elif not opt_applied:
         # No diff was produced. Separate "the optimizer ran and found nothing
         # worth folding" -- evidence about the TARGET -- from "the session never
@@ -1199,6 +1396,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         },
         "optimizer": phase2_setup.optimizer_provenance(),
         "agent_memory_carried": carried_memory,
+        # Round corpus (crash filter + sizing) and the gate's crash check.
+        "corpus": round_corpus,
+        "crash_check": crash_check,
     })
     logger.info(
         "online round %d: outcome=%s speedup=%s applied=%s built=%s "

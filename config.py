@@ -24,6 +24,41 @@ MEMORY_LIMIT_RETRY = "8g"
 RSS_LIMIT_MB = 3072
 MAX_FAILED_TRIALS = 3  # If more than this many trials fail, exclude CVE
 
+# Sanitizer options for every FUZZING run (trials, preflight smoke, mutation
+# capture): FuzzBench's bug-benchmark fuzz-run set, byte for byte
+# (common/sanitizer.py, set_sanitizer_options(is_fuzz_run=True)). The option that
+# matters most here is alloc_dealloc_mismatch=0: our targets link libc++/libc++abi
+# dynamically, so with that check on, every caught C++ exception is an ASan abort
+# -- bloaty's 16 s "bug" was exactly that.
+# ONE deviation from FuzzBench (user decision, Oct 13): detect_leaks=0. A leak is
+# not a crash here, and LeakSanitizer stays off: with detect_leaks=1, afl-fuzz and
+# afl-showmap also export a slow 30-frame unwind on every malloc (see below).
+FUZZ_ASAN_OPTIONS = os.environ.get(
+    "BENCHMARK_FUZZ_ASAN_OPTIONS",
+    "abort_on_error=1:alloc_dealloc_mismatch=0:allocator_may_return_null=1:"
+    "allocator_release_to_os_interval_ms=500:allow_user_segv_handler=0:"
+    "check_malloc_usable_size=0:detect_leaks=0:detect_odr_violation=0:"
+    "detect_stack_use_after_return=1:fast_unwind_on_fatal=0:handle_abort=2:"
+    "handle_segv=2:handle_sigbus=2:handle_sigfpe=2:handle_sigill=2:"
+    "max_uar_stack_size_log=16:quarantine_size_mb=64:strict_memcmp=1:symbolize=0:"
+    "symbolize_inline_frames=0")
+FUZZ_UBSAN_OPTIONS = os.environ.get(
+    "BENCHMARK_FUZZ_UBSAN_OPTIONS",
+    "abort_on_error=1:allocator_release_to_os_interval_ms=500:handle_abort=2:"
+    "handle_segv=2:handle_sigbus=2:handle_sigfpe=2:handle_sigill=2:"
+    "print_stacktrace=0:symbolize=0:symbolize_inline_frames=0")
+
+# The same options for the optimizer's replay gate and smoke (sandbox/broker.py)
+# and the hotspot profiler (the skill's replay_fuzzer_profile.py, which hardcodes
+# this string and must be kept equal to it). They are the fuzzing set UNCHANGED,
+# so the gate and the profile time and rank exactly the workload the fuzzer runs.
+# (While detect_leaks was 1, afl-fuzz AND afl-showmap -- both call
+# set_sanitizer_defaults -- exported LSAN_OPTIONS=fast_unwind_on_malloc=0:
+# malloc_context_size=30, a slow 30-frame unwind on every malloc that cost 4-17x
+# throughput on the FuzzBench bug targets; campaigns before Oct 13 paid it.)
+REPLAY_ASAN_OPTIONS = FUZZ_ASAN_OPTIONS
+REPLAY_UBSAN_OPTIONS = FUZZ_UBSAN_OPTIONS
+
 # Machine resources
 TOTAL_CORES = 80
 RESERVED_CORES = 4
@@ -118,6 +153,23 @@ BASELINE_RESTART_MIRROR_SWAPS = os.environ.get(
 # for nothing or leave the slow one unbounded. _replay_unit_cap converts this
 # budget into units using the target's own measured replay rate.
 PHASE2_REPLAY_BUDGET_SECS = int(os.environ.get("PHASE2_REPLAY_BUDGET_SECS", "180"))
+# Online rounds apply this budget ONCE, to the round's mutation set before the
+# agent starts (phase3_online.prepare_round_corpus): the profile, every agent
+# replay and the agent's smoke sample all use the same speed-capped subset. The
+# gate does not shrink it again.
+
+# Online rounds: share of the round's crash-filtered mutations the agent's smoke
+# command runs on the new build (20k mutations -> 1,000 inputs). A crash there is
+# reported to the agent with its sanitizer report.
+ONLINE_SMOKE_FRACTION = float(os.environ.get("ONLINE_SMOKE_FRACTION", "0.05"))
+# Online rounds: what the final gate TIMES. 0 (default): a sample of the
+# crash-filtered mutations the same size as the speed-capped set the agent tuned
+# on, but different inputs -- so one pass fits PHASE2_REPLAY_BUDGET_SECS and the
+# gate partly tests on inputs the agent never timed. When nothing needed
+# shrinking, all three are the full set. 1: time the full set -- 6 passes of it,
+# ~40 min at 50 exec/s for 20k inputs. The gate's crash check always runs the
+# full set (one pass), whatever this says.
+ONLINE_GATE_FULL_SET = os.environ.get("ONLINE_GATE_FULL_SET", "0") == "1"
 
 # Hard upper bound on units the replay gate times, per pass. 0 = no manual cap
 # (the budget above still applies). Set this to pin a count and ignore the clock.

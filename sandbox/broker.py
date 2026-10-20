@@ -3,7 +3,7 @@
 The agent container has no docker socket and no host filesystem. When it needs a
 build, a smoke run, or a replay timing, it writes one JSON object to a unix
 socket and gets one JSON object back. The broker performs the docker work against
-the pinned prework image and returns a scrubbed result.
+the pinned prework image and returns the result.
 
 Two invariants make this a boundary rather than a suggestion:
 
@@ -12,15 +12,20 @@ Two invariants make this a boundary rather than a suggestion:
      operations runs, never HOW it runs -- everything else comes from
      BrokerContext, which the orchestrator sets.
 
-  2. Everything returned to the agent goes through sandbox.scrub. The broker
-     keeps the UNSCRUBBED output host-side in an audit log, so a human can always
-     reconstruct what really happened without that ever reaching the agent.
+  2. Build and smoke logs reach the agent as they are, sanitizer reports
+     included, cut only to their tail (LOG_TAIL_CHARS) so a multi-megabyte
+     compile log cannot flood its context. Showing the agent a bug is fine: a
+     smoke crash comes from inputs that did NOT crash the round-start binary
+     (the orchestrator removes those first), so it is the agent's own edit. The
+     full output is kept host-side in an audit log.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
+import shlex
 import shutil
 import socket
 import statistics
@@ -31,10 +36,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config
 from lib import cpu_ledger
 from lib.core_lock import core_lock
 from prework.prework_build import restore_ownership
-from sandbox.scrub import scrub
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,11 @@ MAX_REPLAY_REPEATS = 5
 DEFAULT_REPLAY_REPEATS = 3
 BUILD_TIMEOUT_SECS = 5400
 REPLAY_TIMEOUT_SECS = 3600
+# Tail of a build/smoke log returned to the agent. Errors sit at the end of a
+# build log; the head is configure noise.
+LOG_TAIL_CHARS = 40000
+# Crashing inputs re-run for a full sanitizer report, per smoke or gate check.
+MAX_CRASH_REPORTS = 3
 
 
 @dataclass
@@ -64,6 +74,9 @@ class BrokerContext:
     # memory-bandwidth / thermal from neighbour cores) that a stale once-per-round
     # anchor cannot. Empty -> disabled, falls back to a plain single-binary replay.
     baseline_ref_dir: str = ""
+    # Online rounds: the sample of the round's crash-filtered mutations that
+    # `smoke` runs the candidate on. Empty -> the legacy empty-input smoke.
+    smoke_corpus_dir: str = ""
     # Runtime state (not agent-chosen): set true once the reference is captured, and
     # the reference's own replay time at that first measurement (the normalisation
     # anchor). One BrokerContext per session, so these persist across requests.
@@ -72,7 +85,7 @@ class BrokerContext:
 
 
 def _audit(ctx: BrokerContext, op: str, blob: str) -> None:
-    """Record unscrubbed output host-side. Never returned to the agent."""
+    """Record the full output host-side; the agent gets only its tail."""
     if not ctx.audit_log:
         return
     try:
@@ -213,8 +226,144 @@ def _capture_reference(ctx: BrokerContext) -> None:
                        "will be un-bracketed", e)
 
 
+def _crash_scan_command(ctx: BrokerContext, out_dir: str, corpus_dir: str) -> list[str]:
+    """Run every input in ``corpus_dir`` once through the forkserver and name the
+    ones that crash.
+
+    afl-showmap's cmin mode (-Z) writes one map file per input; with
+    AFL_CMIN_CRASHES_ONLY=1 the file is EMPTY unless that input crashed, so the
+    non-empty files name the crashers (same behaviour in AFL++ 4.03a and 5.02c).
+    Timeouts also get an empty file, so a hang is not reported as a crash. The
+    file count proves the scan really ran over the whole set -- the old
+    libFuzzer-style crash filter exited 0 without executing anything and nobody
+    could tell. Same per-input timeout and sanitizer env as the replay gate.
+    """
+    return [
+        "docker", "run", "--rm", "--privileged",
+        "--cpuset-cpus", str(ctx.cpu),
+        "--memory", str(config.MEMORY_LIMIT), "--memory-swap", str(config.MEMORY_LIMIT),
+        "--ulimit", "core=0",
+        "--tmpfs", "/maps",
+        "-v", f"{Path(out_dir).absolute()}:/out:ro",
+        "-v", f"{Path(corpus_dir).absolute()}:/corpus:ro",
+        "--entrypoint", "/bin/bash", ctx.image, "-lc",
+        "export AFL_NO_AFFINITY=1 AFL_SKIP_CPUFREQ=1 "
+        "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 AFL_CMIN_CRASHES_ONLY=1 "
+        f"ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
+        f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS} MSAN_OPTIONS=symbolize=0; "
+        f"/out/afl-showmap -q -Z -i /corpus -o /maps -t 5000+ -m none -- "
+        f"/out/{ctx.fuzz_target} >/dev/null 2>/tmp/showmap.err; rc=$?; "
+        "tail -c 2000 /tmp/showmap.err; "
+        "find /maps -type f -size +0c -printf 'CRASHER %f\\n'; "
+        "echo \"SCANNED $(find /maps -type f | wc -l)\"; echo \"SCAN_RC=$rc\"",
+    ]
+
+
+def _crash_report_command(ctx: BrokerContext, out_dir: str, corpus_dir: str,
+                          names: list[str]) -> list[str]:
+    """Re-run each crashing input directly for a SYMBOLIZED sanitizer report,
+    plus a hexdump of its first 256 bytes, so the agent can see what broke."""
+    asan = config.REPLAY_ASAN_OPTIONS.replace("symbolize=0", "symbolize=1")
+    ubsan = (config.REPLAY_UBSAN_OPTIONS.replace("symbolize=0", "symbolize=1")
+             .replace("print_stacktrace=0", "print_stacktrace=1"))
+    steps = []
+    for n in names:
+        q = shlex.quote(f"/corpus/{n}")
+        steps.append(
+            f"echo '===== crashing input {n}' \"($(stat -c %s {q}) bytes)\"; "
+            f"od -A x -t x1z -v -N 256 {q}; "
+            f"timeout 60 /out/{ctx.fuzz_target} {q} 2>&1 | tail -n 120; "
+            "echo \"exit=${PIPESTATUS[0]}\"")
+    return [
+        "docker", "run", "--rm", "--privileged",
+        "--cpuset-cpus", str(ctx.cpu),
+        "--memory", str(config.MEMORY_LIMIT), "--memory-swap", str(config.MEMORY_LIMIT),
+        "--ulimit", "core=0",
+        "-v", f"{Path(out_dir).absolute()}:/out:ro",
+        "-v", f"{Path(corpus_dir).absolute()}:/corpus:ro",
+        "--entrypoint", "/bin/bash", ctx.image, "-lc",
+        f"export ASAN_OPTIONS={asan} UBSAN_OPTIONS={ubsan}; "
+        "[ -x /out/llvm-symbolizer ] && export ASAN_SYMBOLIZER_PATH=/out/llvm-symbolizer; "
+        + "; ".join(steps),
+    ]
+
+
+def scan_for_crashers(ctx: BrokerContext, out_dir: str, corpus_dir: str) -> dict:
+    """Run ``corpus_dir`` through the binary in ``out_dir``; name what crashes.
+
+    Returns ``ok`` (the scan provably covered every input), ``crashers`` (sorted
+    input names), ``scanned``, ``expected``, ``seconds`` and the raw ``log``.
+    afl-showmap skips zero-byte files, so they are not expected.
+    """
+    expected = sum(1 for p in Path(corpus_dir).iterdir()
+                   if p.is_file() and p.stat().st_size > 0)
+    t0 = time.monotonic()
+    rc, blob = _run(_crash_scan_command(ctx, out_dir, corpus_dir), REPLAY_TIMEOUT_SECS)
+    seconds = time.monotonic() - t0
+    crashers, scanned = [], -1
+    for line in blob.splitlines():
+        if line.startswith("CRASHER "):
+            crashers.append(line[len("CRASHER "):].strip())
+        elif line.startswith("SCANNED "):
+            try:
+                scanned = int(line.split()[1])
+            except (IndexError, ValueError):
+                pass
+    return {"ok": rc == 0 and scanned == expected, "crashers": sorted(crashers),
+            "scanned": scanned, "expected": expected, "seconds": seconds,
+            "log": blob}
+
+
+def crash_report(ctx: BrokerContext, out_dir: str, corpus_dir: str,
+                 names: list[str]) -> str:
+    """Symbolized sanitizer reports for up to MAX_CRASH_REPORTS ``names``."""
+    names = [n for n in names if _SAFE_NAME_RE.match(n)][:MAX_CRASH_REPORTS]
+    if not names:
+        return ""
+    _, blob = _run(_crash_report_command(ctx, out_dir, corpus_dir, names),
+                   60 * len(names) + 120)
+    return blob
+
+
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.,:+=-]+$")
+
+
+def _smoke_on_sample(ctx: BrokerContext) -> tuple[bool, str]:
+    """Run the candidate on the round's smoke sample; fail with the sanitizer
+    report of the first crashers. The sample was filtered against the
+    round-start binary, so any crash here comes from this round's edits."""
+    with core_lock(ctx.cpu):
+        scan = scan_for_crashers(ctx, ctx.out_dir, ctx.smoke_corpus_dir)
+        report = (crash_report(ctx, ctx.out_dir, ctx.smoke_corpus_dir, scan["crashers"])
+                  if scan["crashers"] else "")
+    _audit(ctx, "smoke", scan["log"] + ("\n" + report if report else ""))
+    if scan["crashers"]:
+        n = len(scan["crashers"])
+        head = (f"SMOKE FAILED: {n} of {scan['expected']} fuzzer inputs crash this "
+                f"build. None of them crash the round-start binary, so this round's "
+                f"edits caused it. Crashing inputs: {', '.join(scan['crashers'][:20])}"
+                f"{' ...' if n > 20 else ''}\n"
+                f"Sanitizer reports for the first {min(n, MAX_CRASH_REPORTS)}:\n")
+        return False, head + report
+    if not scan["ok"]:
+        return False, (f"SMOKE FAILED: the target did not run the whole sample "
+                       f"({scan['scanned']} of {scan['expected']} inputs; exit "
+                       f"status in the log below).\n" + scan["log"])
+    return True, (f"smoke ok: {scan['expected']} fuzzer inputs ran on this build, "
+                  f"none crashed ({scan['seconds']:.1f}s)")
+
+
 def _run_smoke(ctx: BrokerContext) -> tuple[bool, str]:
-    """Run the built target briefly to confirm it is not dead on arrival."""
+    """Run the built target briefly to confirm it is not dead on arrival.
+
+    Online rounds run it on a sample of real fuzzer inputs (_smoke_on_sample).
+    Without one, this legacy smoke runs a single EMPTY input -- which the AFL
+    driver skips before calling LLVMFuzzerTestOneInput, so it only proves the
+    binary loads.
+    """
+    if ctx.smoke_corpus_dir and any(
+            p.is_file() for p in Path(ctx.smoke_corpus_dir).iterdir()):
+        return _smoke_on_sample(ctx)
     cmd = [
         "docker", "run", "--rm", "--privileged",
         "--cpuset-cpus", str(ctx.cpu),
@@ -314,6 +463,14 @@ def _run_replay(ctx: BrokerContext, repeats: int) -> dict | None:
     return out
 
 
+def _tail(blob: str) -> str:
+    """The last LOG_TAIL_CHARS of a log, marked when anything was cut."""
+    if len(blob) <= LOG_TAIL_CHARS:
+        return blob
+    return (f"[... {len(blob) - LOG_TAIL_CHARS} earlier characters omitted ...]\n"
+            + blob[-LOG_TAIL_CHARS:])
+
+
 def handle_request(req, ctx: BrokerContext) -> dict:
     """Dispatch one request. Never raises -- a broker crash would kill the round.
 
@@ -333,13 +490,13 @@ def handle_request(req, ctx: BrokerContext) -> dict:
         with cpu_ledger.timed("broker_build", cores=1) as info:
             ok, blob = _run_build(ctx)
             info["ok"] = ok
-        return {"ok": ok, "log": scrub(blob)}
+        return {"ok": ok, "log": _tail(blob)}
 
     if op == "smoke":
         with cpu_ledger.timed("broker_smoke", cores=1) as info:
             ok, blob = _run_smoke(ctx)
             info["ok"] = ok
-        return {"ok": ok, "log": scrub(blob)}
+        return {"ok": ok, "log": _tail(blob)}
 
     if op == "replay_time":
         raw = req.get("repeats", DEFAULT_REPLAY_REPEATS)

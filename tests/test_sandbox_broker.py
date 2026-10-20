@@ -27,7 +27,8 @@ def test_op_must_be_a_string_not_a_structure(tmp_path):
     assert handle_request({"op": ["build"]}, _ctx(tmp_path))["ok"] is False
 
 
-def test_build_result_is_scrubbed(tmp_path, monkeypatch):
+def test_build_log_reaches_the_agent_unscrubbed(tmp_path, monkeypatch):
+    """The agent may see any bug the run has hit, and needs the real error."""
     import sandbox.broker as b
     monkeypatch.setattr(
         b, "_run_build",
@@ -35,17 +36,106 @@ def test_build_result_is_scrubbed(tmp_path, monkeypatch):
     )
     r = handle_request({"op": "build"}, _ctx(tmp_path))
     assert r["ok"] is False
-    assert "Sanitizer" not in r["log"]
+    assert "AddressSanitizer: heap-use-after-free" in r["log"]
 
 
-def test_smoke_result_is_scrubbed(tmp_path, monkeypatch):
+def test_smoke_log_reaches_the_agent_unscrubbed(tmp_path, monkeypatch):
     import sandbox.broker as b
     monkeypatch.setattr(
         b, "_run_smoke",
         lambda ctx: (False, "SUMMARY: AddressSanitizer: stack-buffer-overflow /s/valid.c"),
     )
     r = handle_request({"op": "smoke"}, _ctx(tmp_path))
-    assert "valid.c" not in r["log"] and "Sanitizer" not in r["log"]
+    assert "valid.c" in r["log"]
+
+
+def test_a_huge_log_is_cut_to_its_tail(tmp_path, monkeypatch):
+    """A multi-megabyte compile log must not flood the agent's context; the
+    error is at the end, so the tail is what survives."""
+    import sandbox.broker as b
+    blob = "noise\n" * 100000 + "error: the real one"
+    monkeypatch.setattr(b, "_run_build", lambda ctx: (False, blob))
+    log = handle_request({"op": "build"}, _ctx(tmp_path))["log"]
+    assert len(log) < b.LOG_TAIL_CHARS + 200
+    assert log.endswith("error: the real one") and "omitted" in log
+
+
+def _sample(tmp_path, n=4):
+    d = tmp_path / "smoke"
+    d.mkdir()
+    for i in range(n):
+        (d / f"unit_{i:08d}").write_bytes(b"x")
+    return d
+
+
+def test_crash_scan_names_crashers_with_cmin_crashes_only(tmp_path):
+    """afl-showmap -Z + AFL_CMIN_CRASHES_ONLY leaves a non-empty map only for a
+    crashing input; both AFL++ 4.03a and 5.02c behave this way."""
+    import sandbox.broker as b
+    cmd = " ".join(b._crash_scan_command(_ctx(tmp_path), "/o", "/c"))
+    assert "afl-showmap -q -Z -i /corpus -o /maps" in cmd
+    assert "AFL_CMIN_CRASHES_ONLY=1" in cmd
+    assert "/o:/out:ro" in cmd and "/c:/corpus:ro" in cmd
+    assert "--memory" in cmd and "--tmpfs /maps" in cmd
+    assert "-t 5000+" in cmd            # same per-input timeout as the replay gate
+
+
+def test_scan_parses_crashers_and_requires_full_coverage(tmp_path, monkeypatch):
+    import sandbox.broker as b
+    d = _sample(tmp_path)
+    monkeypatch.setattr(b, "_run", lambda cmd, t: (
+        0, "CRASHER unit_00000002\nSCANNED 4\nSCAN_RC=0\n"))
+    r = b.scan_for_crashers(_ctx(tmp_path), str(tmp_path), str(d))
+    assert r["ok"] and r["crashers"] == ["unit_00000002"] and r["expected"] == 4
+
+
+@pytest.mark.parametrize("blob", [
+    "SCANNED 0\nSCAN_RC=0\n",        # ran nothing -- the old filter's failure mode
+    "SCANNED 3\nSCAN_RC=0\n",        # stopped early
+    "",                                 # container never started
+])
+def test_scan_that_did_not_cover_every_input_is_not_ok(tmp_path, monkeypatch, blob):
+    import sandbox.broker as b
+    d = _sample(tmp_path)
+    monkeypatch.setattr(b, "_run", lambda cmd, t: (0, blob))
+    assert b.scan_for_crashers(_ctx(tmp_path), str(tmp_path), str(d))["ok"] is False
+
+
+def test_smoke_on_sample_reports_crashers_with_their_sanitizer_report(tmp_path, monkeypatch):
+    import sandbox.broker as b
+    d = _sample(tmp_path)
+    ctx = _ctx(tmp_path)
+    ctx.smoke_corpus_dir = str(d)
+    monkeypatch.setattr(b, "scan_for_crashers", lambda c, o, cd: {
+        "ok": True, "crashers": ["unit_00000001"], "scanned": 4, "expected": 4,
+        "seconds": 0.1, "log": ""})
+    monkeypatch.setattr(b, "crash_report", lambda c, o, cd, names:
+                        "SUMMARY: AddressSanitizer: heap-buffer-overflow /src/p/fold.c:9")
+    r = handle_request({"op": "smoke"}, ctx)
+    assert r["ok"] is False
+    assert "unit_00000001" in r["log"] and "fold.c:9" in r["log"]
+    assert "this round's edits" in r["log"]
+
+
+def test_clean_smoke_on_sample_passes(tmp_path, monkeypatch):
+    import sandbox.broker as b
+    d = _sample(tmp_path)
+    ctx = _ctx(tmp_path)
+    ctx.smoke_corpus_dir = str(d)
+    monkeypatch.setattr(b, "scan_for_crashers", lambda c, o, cd: {
+        "ok": True, "crashers": [], "scanned": 4, "expected": 4,
+        "seconds": 0.1, "log": ""})
+    r = handle_request({"op": "smoke"}, ctx)
+    assert r["ok"] is True and "4 fuzzer inputs" in r["log"]
+
+
+def test_crash_report_ignores_unsafe_names(tmp_path, monkeypatch):
+    import sandbox.broker as b
+    seen = {}
+    monkeypatch.setattr(b, "_run", lambda cmd, t: seen.setdefault("cmd", cmd) and (0, "r"))
+    b.crash_report(_ctx(tmp_path), "/o", "/c", ["unit_1; rm -rf /", "unit_2"])
+    script = seen["cmd"][-1]
+    assert "unit_2" in script and "rm -rf" not in script
 
 
 def test_replay_time_returns_only_a_number(tmp_path, monkeypatch):

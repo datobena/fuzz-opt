@@ -134,7 +134,7 @@ def run_sandboxed_optimizer(
     image: str, fuzz_target: str, project: str, prompt: str,
     cpu: int = 0, timeout: int | None = None, audit_log: str = "",
     base_env: dict | None = None, harness: str = "", model: str = "",
-    effort: str = "",
+    effort: str = "", smoke_corpus_dir: str = "",
 ) -> dict:
     """Run one optimizer session confined to a container.
 
@@ -173,6 +173,8 @@ def run_sandboxed_optimizer(
         corpus_dir=corpus_dir, fuzz_target=fuzz_target, project=project,
         cpu=cpu, audit_log=audit_log or str(session_dir / "broker_audit.log"),
         baseline_ref_dir=baseline_ref_dir,
+        # Online rounds: the crash-filtered mutation sample `smoke` runs on.
+        smoke_corpus_dir=smoke_corpus_dir,
     )
 
     stop = threading.Event()

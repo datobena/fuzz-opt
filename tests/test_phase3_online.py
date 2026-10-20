@@ -252,7 +252,7 @@ def test_build_round_env_overrides_corpus_and_baseline(tmp_path):
     prev = tmp_path / "prev_bin"; prev.mkdir()
     env = phase3_online.build_round_env(
         experiment_dir=tmp_path / "exp", diff_dir=tmp_path / "diff",
-        opt_bin_dir=tmp_path / "optbin", snapshot_dir=snap,
+        opt_bin_dir=tmp_path / "optbin", corpus_dir=snap,
         entry=entry, previous_best_bin=prev)
     assert env["FUZZ_SOURCE_FOLDS_CORPUS_DIR"] == str(snap)
     assert env["FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR"] == str(prev)
@@ -267,7 +267,7 @@ def test_build_round_env_uses_pure_reservoir(tmp_path):
     snap = tmp_path / "snap"; snap.mkdir()
     env = phase3_online.build_round_env(
         experiment_dir=tmp_path / "exp", diff_dir=tmp_path / "diff",
-        opt_bin_dir=tmp_path / "optbin", snapshot_dir=snap,
+        opt_bin_dir=tmp_path / "optbin", corpus_dir=snap,
         entry=entry, previous_best_bin=tmp_path / "prev")
     assert env["FUZZ_SOURCE_FOLDS_MUTATION_QUEUE_PASS"] == "0"
     # reservoir stays enabled (default) — do not disable it
@@ -616,3 +616,125 @@ def test_dump_request_is_cleared_before_waiting(tmp_path):
         _c.ONLINE_MUTATION_DUMP_TIMEOUT_SECS = old
     assert not (d / phase3_online.BATCH_MARKER).exists()
     assert not (d / "mut_old_00000001").exists()
+
+
+# --- prepare_round_corpus: crash filter + speed cap + smoke sample ---------
+from pathlib import Path
+
+
+def _mutations(tmp_path, n):
+    d = tmp_path / "muts"
+    d.mkdir()
+    for i in range(n):
+        (d / f"mut_{i:08d}").write_bytes(b"m%d" % i)
+    return d
+
+
+def _fake_find(crashers, seconds):
+    def find(*, out_dir, corpus_dir, fuzz_target, cpu, image):
+        n = sum(1 for _ in Path(corpus_dir).iterdir())
+        return {"ok": True, "crashers": sorted(crashers), "scanned": n,
+                "expected": n, "seconds": seconds, "log": ""}
+    return find
+
+
+def test_round_corpus_drops_inputs_that_crash_the_previous_best(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 0)
+    muts = _mutations(tmp_path, 100)
+    r = phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7,
+        find_crashers_fn=_fake_find({"mut_00000003", "mut_00000050"}, 1.0))
+    full = {p.name for p in Path(r["full"]).iterdir()}
+    assert len(full) == 98 and "mut_00000003" not in full
+    assert r["crashers_removed"] == 2 and r["tuning"] == r["full"]
+
+
+def test_round_corpus_caps_the_tuning_set_by_measured_speed(tmp_path, monkeypatch):
+    # 100 inputs in 10s = 10 inputs/s; a 3s budget fits 30.
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    muts = _mutations(tmp_path, 100)
+    r = phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7,
+        find_crashers_fn=_fake_find(set(), 10.0))
+    tuning = {p.name for p in Path(r["tuning"]).iterdir()}
+    full = {p.name for p in Path(r["full"]).iterdir()}
+    assert len(tuning) == 30 and tuning <= full and len(full) == 100
+
+
+def test_round_corpus_smoke_is_five_percent_of_the_full_set(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "ONLINE_SMOKE_FRACTION", 0.05)
+    muts = _mutations(tmp_path, 200)
+    kw = dict(mutations_dir=muts, previous_best_bin="/b", fuzz_target="t",
+              image="i", cpu=1, seed=7, find_crashers_fn=_fake_find(set(), 1.0))
+    a = phase3_online.prepare_round_corpus(out_root=tmp_path / "a", **kw)
+    b = phase3_online.prepare_round_corpus(out_root=tmp_path / "b", **kw)
+    names = sorted(p.name for p in Path(a["smoke"]).iterdir())
+    assert len(names) == 10
+    assert names == sorted(p.name for p in Path(b["smoke"]).iterdir())  # deterministic
+
+
+def test_round_corpus_refuses_a_filter_that_did_not_run(tmp_path):
+    muts = _mutations(tmp_path, 10)
+
+    def broken(**_):
+        return {"ok": False, "crashers": [], "scanned": 0, "expected": 10,
+                "seconds": 0.5, "log": "SCANNED 0"}
+
+    assert phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7, find_crashers_fn=broken) is None
+
+
+def test_round_corpus_sizes_by_the_gate_rate_when_known(tmp_path, monkeypatch):
+    # The filter pass runs ~2x faster than a timing pass, so the gate's own
+    # measured rate wins: 5 inputs/s x 4s budget = 20, not the filter's 40.
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 4)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    muts = _mutations(tmp_path, 100)
+    r = phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7, replay_rate=5.0,
+        find_crashers_fn=_fake_find(set(), 10.0))
+    assert r["tuning_count"] == 20 and r["rate_source"] == "gate"
+
+
+def test_gate_sample_is_tuning_sized_but_different_inputs(tmp_path, monkeypatch):
+    # 10 inputs/s x 3s = 30 of 100: room for two disjoint samples.
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    muts = _mutations(tmp_path, 100)
+    r = phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7,
+        find_crashers_fn=_fake_find(set(), 10.0))
+    tuning = {p.name for p in Path(r["tuning"]).iterdir()}
+    gate = {p.name for p in Path(r["gate"]).iterdir()}
+    assert len(gate) == len(tuning) == 30
+    assert not gate & tuning and r["gate_overlap_with_tuning"] == 0
+
+
+def test_gate_sample_overlaps_only_when_the_set_is_too_small(tmp_path, monkeypatch):
+    # 70 of 100 each: only 30 untimed inputs exist, so 40 must be shared.
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 7)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    muts = _mutations(tmp_path, 100)
+    r = phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7,
+        find_crashers_fn=_fake_find(set(), 10.0))
+    tuning = {p.name for p in Path(r["tuning"]).iterdir()}
+    gate = {p.name for p in Path(r["gate"]).iterdir()}
+    assert len(gate) == 70 and len(gate & tuning) == 40
+
+
+def test_gate_is_the_full_set_when_nothing_needs_shrinking(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 180)
+    muts = _mutations(tmp_path, 50)
+    r = phase3_online.prepare_round_corpus(
+        mutations_dir=muts, out_root=tmp_path / "corpus", previous_best_bin="/b",
+        fuzz_target="t", image="i", cpu=1, seed=7,
+        find_crashers_fn=_fake_find(set(), 1.0))
+    assert r["gate"] == r["tuning"] == r["full"]
