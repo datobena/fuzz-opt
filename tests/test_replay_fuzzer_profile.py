@@ -5,11 +5,8 @@ import types
 from pathlib import Path
 
 
-# Resolve the live skill scripts the way config.py does: prefer the Claude
-# install, fall back to the Codex one.
-_CLAUDE = Path("/home/sefcom/.claude/skills/profile-once-fuzz-folds/scripts")
-_CODEX = Path("/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts")
-SCRIPTS_DIR = _CLAUDE if _CLAUDE.exists() else _CODEX
+# The skill is vendored in this repo under skills/, where config.py points.
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "skills" / "profile-once-fuzz-folds" / "scripts"
 
 
 def _load_module(name):

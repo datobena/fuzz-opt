@@ -22,6 +22,7 @@ writes. Everything else is sorted by what it is *for*.
 | `phase1_select_cves.py` … `phase4_analysis.py` | the four pipeline phases; `phase3_online.py` drives the per-trial optimizers |
 | `mutation_capture.py`, `mutation_dump_*.c` | the AFL custom-mutator shim that harvests each trial's own mutations |
 | `manifest.json`, `arvo_baseline_denylist.json` | **live state** — the active run set, and targets whose baseline failed |
+| `skills/` | the optimizer skill the sandboxed agent runs (`SKILL.md` + helper scripts); `config.PHASE2_SKILL_DIR` points here |
 | `lib/`, `sandbox/` | shared modules; `sandbox/` is the broker + egress jail the optimizer agent runs behind |
 | `prework/` | per-target build recipes (`targets/` for ARVO, `fuzzbench/` for FuzzBench) |
 | `k8s/` | the Indexed-Job backend for `PHASE3_BACKEND=k8s` |

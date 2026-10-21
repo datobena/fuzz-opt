@@ -317,15 +317,18 @@ PHASE2_OPTIMIZER_SKILL = os.environ.get(
 )
 
 # Skill helper scripts (real_fuzzer_profile.py, replay_timing.py, ...). The
-# Claude and Codex skill trees carry identical copies; pick the one matching the
-# active optimizer backend so the benchmark loads the same helpers the agent uses.
+# Claude skill is vendored in this repo under skills/ so a fresh clone carries
+# it; the sandbox mounts the parent of this dir as the agent's skill. The Codex
+# tree differs only by agents/openai.yaml and still lives in ~/.codex/skills.
 # The profile-once-fuzz-folds tree is self-contained (its scripts/ holds a verbatim
 # replay_timing.py, which is all _load_replay_timing_module() needs).
-PHASE2_SKILL_SCRIPTS_DIR = (
-    "/home/sefcom/.claude/skills/profile-once-fuzz-folds/scripts"
+# PHASE2_SKILL_DIR overrides the skill root (e.g. to test an edited copy).
+PHASE2_SKILL_DIR = os.environ.get("PHASE2_SKILL_DIR") or (
+    os.path.join(BENCHMARK_DIR, "skills", PHASE2_OPTIMIZER_SKILL)
     if OPTIMIZER_BACKEND == "claude"
-    else "/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts"
+    else str(Path.home() / ".codex" / "skills" / PHASE2_OPTIMIZER_SKILL)
 )
+PHASE2_SKILL_SCRIPTS_DIR = os.path.join(PHASE2_SKILL_DIR, "scripts")
 
 # Phase 3 execution backend: "k8s" (Indexed Jobs on a cluster) or "local"
 # (Docker containers on this host). Overridable with the PHASE3_BACKEND env var.

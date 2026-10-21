@@ -4,10 +4,7 @@ from pathlib import Path
 
 
 def _load_replay_module():
-    path = Path(
-        "/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts/"
-        "replay_timing.py"
-    )
+    path = Path(__file__).resolve().parents[1] / "skills" / "profile-once-fuzz-folds" / "scripts" / "replay_timing.py"
     spec = importlib.util.spec_from_file_location("replay_timing", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

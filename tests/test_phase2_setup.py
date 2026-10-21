@@ -707,16 +707,11 @@ def test_make_arvo_wrapper_validation_env_uses_historical_clone_container(
     assert env["FUZZ_SOURCE_FOLDS_OUT_DIR"] == str(state_root / "out")
 
 
-PROFILE_ONCE_SKILL_PATH = Path(
-    "/home/sefcom/.codex/skills/profile-once-fuzz-folds/SKILL.md"
-)
-PROFILE_ONCE_SKILL_PATH_CLAUDE = Path(
-    "/home/sefcom/.claude/skills/profile-once-fuzz-folds/SKILL.md"
-)
-PROFILE_ONCE_SCRIPTS_DIRS = (
-    Path("/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts"),
-    Path("/home/sefcom/.claude/skills/profile-once-fuzz-folds/scripts"),
-)
+# The skill is vendored in this repo under skills/.
+PROFILE_ONCE_SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "profile-once-fuzz-folds"
+PROFILE_ONCE_SKILL_PATH = PROFILE_ONCE_SKILL_DIR / "SKILL.md"
+PROFILE_ONCE_SKILL_PATH_CLAUDE = PROFILE_ONCE_SKILL_PATH
+PROFILE_ONCE_SCRIPTS_DIRS = (PROFILE_ONCE_SKILL_DIR / "scripts",)
 
 
 def test_profile_once_skill_documents_wrapper_validation():

@@ -5,9 +5,8 @@ import types
 from pathlib import Path
 
 
-SCRIPTS_DIR = Path(
-    "/home/sefcom/.codex/skills/profile-once-fuzz-folds/scripts"
-)
+# The skill is vendored in this repo under skills/.
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "skills" / "profile-once-fuzz-folds" / "scripts"
 
 
 def _load_module(name):

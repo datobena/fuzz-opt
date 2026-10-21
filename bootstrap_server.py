@@ -114,8 +114,8 @@ def check_prereqs() -> list[tuple[str, str, str]]:
         f"once it expires while the trials keep fuzzing",
     ))
 
-    # The optimization skill is NOT in this repo -- it lives in the agent's skill
-    # tree. Without it phase 2 cannot load replay_timing.py, so run_replay_speedup
+    # The Claude optimization skill is vendored under skills/; the Codex one still
+    # lives in ~/.codex/skills. Without it phase 2 cannot load replay_timing.py, so run_replay_speedup
     # returns None and the gate rejects EVERY round: a campaign that burns its
     # full budget and accepts nothing. Silent because run_replay_speedup catches
     # its own failures by design, which is exactly why it is checked up front.
@@ -126,8 +126,9 @@ def check_prereqs() -> list[tuple[str, str, str]]:
         f"optimizer skill ({config.PHASE2_OPTIMIZER_SKILL})",
         OK if not missing else MISSING,
         "" if not missing else
-        f"missing {', '.join(missing)} under {scripts}; copy the skill tree from "
-        "a machine that has it -- it is not carried in this repo",
+        f"missing {', '.join(missing)} under {scripts}; the Claude skill ships "
+        "in skills/ (check PHASE2_SKILL_DIR / PHASE2_OPTIMIZER_SKILL), the Codex "
+        "one must be copied into ~/.codex/skills",
     ))
     return rows
 
