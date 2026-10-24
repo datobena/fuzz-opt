@@ -26,6 +26,8 @@ Two flavours, keyed on the manifest entry:
        '+' auto-picks down to a 5 ms timeout -- user decision);
     -s <seed> / -V <secs> (deterministic RNG, time-limited campaign);
     AFL_AUTORESUME=1 (hot-swap relaunches resume the same output tree);
+    AFL_TESTCACHE_SIZE=50, not 2 (the runner's 2 MB cache lets afl-fuzz spin
+       forever once two 1 MiB inputs meet -- see config.FUZZBENCH_AFL_ENV);
     afl-fuzz runs in the FuzzBench *builder* image, not the runner image (same
        Ubuntu 20.04 / glibc 2.31 and the same /out), so the runner's PATH and
        LD_LIBRARY_PATH are passed explicitly.

@@ -76,7 +76,8 @@ def test_bug_target_with_cmplog_dicts_and_options_dict(tmp_path):
               "AFL_NO_WARN_INSTABILITY", "AFL_DISABLE_TRIM", "AFL_CMPLOG_ONLY_NEW",
               "AFL_AUTORESUME"):
         assert env[k] == "1", k
-    assert env["AFL_TESTCACHE_SIZE"] == "2"
+    # Deliberately not FuzzBench's "2": a 2 MB cache can hang afl-fuzz (config.py).
+    assert env["AFL_TESTCACHE_SIZE"] == "50"
     assert env["LD_LIBRARY_PATH"] == ":/out"
     assert env["PATH"].endswith(":/out")
     assert env["ASAN_OPTIONS"] == config.FUZZ_ASAN_OPTIONS

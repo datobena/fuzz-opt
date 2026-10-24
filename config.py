@@ -621,8 +621,17 @@ FUZZBENCH_AFL_ENV = (
     ("AFL_NO_WARN_INSTABILITY", "1"),
     ("AFL_DISABLE_TRIM", "1"),
     ("AFL_CMPLOG_ONLY_NEW", "1"),
-    ("AFL_TESTCACHE_SIZE", "2"),
+    ("AFL_TESTCACHE_SIZE", os.environ.get("FUZZBENCH_AFL_TESTCACHE_SIZE", "50")),
 )
+# Deviation from FuzzBench (user decision, Oct 23): AFL_TESTCACHE_SIZE=50, not the
+# runner's 2 (MB). With 2, AFL++ 56d5aa31 can spin forever in queue_testcase_get()
+# (src/afl-fuzz-queue.c ~1340): to load a 1 MiB entry while the entry being fuzzed is
+# also 1 MiB (MAX_FILE), it evicts until only queue_cur is left, then keeps drawing
+# random slots that are either empty or queue_cur, which it may not evict. afl-fuzz
+# sits at 100% CPU with no stats, plot_data or log output, and the container stays
+# up. That froze 9 of 20 harfbuzz trials silently (online-24h-c1-harfbuzz-20261022-0139),
+# and the stall-repro-harfbuzz-20261022 replicas froze 3/3 on the same 1 MiB entry.
+# 50 is AFL++'s own default and always holds two max-size inputs.
 # runner.Dockerfile: ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/out" (empty base ->
 # ":/out") and PATH=$PATH:/out over ubuntu:focal's default PATH.
 FUZZBENCH_LD_LIBRARY_PATH = ":/out"
