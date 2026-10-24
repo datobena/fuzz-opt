@@ -1,0 +1,122 @@
+[
+  {
+    "project": "mruby",
+    "cve": "fuzzbench-900026",
+    "local_id": 900026,
+    "image": "fb-aflpp/mruby_mruby_fuzzer_8c8bbd:latest",
+    "fuzz_target": "mruby_fuzzer",
+    "kind": "fuzzbench",
+    "type": "bug",
+    "fuzzbench_dir": "mruby_mruby_fuzzer_8c8bbd"
+  },
+  {
+    "project": "bloaty",
+    "cve": "fuzzbench-900001",
+    "local_id": 900001,
+    "image": "fb-aflpp/bloaty_fuzz_target:latest",
+    "fuzz_target": "fuzz_target",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "bloaty_fuzz_target"
+  },
+  {
+    "project": "sqlite3",
+    "cve": "fuzzbench-900006",
+    "local_id": 900006,
+    "image": "fb-aflpp/sqlite3_ossfuzz:latest",
+    "fuzz_target": "ossfuzz",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "sqlite3_ossfuzz"
+  },
+  {
+    "project": "openssl",
+    "cve": "fuzzbench-900019",
+    "local_id": 900019,
+    "image": "fb-aflpp/openssl_x509:latest",
+    "fuzz_target": "x509",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "openssl_x509"
+  },
+  {
+    "project": "systemd",
+    "cve": "fuzzbench-900021",
+    "local_id": 900021,
+    "image": "fb-aflpp/systemd_fuzz-link-parser:latest",
+    "fuzz_target": "fuzz-link-parser",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "systemd_fuzz-link-parser"
+  },
+  {
+    "project": "openthread",
+    "cve": "fuzzbench-900009",
+    "local_id": 900009,
+    "image": "fb-aflpp/openthread_ot-ip6-send-fuzzer:latest",
+    "fuzz_target": "ot-ip6-send-fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "openthread_ot-ip6-send-fuzzer"
+  },
+  {
+    "project": "jsoncpp",
+    "cve": "fuzzbench-900002",
+    "local_id": 900002,
+    "image": "fb-aflpp/jsoncpp_jsoncpp_fuzzer:latest",
+    "fuzz_target": "jsoncpp_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "jsoncpp_jsoncpp_fuzzer"
+  },
+  {
+    "project": "zlib",
+    "cve": "fuzzbench-900003",
+    "local_id": 900003,
+    "image": "fb-aflpp/zlib_zlib_uncompress_fuzzer:latest",
+    "fuzz_target": "zlib_uncompress_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "zlib_zlib_uncompress_fuzzer"
+  },
+  {
+    "project": "libxml2",
+    "cve": "fuzzbench-900005",
+    "local_id": 900005,
+    "image": "fb-aflpp/libxml2_xml:latest",
+    "fuzz_target": "xml",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libxml2_xml"
+  },
+  {
+    "project": "re2",
+    "cve": "fuzzbench-900011",
+    "local_id": 900011,
+    "image": "fb-aflpp/re2_fuzzer:latest",
+    "fuzz_target": "fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "re2_fuzzer"
+  },
+  {
+    "project": "libpng",
+    "cve": "fuzzbench-900017",
+    "local_id": 900017,
+    "image": "fb-aflpp/libpng_libpng_read_fuzzer:latest",
+    "fuzz_target": "libpng_read_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libpng_libpng_read_fuzzer"
+  },
+  {
+    "project": "vorbis",
+    "cve": "fuzzbench-900022",
+    "local_id": 900022,
+    "image": "fb-aflpp/vorbis_decode_fuzzer:latest",
+    "fuzz_target": "decode_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "vorbis_decode_fuzzer"
+  }
+]

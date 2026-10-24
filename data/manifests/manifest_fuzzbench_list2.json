@@ -1,0 +1,122 @@
+[
+  {
+    "project": "PROJ",
+    "cve": "fuzzbench-900007",
+    "local_id": 900007,
+    "image": "fb-aflpp/proj4_proj_crs_to_crs_fuzzer:latest",
+    "fuzz_target": "proj_crs_to_crs_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "proj4_proj_crs_to_crs_fuzzer"
+  },
+  {
+    "project": "harfbuzz",
+    "cve": "fuzzbench-900010",
+    "local_id": 900010,
+    "image": "fb-aflpp/harfbuzz_hb-shape-fuzzer:latest",
+    "fuzz_target": "hb-shape-fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "harfbuzz_hb-shape-fuzzer"
+  },
+  {
+    "project": "freetype2",
+    "cve": "fuzzbench-900012",
+    "local_id": 900012,
+    "image": "fb-aflpp/freetype2_ftfuzzer:latest",
+    "fuzz_target": "ftfuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "freetype2_ftfuzzer"
+  },
+  {
+    "project": "curl",
+    "cve": "fuzzbench-900028",
+    "local_id": 900028,
+    "image": "fb-aflpp/curl_curl_fuzzer_http:latest",
+    "fuzz_target": "curl_fuzzer_http",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "curl_curl_fuzzer_http"
+  },
+  {
+    "project": "mbedtls",
+    "cve": "fuzzbench-900029",
+    "local_id": 900029,
+    "image": "fb-aflpp/mbedtls_fuzz_dtlsclient:latest",
+    "fuzz_target": "fuzz_dtlsclient",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "mbedtls_fuzz_dtlsclient"
+  },
+  {
+    "project": "libjpeg-turbo.main",
+    "cve": "fuzzbench-900004",
+    "local_id": 900004,
+    "image": "fb-aflpp/libjpeg-turbo_libjpeg_turbo_fuzzer:latest",
+    "fuzz_target": "libjpeg_turbo_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libjpeg-turbo_libjpeg_turbo_fuzzer"
+  },
+  {
+    "project": "libxslt",
+    "cve": "fuzzbench-900008",
+    "local_id": 900008,
+    "image": "fb-aflpp/libxslt_xpath:latest",
+    "fuzz_target": "xpath",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libxslt_xpath"
+  },
+  {
+    "project": "woff2",
+    "cve": "fuzzbench-900014",
+    "local_id": 900014,
+    "image": "fb-aflpp/woff2_convert_woff2ttf_fuzzer:latest",
+    "fuzz_target": "convert_woff2ttf_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "woff2_convert_woff2ttf_fuzzer"
+  },
+  {
+    "project": "Little-CMS",
+    "cve": "fuzzbench-900015",
+    "local_id": 900015,
+    "image": "fb-aflpp/lcms_cms_transform_fuzzer:latest",
+    "fuzz_target": "cms_transform_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "lcms_cms_transform_fuzzer"
+  },
+  {
+    "project": "libpcap",
+    "cve": "fuzzbench-900016",
+    "local_id": 900016,
+    "image": "fb-aflpp/libpcap_fuzz_both:latest",
+    "fuzz_target": "fuzz_both",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "libpcap_fuzz_both"
+  },
+  {
+    "project": "openh264",
+    "cve": "fuzzbench-900018",
+    "local_id": 900018,
+    "image": "fb-aflpp/openh264_decoder_fuzzer:latest",
+    "fuzz_target": "decoder_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "openh264_decoder_fuzzer"
+  },
+  {
+    "project": "stb",
+    "cve": "fuzzbench-900020",
+    "local_id": 900020,
+    "image": "fb-aflpp/stb_stbi_read_fuzzer:latest",
+    "fuzz_target": "stbi_read_fuzzer",
+    "kind": "fuzzbench",
+    "type": "coverage",
+    "fuzzbench_dir": "stb_stbi_read_fuzzer"
+  }
+]
