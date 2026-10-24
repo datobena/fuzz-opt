@@ -149,7 +149,7 @@ def one_trial(args) -> tuple[str, str, int, str]:
     name = f"{arm}_{Path(trial).name}"
     if not queue.is_dir() or not any(queue.iterdir()):
         return (arm, Path(trial).name, 0, "empty queue")
-    tmp = Path(tempfile.mkdtemp(prefix="cov-", dir="/tmp"))
+    tmp = Path(tempfile.mkdtemp(prefix="cov-"))
     try:
         maps = tmp / "maps"
         if not showmap_maps(image, baseline_bin, fuzz_target, queue, maps, cpu):
