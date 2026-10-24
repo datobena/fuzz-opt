@@ -2132,6 +2132,9 @@ def _save_agent_session_output(diff_output_dir: str, attempt: int,
                     f"  [effort] {result.get('effort_requested') or 'UNPINNED'}\n")
             if result.get("agent_cpus"):
                 f.write(f"[agent cpus] {result['agent_cpus']}\n")
+            if result.get("credential"):
+                f.write(f"[credential] {result['credential']}"
+                        f"{'  [id] ' + result['credential_id'] if result.get('credential_id') else ''}\n")
             summary = _transcript_summary(result.get("transcripts"))
             f.write(f"[model served] {', '.join(summary['models']) or 'unknown (no transcript)'}\n")
             f.write(f"[assistant turns] {summary['assistant_turns']}  "
@@ -2193,6 +2196,27 @@ def _store_credential_is_usable() -> bool:
     except Exception:                                     # noqa: BLE001
         return False
     return False
+
+
+_LONG_LIVED_TOKEN_MODES = ("oauth_token", "account_token", "host_token")
+
+
+def _rotating_login_context(active: bool):
+    """egress.rotating_login_only() when `active`, else a no-op context."""
+    import contextlib
+    if not active:
+        return contextlib.nullcontext()
+    from sandbox import egress
+    return egress.rotating_login_only()
+
+
+def _sandbox_credential_mode() -> str:
+    """egress.credential_mode(), or "oauth_file" when the sandbox is unavailable."""
+    try:
+        from sandbox import egress
+        return egress.credential_mode()
+    except Exception:                                     # noqa: BLE001
+        return "oauth_file"
 
 
 def _reseed_credentials_after_auth_failure() -> bool:
@@ -2863,6 +2887,7 @@ def optimize_and_build(
     backend = _optimizer_backend()
     build_log = None
     _auth_retried = False          # at most one auth retry per round
+    _rotating_fallback = False     # that retry skips a rejected long-lived token
 
     # Do the deterministic heavy steps (corpus grow/freeze + baseline profile) in
     # the harness so the single-turn agent never has to background a long docker
@@ -2920,7 +2945,8 @@ def optimize_and_build(
         # ledger alone, which is what makes the excluded time auditable rather
         # than merely asserted.
         with cpu_ledger.timed("agent_wait", cores=0, counts=False,
-                              attempt=attempt) as _info:
+                              attempt=attempt) as _info, \
+                _rotating_login_context(_rotating_fallback):
             codex_result = _invoke_agent_capture(
                 source_dir, prompt, project=project, extra_env=codex_extra_env,
                 backend=backend,
@@ -2955,8 +2981,34 @@ def optimize_and_build(
                 # reseed fetched it or someone else already had. Bounded to one
                 # auth retry per round so a dead login cannot spin through all
                 # ten attempts.
-                fresher = _reseed_credentials_after_auth_failure()
-                if (fresher or _store_credential_is_usable()) and not _auth_retried:
+                # The credential THIS session ran on (cswap may have switched
+                # since), falling back to what a session would get now.
+                used = codex_result.get("credential") or _sandbox_credential_mode()
+                if used in _LONG_LIVED_TOKEN_MODES and not _auth_retried:
+                    # A rejected year token (revoked, mistyped, account problem)
+                    # would otherwise cost every round on that account. Retry
+                    # this round once on the host's normal login, and say so.
+                    _auth_retried = True
+                    _rotating_fallback = True
+                    subprocess.run(_git + ["reset", "--hard", "HEAD"],
+                                   cwd=source_dir, capture_output=True)
+                    subprocess.run(_git + ["clean", "-fd"],
+                                   cwd=source_dir, capture_output=True)
+                    logger.error(
+                        "auth failure for %s/%s: the long-lived %s credential "
+                        "(id %s) was REJECTED; retrying this round once on the "
+                        "host's normal login. Fix or remove that token "
+                        "(tools/add_account_token.py).", project, fuzz_target,
+                        used, codex_result.get("credential_id") or "?")
+                    continue
+                # A long-lived token or API key never rotates: a 401 means that
+                # credential itself is bad, and re-seeding the OAuth store would
+                # only touch a file this run is not using.
+                long_lived = used != "oauth_file"
+                fresher = (False if long_lived
+                           else _reseed_credentials_after_auth_failure())
+                if (not long_lived and (fresher or _store_credential_is_usable())
+                        and not _auth_retried):
                     _auth_retried = True
                     # Reset to the tree the PROFILE describes. A killed session
                     # leaves its half-finished edits behind, and the retry is
@@ -2975,10 +3027,16 @@ def optimize_and_build(
                         "reset to the profiled state, retrying the optimizer "
                         "session", project, fuzz_target)
                     continue
-                logger.error(
-                    "auth failure for %s/%s and no fresher credential is "
-                    "available; run `claude` on the host to re-authenticate",
-                    project, fuzz_target)
+                if long_lived:
+                    logger.error(
+                        "auth failure for %s/%s with the %s credential; it does "
+                        "not rotate, so retrying cannot help -- check that it is "
+                        "still valid", project, fuzz_target, used)
+                else:
+                    logger.error(
+                        "auth failure for %s/%s and no fresher credential is "
+                        "available; run `claude` on the host to re-authenticate",
+                        project, fuzz_target)
         if _codex_output_is_low_confidence(
             codex_result["stdout"], codex_result["stderr"],
         ):
@@ -4031,6 +4089,10 @@ def optimizer_provenance() -> dict:
         # off the trial/profile cores) -- the resolution _invoke_agent_sandboxed
         # hands the launch. None when unsandboxed (no container to pin).
         "agent_cpus": _agent_cpus_provenance(),
+        # How sandboxed sessions authenticate (egress.credential_mode). Only
+        # "oauth_file" is exposed to mid-session token revocation.
+        "credential": (_sandbox_credential_mode()
+                       if getattr(config, "PHASE2_SANDBOX", True) else None),
     }
 
 

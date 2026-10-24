@@ -108,3 +108,71 @@ def test_the_auth_retry_is_bounded_to_one():
     assert "_auth_retried = False" in src
     assert "and not _auth_retried" in src
     assert "_auth_retried = True" in src
+
+
+# --- a rejected long-lived token falls back to the normal login, once -------
+def _token_world(tmp_path, monkeypatch):
+    """An account->token map naming the active account, plus a rotating login."""
+    import json
+    import sandbox.egress as e
+    tokens = tmp_path / "account_tokens.json"
+    tokens.write_text(json.dumps({"a@example.com": "sk-ant-oat01-year"}))
+    tokens.chmod(0o600)
+    config = tmp_path / "claude.json"
+    config.write_text(json.dumps({"oauthAccount": {"emailAddress": "a@example.com"}}))
+    host = tmp_path / "host.json"
+    host.write_text(json.dumps({"claudeAiOauth": {"accessToken": "x",
+                                                  "refreshToken": "r"}}))
+    monkeypatch.setattr(e, "ACCOUNT_TOKENS_PATH", tokens)
+    monkeypatch.setattr(e, "CLAUDE_CONFIG_PATH", config)
+    monkeypatch.setattr(e, "CREDENTIAL_FILES", {"claude": (host, "/c")})
+    monkeypatch.setattr(e, "api_key", lambda: "")
+    monkeypatch.delenv(e.OAUTH_TOKEN_ENV, raising=False)
+    return e
+
+
+def test_rotating_login_only_skips_long_lived_tokens(tmp_path, monkeypatch):
+    e = _token_world(tmp_path, monkeypatch)
+    assert e.resolve_session_credential() == ("account_token", "sk-ant-oat01-year")
+    with e.rotating_login_only():
+        assert e.resolve_session_credential() == ("oauth_file", "")
+        monkeypatch.setenv(e.OAUTH_TOKEN_ENV, "sk-ant-oat01-env")
+        assert e.resolve_session_credential() == ("oauth_file", "")
+        monkeypatch.setattr(e, "api_key", lambda: "key")      # not a subscription token
+        assert e.resolve_session_credential() == ("api_key", "key")
+    monkeypatch.setattr(e, "api_key", lambda: "")
+    monkeypatch.delenv(e.OAUTH_TOKEN_ENV)
+    assert e.resolve_session_credential() == ("account_token", "sk-ant-oat01-year")
+
+
+def test_rotating_login_only_is_per_thread(tmp_path, monkeypatch):
+    """Ten optimizers share the process; one round's fallback must not move the
+    other nine off their year tokens."""
+    import threading
+    e = _token_world(tmp_path, monkeypatch)
+    seen = {}
+    inside, done = threading.Event(), threading.Event()
+
+    def falling_back():
+        with e.rotating_login_only():
+            seen["fallback"] = e.resolve_session_credential()[0]
+            inside.set()
+            done.wait(5)
+
+    t = threading.Thread(target=falling_back)
+    t.start()
+    inside.wait(5)
+    seen["other"] = e.resolve_session_credential()[0]
+    done.set()
+    t.join(5)
+    assert seen == {"fallback": "oauth_file", "other": "account_token"}
+
+
+def test_the_rotating_fallback_is_wired_and_bounded():
+    import inspect
+    src = inspect.getsource(ps.optimize_and_build)
+    assert "_rotating_login_context(_rotating_fallback)" in src
+    i = src.index("if used in _LONG_LIVED_TOKEN_MODES and not _auth_retried:")
+    branch = src[i:src.index("continue", i)]
+    assert "_auth_retried = True" in branch and "_rotating_fallback = True" in branch
+    assert 'reset", "--hard"' in branch, "the retry must start from the profiled tree"

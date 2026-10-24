@@ -30,8 +30,10 @@ to close. That is leak-inventory item 10.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import fcntl
+import threading
 import json
 import os
 import shutil
@@ -588,6 +590,234 @@ def api_key() -> str:
     API key does not expire, refresh or rotate, so N concurrent clients is fine.
     """
     return os.environ.get(API_KEY_ENV, "").strip()
+
+
+OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+
+
+def oauth_token() -> str:
+    """A long-lived subscription token (`claude setup-token`), or "".
+
+    The subscription-billed counterpart of api_key(): the CLI reads it from
+    CLAUDE_CODE_OAUTH_TOKEN, it lasts a year, and nothing refreshes or rotates
+    it -- so, unlike the shared ~/.claude/.credentials.json, no refresh by the
+    host CLI, cswap or another round can revoke it under a running session.
+    That revocation restarted four round-3 sessions of
+    online-24h-c1-harfbuzz-20261023-0030 at 13:41 when the pipeline's own forced
+    refresh landed mid-round. api_key() wins if both are set.
+    """
+    return os.environ.get(OAUTH_TOKEN_ENV, "").strip()
+
+
+def host_long_lived_token() -> str:
+    """The host CLI's access token when it is a long-lived setup-token, else "".
+
+    claude-swap (`cswap add-token`, then `cswap switch`) activates a setup-token
+    account by writing {"claudeAiOauth": {"accessToken": ..., "scopes": [...]}}
+    to the host credential file -- no refreshToken and no expiresAt. A rotating
+    login always carries a refreshToken, so its absence is what marks a token
+    that nothing will refresh or revoke. Read fresh at every session start, so
+    each new round follows whichever account cswap has active.
+    """
+    host_path, _ = CREDENTIAL_FILES["claude"]
+    try:
+        blob = json.loads(Path(host_path).read_text())
+    except Exception:                                     # noqa: BLE001
+        return ""
+    holder = blob.get("claudeAiOauth") if isinstance(blob, dict) else None
+    if not isinstance(holder, dict) or "refreshToken" in holder:
+        return ""
+    return str(holder.get("accessToken") or "").strip()
+
+
+# Year-long `claude setup-token` tokens, one per account, as
+# {"<account email or accountUuid>": "sk-ant-oat01-..."}; chmod 600.
+ACCOUNT_TOKENS_PATH = Path(os.environ.get(
+    "SANDBOX_ACCOUNT_TOKENS",
+    str(Path.home() / ".config" / "fuzz-opt" / "account_tokens.json")))
+# Where the host CLI records which account it is logged in as. cswap rewrites
+# only its `oauthAccount` block on every switch (claude_swap switcher
+# _perform_switch, step 4), so it names the active account.
+CLAUDE_CONFIG_PATH = Path(os.environ.get(
+    "SANDBOX_CLAUDE_CONFIG", str(Path.home() / ".claude.json")))
+
+
+def active_account() -> dict:
+    """The host CLI's `oauthAccount` (emailAddress, accountUuid, ...), or {}."""
+    try:
+        blob = json.loads(CLAUDE_CONFIG_PATH.read_text())
+    except Exception:                                     # noqa: BLE001
+        return {}
+    acct = blob.get("oauthAccount") if isinstance(blob, dict) else None
+    return acct if isinstance(acct, dict) else {}
+
+
+def account_token() -> str:
+    """The year-long token mapped to the account the host is logged in as, or "".
+
+    cswap keeps ~/.claude/.credentials.json on a normal, rotating login, because
+    usage-based switching needs a token that can read usage and a setup-token
+    cannot (its only scope is user:inference). So the agents' long-lived token
+    cannot live in that file; it is looked up here by the active account
+    instead. A cswap switch therefore moves every NEW round onto the next
+    account's year token, while running rounds keep the token they started with,
+    and no refresh of the rotating login can revoke an agent's session.
+    """
+    path = ACCOUNT_TOKENS_PATH
+    if not path.is_file():
+        return ""
+    try:
+        if path.stat().st_mode & 0o077:
+            logger.warning("ignoring %s: it is readable by other users; "
+                           "chmod 600 it", path)
+            return ""
+        mapping = json.loads(path.read_text())
+    except Exception as e:                                # noqa: BLE001
+        logger.warning("ignoring %s: %s", path, e)
+        return ""
+    if not isinstance(mapping, dict):
+        logger.warning("ignoring %s: expected a JSON object of account -> token",
+                       path)
+        return ""
+    by_key = {str(k).strip().lower(): v for k, v in mapping.items()}
+    acct = active_account()
+    for key in (acct.get("emailAddress"), acct.get("accountUuid")):
+        token = by_key.get(str(key or "").strip().lower()) if key else None
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+    return ""
+
+
+LONG_LIVED_TOKEN_MODES = ("oauth_token", "account_token", "host_token")
+_tls = threading.local()
+
+
+@contextlib.contextmanager
+def rotating_login_only():
+    """Within this block, on this thread only, sessions skip the long-lived
+    subscription tokens and use the host's normal login -- the one retry a round
+    gets after its year token was rejected. Thread-local because concurrent
+    optimizers each run their round on their own thread."""
+    previous = getattr(_tls, "rotating_only", False)
+    _tls.rotating_only = True
+    try:
+        yield
+    finally:
+        _tls.rotating_only = previous
+
+
+def resolve_session_credential() -> tuple[str, str]:
+    """(mode, secret) for one session, decided once at its launch. Modes:
+    "api_key"; "oauth_token" (CLAUDE_CODE_OAUTH_TOKEN); "account_token" (the
+    year token mapped to the active account); "host_token" (the host file itself
+    holds a setup-token); "oauth_file" (the shared, rotating login, staged per
+    session -- secret "")."""
+    candidates = [("api_key", api_key)]
+    if not getattr(_tls, "rotating_only", False):
+        candidates += [("oauth_token", oauth_token),
+                       ("account_token", account_token),
+                       ("host_token", host_long_lived_token)]
+    for mode, read in candidates:
+        secret = read()
+        if secret:
+            return mode, secret
+    return "oauth_file", ""
+
+
+def session_token() -> str:
+    """The long-lived token a session would be given now, or "" (API key or the
+    rotating file)."""
+    mode, secret = resolve_session_credential()
+    return "" if mode == "api_key" else secret
+
+
+def credential_mode() -> str:
+    """Which credential a session would authenticate with now, for provenance."""
+    return resolve_session_credential()[0]
+
+
+REDACTED = "<REDACTED-CREDENTIAL>"
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Create `path` 0600 before a byte is written (no window where it is wider)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+
+
+def stage_secret(mode: str, secret: str) -> tuple[Path, list[str]]:
+    """Hand a long-lived credential to the agent container. Returns
+    (private_dir, docker args); the caller deletes private_dir after the session.
+
+    Never on a command line: `docker run -e NAME=<secret>` keeps the secret in
+    the docker client's argv for the whole session, readable by every local user
+    through ps and /proc/<pid>/cmdline. Never in the results tree either: the
+    file lives in a fresh 0700 temp dir (TMPDIR), not in session_dir, so nothing
+    long-lived is left behind next to the round's other artifacts. A long-lived
+    token goes in as a credential FILE -- the shape cswap activates
+    setup-tokens with -- so it is not in the container's environment and
+    `docker inspect` does not show it. An API key goes in as a 0600 --env-file:
+    off the command line, though inspect still lists the container's env.
+    """
+    import tempfile
+    private = Path(tempfile.mkdtemp(prefix="sbx-cred-"))
+    os.chmod(private, 0o700)
+    if mode == "api_key":
+        env_file = private / "agent.env"
+        _write_private(env_file, f"{API_KEY_ENV}={secret}\n")
+        return private, ["--env-file", str(env_file)]
+    cred = private / "claude.json"
+    _write_private(cred, json.dumps(
+        {"claudeAiOauth": {"accessToken": secret, "scopes": ["user:inference"]}}))
+    return private, ["-v", f"{cred}:{CREDENTIAL_FILES['claude'][1]}"]
+
+
+def redact_text(text: str, secret: str) -> str:
+    return text.replace(secret, REDACTED) if secret and text else text
+
+
+def redact_tree(root, secret: str, *, max_bytes: int = 64 << 20) -> list[str]:
+    """Replace every copy of `secret` under `root` (skipping .git and files over
+    max_bytes) and return the files that held one.
+
+    The agent can read the credential it runs on -- unavoidable -- and if it ever
+    echoes it (`env`, a debug print, a pasted file) the copy lands in a
+    transcript, the broker log or the source tree, and from there in a diff, a
+    binary, or a results directory that outlives the session.
+    """
+    if not secret:
+        return []
+    needle, replacement = secret.encode(), REDACTED.encode()
+    hits: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                if os.path.islink(path) or os.path.getsize(path) > max_bytes:
+                    continue
+                with open(path, "rb") as fh:
+                    data = fh.read()
+                if needle in data:
+                    with open(path, "r+b") as fh:
+                        fh.write(data.replace(needle, replacement))
+                        fh.truncate()
+                    hits.append(path)
+            except OSError:
+                continue
+    return hits
+
+
+def credential_fingerprint(secret: str | None = None) -> str:
+    """Short, non-reversible id of the credential a session is given, so each
+    round's provenance says WHICH account served it without storing the secret.
+    Defaults to the credential a session would get now; "" for the rotating
+    file, whose token changes with every refresh."""
+    import hashlib
+    if secret is None:
+        secret = resolve_session_credential()[1]
+    return hashlib.sha256(secret.encode()).hexdigest()[:12] if secret else ""
 
 
 def _has_refresh_token(path) -> bool:

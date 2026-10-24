@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -310,14 +311,25 @@ def run_sandboxed_optimizer(
     # Only the credential itself -- never ~/.claude, which holds prior-run
     # transcripts naming these bugs.
     insert = cmd.index("-w")
-    key = egress.api_key()
-    if key:
-        # API key instead of the shared OAuth identity: no expiry, no refresh and
-        # no rotation, so concurrent projects cannot invalidate each other's
-        # credential mid-campaign (see egress.api_key). Passed by env rather than
-        # mounted -- there is no file for the CLI to refresh, which is the point.
-        cmd[insert:insert] = ["-e", f"{egress.API_KEY_ENV}={key}"]
-        insert += 2
+    # Fixed at launch: cswap may switch the host account while this session runs,
+    # and the session keeps -- and the record names -- the credential it started
+    # with.
+    cred_mode, secret = egress.resolve_session_credential()
+    cred_id = egress.credential_fingerprint(secret)
+    logger.info("session credential: %s%s", cred_mode,
+                f" (id {cred_id})" if cred_id else "")
+    secret_dir = None
+    if cred_mode != "oauth_file":
+        # An API key, or a long-lived subscription token -- set explicitly,
+        # mapped to the account cswap has active, or a setup-token in the host
+        # file -- resolved anew for every session. None of them refreshes, so the
+        # rotating store is never staged and ensure_fresh_host_credential (inside
+        # stage_credentials) never forces a refresh that revokes running
+        # sessions. stage_secret keeps it off every command line and out of the
+        # results tree; secret_dir is removed in the finally below.
+        secret_dir, secret_args = egress.stage_secret(cred_mode, secret)
+        cmd[insert:insert] = secret_args
+        insert += len(secret_args)
     else:
         for spec in egress.stage_credentials(session_dir):
             cmd[insert:insert] = ["-v", spec]
@@ -354,13 +366,17 @@ def run_sandboxed_optimizer(
         )
         return {
             "ok": r.returncode == 0,
-            "stdout": r.stdout or "",
-            "stderr": r.stderr or "",
+            # Saved verbatim by _save_agent_session_output and quoted in error
+            # logs, so a credential the agent printed must not survive here.
+            "stdout": egress.redact_text(r.stdout or "", secret),
+            "stderr": egress.redact_text(r.stderr or "", secret),
             "timed_out": False,
             "transcripts": sorted(str(f) for f in transcripts_dir.rglob("*.jsonl")),
             "model_requested": model or "",
             "effort_requested": effort or "",
             "agent_cpus": agent_cpus,
+            "credential": cred_mode,
+            "credential_id": cred_id,
         }
     except subprocess.TimeoutExpired:
         logger.warning("sandboxed optimizer timed out after %ss", timeout)
@@ -370,20 +386,33 @@ def run_sandboxed_optimizer(
             "model_requested": model or "",
             "effort_requested": effort or "",
             "agent_cpus": agent_cpus,
+            "credential": cred_mode,
+            "credential_id": cred_id,
         }
     finally:
         # Fold any token refresh the session performed back into the store.
         # Skipping this means re-seeding from a stale credential next time, which
         # under refresh-token rotation stops authenticating entirely.
         try:
-            # Nothing to fold back under an API key -- no credential was staged
-            # and none can have been refreshed. Calling harvest anyway would
-            # re-seed the OAuth store from the host on a run that deliberately
-            # is not using it.
-            if not egress.api_key():
+            # Nothing to fold back under an API key or a long-lived token -- no
+            # credential was staged and none can have been refreshed. Calling
+            # harvest anyway would re-seed the OAuth store from the host on a run
+            # that deliberately is not using it.
+            if cred_mode == "oauth_file":
                 egress.harvest_credentials(session_dir)
         except Exception as e:                       # noqa: BLE001
             logger.warning("credential harvest failed: %s", e)
+        if secret_dir is not None:
+            shutil.rmtree(secret_dir, ignore_errors=True)
+        if secret:
+            # Wherever the session could have written: its transcripts, broker
+            # log and egress log (session_dir) and the tree it edited.
+            leaked = (egress.redact_tree(session_dir, secret)
+                      + egress.redact_tree(source_dir, secret))
+            if leaked:
+                logger.error(
+                    "the session's credential (id %s) appeared in %d file(s); "
+                    "redacted in place: %s", cred_id, len(leaked), leaked)
         stop.set()
         try:
             os.unlink(sock_path)
