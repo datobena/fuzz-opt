@@ -47,10 +47,45 @@ def _image_exists(image: str) -> bool:
     return _run(["docker", "image", "inspect", image]).returncode == 0
 
 
+def _symbolizer_check() -> tuple[bool, str]:
+    """Run the profiler's own symbolizer self-test: resolve LLVMFuzzerTestOneInput
+    of a fuzz target binary from an earlier run when one is on disk, else at
+    least run the tool."""
+    import importlib.util
+    import config
+    path = Path(config.PHASE2_SKILL_SCRIPTS_DIR) / "hotspot_table.py"
+    try:
+        spec = importlib.util.spec_from_file_location("hotspot_table", path)
+        ht = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ht)
+    except Exception as e:  # noqa: BLE001
+        return False, f"cannot load {path}: {e}"
+    binary = None
+    for bindir in sorted(Path(config.RESULTS_DIR).glob("*/*/baseline/bin"))[:20]:
+        for f in sorted(bindir.iterdir()):
+            if not f.is_file() or f.suffix or f.name.startswith("afl-"):
+                continue
+            try:
+                if ht.ElfInfo(f).symbol_addresses(["LLVMFuzzerTestOneInput"]):
+                    binary = str(f)
+                    break
+            except Exception:  # noqa: BLE001 - not an ELF we can read
+                continue
+        if binary:
+            break
+    return ht.symbolizer_selftest(binary)
+
+
 def check_prereqs() -> list[tuple[str, str, str]]:
     rows = []
     for tool in ("docker", "git", "python3"):
         rows.append((tool, OK if shutil.which(tool) else MISSING, ""))
+    # The profile step maps each hotspot function to its source file on the
+    # host (hotspot_table.py); without a WORKING symbolizer every round ends
+    # prebuild-failed. Same lookup as the profiler (addr2line, llvm-addr2line,
+    # llvm-addr2line-NN), and it must actually resolve, not just exist.
+    ok, note = _symbolizer_check()
+    rows.append(("addr2line (hotspot table)", OK if ok else FAIL, note))
     if not shutil.which("docker"):
         rows.append(("docker daemon", MISSING, "docker is not installed"))
     else:

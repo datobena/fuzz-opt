@@ -243,9 +243,9 @@ the bytes handed back and every observable pointer relationship are identical.
 error ordering are identical. Be careful: fusing passes can change *which* error is reported first.
 If it can, reject or preserve the original ordering explicitly.
 
-`malloc` / `free` / `memset` / `calloc` and init-teardown symbols sitting high in `flat.txt` are the
-signature of this whole class. So is a `flat.txt` whose top entries are generic container or
-allocator code rather than the project's parsing logic.
+High `alloc%` rows in `hotspots.txt`, and `malloc` / `free` / `memset` / `calloc` and init-teardown
+symbols sitting high in `flat.txt`, are the signature of this whole class. So is a profile whose top
+entries are generic container or allocator code rather than the project's parsing logic.
 
 ### The one guard you must keep
 

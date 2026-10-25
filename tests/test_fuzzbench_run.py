@@ -575,3 +575,36 @@ def test_hot_swap_one_swaps_the_whole_set(monkeypatch, tmp_path):
     phase3_online.hot_swap_one(ctx, state, str(new))
     assert (live / "cmplog" / "t").read_bytes() == b"cmplog-new"
     assert (live / "afl++.dict").read_text() == "dict-new"
+
+
+def test_preflight_tool_runs_the_setup_profile_check(monkeypatch, tmp_path):
+    """A target that passes the tool must not then be refused by run_online's
+    setup profile check: the tool runs the same function, before the smoke."""
+    exp = tmp_path / "exp"
+    (exp / "baseline" / "bin").mkdir(parents=True)
+    (exp / "baseline" / "bin" / BUG["fuzz_target"]).write_bytes(b"x")
+    monkeypatch.setattr(preflight_online, "_entry", lambda p: BUG)
+    monkeypatch.setattr(preflight_online.phase2_setup, "get_experiment_dir",
+                        lambda i, e: str(exp))
+    monkeypatch.setattr(preflight_online, "prework_image_for", lambda e: "fb-aflpp/x")
+    monkeypatch.setattr(preflight_online.subprocess, "run",
+                        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(preflight_online.phase3_online, "_extract_online_target",
+                        lambda *a, **k: (False, None, None, str(tmp_path / "src")))
+    monkeypatch.setattr(preflight_online.phase3_online, "_src_subtree_has_files",
+                        lambda p: True)
+    monkeypatch.setattr(preflight_online.phase3_online, "_stage_online_seed_corpus",
+                        lambda *a, **k: 0)
+    monkeypatch.setattr(preflight_online.phase2_setup, "_find_project_source",
+                        lambda r, p: str(tmp_path / "src"))
+    monkeypatch.setattr(preflight_online.tracked_git, "strip_vcs_metadata", lambda r: None)
+    seen = {}
+    monkeypatch.setattr(preflight_online.phase3_online, "_preflight_profile",
+                        lambda **k: seen.update(k) or (False, "hotspots: mismatch"))
+    monkeypatch.setattr(preflight_online, "smoke",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("smoke ran")))
+    res = preflight_online.preflight("mruby", 23, 5, False)
+    assert res["stages"]["profile"]["ok"] is False
+    assert "mismatch" in res["stages"]["profile"]["reason"]
+    assert seen["project_src_dir"] == str(tmp_path / "src") and seen["profile_cpu"] == 23
+    assert res["ok"] is False

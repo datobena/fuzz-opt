@@ -56,6 +56,36 @@ class MutationAugmentationError(RuntimeError):
     """
 
 
+class PrebuildFailedError(RuntimeError):
+    """The harness could not freeze the fixed corpus or profile the baseline.
+
+    Raised by optimize_and_build BEFORE any agent session starts. There is no
+    agent fall-back: the optimizer never builds a corpus, runs the fuzzer, or
+    profiles anything itself, so a round without the harness-built corpus and
+    hotspot table ends here. The online loop records it as outcome
+    ``prebuild-failed``; phase 2 records a setup failure (stage=profile_prebuild).
+
+    ``stage`` names the step that failed (env, scripts, mutations, corpus,
+    profile-run, profile, hotspots, sanity, timeout, exception); the online loop
+    stops an optimizer whose prebuild keeps failing at the same deterministic
+    stage.
+    """
+
+    def __init__(self, reason: str, stage: str = ""):
+        super().__init__(reason)
+        self.stage = stage
+
+
+# Prebuild stages whose failure repeats identically every round: the same
+# binary, scripts and source layout give the same result. The others can be
+# transient -- profile-run (the perf container failed twice: docker, a busy
+# host), timeout, corpus, mutations, exception -- and never stop an optimizer.
+DETERMINISTIC_PREBUILD_STAGES = frozenset(
+    {"env", "scripts", "profile", "hotspots", "sanity"})
+TRANSIENT_PREBUILD_STAGES = frozenset(
+    {"profile-run", "timeout", "corpus", "mutations", "exception"})
+
+
 _SOURCE_FILE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx",
     ".h", ".hh", ".hpp", ".hxx",
@@ -848,86 +878,6 @@ def verify_crash_reproduction(entry: dict, experiment_dir: str) -> dict[str, boo
     return results
 
 
-def apply_fold_deterministic_calls(
-    source_dir: str, fuzz_target: str, diff_output_dir: str,
-    project: str = "",
-) -> bool:
-    """Apply apply-fuzz-source-folds optimization via a single Codex session.
-
-    This is used by the ARVO path where the build function is different.
-    For the OSV path, use optimize_and_build() which integrates the
-    build-retry loop.
-    """
-    os.makedirs(diff_output_dir, exist_ok=True)
-    _stage_project_fuzz_support(source_dir, project)
-
-    subprocess.run(["git", "init"], cwd=source_dir, capture_output=True)
-    subprocess.run(["git", "add", "."], cwd=source_dir, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "baseline"],
-        cwd=source_dir, capture_output=True,
-        env={**os.environ, "GIT_AUTHOR_NAME": "benchmark",
-             "GIT_AUTHOR_EMAIL": "bench@test",
-             "GIT_COMMITTER_NAME": "benchmark",
-             "GIT_COMMITTER_EMAIL": "bench@test"},
-    )
-
-    harness_path = _find_harness_source(source_dir, fuzz_target)
-    logger.info("Applying %s to %s (target: %s, harness: %s)...",
-                config.PHASE2_OPTIMIZER_SKILL, source_dir, fuzz_target, harness_path)
-
-    backend = _optimizer_backend()
-    prompt = _make_apply_fuzz_source_folds_prompt(harness_path, backend=backend)
-    os.environ["FUZZ_TARGET"] = fuzz_target
-    codex_result = _invoke_agent_capture(
-        source_dir, prompt, project=project, backend=backend,
-        timeout=_optimizer_timeout(),
-    )
-    if codex_result["timed_out"]:
-        logger.error(
-            "%s optimization for %s/%s timed out", backend, project, fuzz_target,
-        )
-        return False
-    if _codex_output_is_low_confidence(
-        codex_result["stdout"], codex_result["stderr"],
-    ):
-        logger.error(
-            "Codex optimization for %s/%s was low-confidence; refusing to "
-            "use a static-only result",
-            project, fuzz_target,
-        )
-        return False
-
-    # Save the diff
-    diff_result = subprocess.run(
-        ["git", "diff", "HEAD"],
-        cwd=source_dir, capture_output=True, text=True,
-    )
-    with open(os.path.join(diff_output_dir, "optimization.diff"), "w") as f:
-        f.write(diff_result.stdout)
-
-    stat_result = subprocess.run(
-        ["git", "diff", "--stat", "HEAD"],
-        cwd=source_dir, capture_output=True, text=True,
-    )
-    with open(os.path.join(diff_output_dir, "changes_summary.txt"), "w") as f:
-        f.write(stat_result.stdout)
-
-    num_changed = len([
-        line for line in stat_result.stdout.strip().split("\n")
-        if line and "|" in line
-    ])
-    logger.info("%s made changes to %d files",
-                config.PHASE2_OPTIMIZER_SKILL, num_changed)
-
-    if num_changed == 0:
-        logger.warning("No changes were made by %s", config.PHASE2_OPTIMIZER_SKILL)
-        return False
-
-    _clean_build_artifacts(source_dir)
-    return True
-
-
 def _find_harness_source(source_dir: str, fuzz_target: str) -> str:
     """Find the harness source file in the source tree.
 
@@ -1176,9 +1126,10 @@ def _make_phase2_profile_env(
 ) -> dict[str, str]:
     """Build env vars for profile-once-fuzz-folds phase-2 optimization.
 
-    The skill grows ONE fixed corpus off the baseline binary, profiles the
-    baseline once on a replay of it, then iterates hotspots with a replay-timing
-    gate (no re-profiling). ``baseline_profile_duration`` /
+    The harness prebuild (_prebuild_phase2_corpus_and_profile) freezes ONE fixed
+    corpus and profiles the baseline once on a replay of it; the skill then
+    iterates hotspots with a replay-timing gate (no re-profiling, and it never
+    builds a corpus or profiles itself). ``baseline_profile_duration`` /
     ``refresh_profile_duration`` are still accepted because the orchestrator
     passes them by introspection, but they are unused here: there is no baseline
     profile window and no refresh profile in this loop.
@@ -1220,8 +1171,8 @@ def _make_phase2_profile_env(
 
     env = {
         "FUZZ_SOURCE_FOLDS_CORPUS_DIR": str(corpus_dir),
-        # Fixed corpus: build_corpus.py grows it once off the baseline binary and
-        # freezes a flat snapshot here. The single profile and every replay-timing
+        # Fixed corpus: the harness prebuild freezes a flat snapshot here once
+        # (build_corpus.py, or the round's live mutations). The single profile and every replay-timing
         # gate use this exact set, so what is profiled is what is measured.
         "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR": str(
             _phase2_fixed_corpus_dir(diff_output_dir)
@@ -1233,9 +1184,8 @@ def _make_phase2_profile_env(
         "FUZZ_SOURCE_FOLDS_REPLAY_REPEATS": str(
             int(getattr(config, "PHASE2_REPLAY_REPEATS", 3))
         ),
-        # Time-budget corpus sizing: the agent-run fallback (when the harness
-        # prebuild did not run) should pass this to build_corpus.py
-        # --replay-budget-secs so a slow target gets a tractable corpus too.
+        # Time-budget corpus sizing. Harness-side only: the prebuild reads the
+        # config value directly; nothing in the agent builds a corpus.
         "FUZZ_SOURCE_FOLDS_CORPUS_REPLAY_BUDGET": str(
             int(getattr(config, "PHASE2_CORPUS_REPLAY_BUDGET_SECS", 1800))
         ),
@@ -1408,37 +1358,78 @@ def _combine_seed_and_mutations(env: dict[str, str], mutations_dir: Path,
     return str(combined)
 
 
+PREBUILD_FAILURE_KEY = "PHASE2_PREBUILD_FAILURE"
+PREBUILD_STAGE_KEY = "PHASE2_PREBUILD_FAILURE_STAGE"
+PREBUILD_STATUS_FILE = "prebuild_status.json"
+
+
+def _prebuild_result(env: dict[str, str], ok: bool, stage: str, reason: str) -> bool:
+    """Record the prebuild verdict: log it, keep the reason in ``env`` for the
+    caller (optimize_and_build raises PrebuildFailedError with it), and write
+    ``<profiles>/prebuild_status.json`` so a round's artifacts say why it ended.
+    Returns ``ok``."""
+    if ok:
+        env.pop(PREBUILD_FAILURE_KEY, None)
+        env.pop(PREBUILD_STAGE_KEY, None)
+        env["FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS"] = "1"
+        logger.info("Phase-2 prebuild complete (%s): fixed corpus + profile + "
+                    "hotspot table ready.", reason)
+    else:
+        env[PREBUILD_FAILURE_KEY] = f"{stage}: {reason}"
+        env[PREBUILD_STAGE_KEY] = stage
+        env.pop("FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS", None)
+        logger.error("Phase-2 prebuild FAILED at %s: %s -- no optimizer agent will "
+                     "run for this round (the agent never builds a corpus, fuzzes, "
+                     "or profiles on its own).", stage, reason)
+    root = env.get("FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR")
+    if root:
+        try:
+            Path(root).mkdir(parents=True, exist_ok=True)
+            (Path(root) / PREBUILD_STATUS_FILE).write_text(json.dumps(
+                {"ok": ok, "stage": stage, "reason": reason, "time": time.time()},
+                indent=2))
+        except OSError as e:
+            logger.warning("could not write %s: %s", PREBUILD_STATUS_FILE, e)
+    return ok
+
+
 def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -> bool:
-    """Grow+freeze the fixed corpus and profile the baseline IN THE HARNESS, before
+    """Freeze the fixed corpus and profile the baseline IN THE HARNESS, before
     the optimizer agent runs, and hand the agent the ready artifacts.
 
     Why: the optimizer is a single-turn ``claude -p`` agent with a ~600s per-tool
-    timeout. The crash-filter + replay-profile over a large corpus (e.g. selinux
-    ~14k, libavc ~17k files) blows that timeout, so the agent backgrounds the
-    docker step and the turn ends with no fold ("yield" quirk). These two steps are
-    deterministic infrastructure — they need no LLM — so the harness (which is not
-    turn-limited) runs them on the FULL corpus and writes the frozen snapshot +
-    profile to the dirs the skill already reads. On success it sets
-    ``FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS=1`` so the skill skips its own build/profile.
+    timeout, and these steps are deterministic infrastructure that need no LLM.
+    The harness (which is not turn-limited) runs them on the FULL corpus and
+    writes the frozen snapshot + profile (incl. hotspots.txt/json) to the dirs the
+    skill reads, then sets ``FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS=1``.
 
-    Best-effort: on any failure it leaves the flag unset and returns False, so the
-    agent falls back to building the corpus itself (no worse than before). Returns
-    True when the prebuilt artifacts are ready.
+    REQUIRED, not best-effort: on any failure (missing env or scripts, corpus,
+    crash filter, profile, hotspot table, sample-count sanity check, timeout,
+    exception) it records the reason (``env[PREBUILD_FAILURE_KEY]`` and
+    ``prebuild_status.json``) and returns False, and the caller must NOT start
+    the agent -- the agent has no fall-back that builds a corpus or profiles.
+    MutationAugmentationError still propagates (its own outcome). Returns True
+    when the prebuilt artifacts are ready.
     """
     baseline_out = env.get("FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR")
     corpus_dir = env.get("FUZZ_SOURCE_FOLDS_CORPUS_DIR")
     fixed_dir = env.get("FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR")
     profile_root = env.get("FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR")
-    if not (baseline_out and corpus_dir and fixed_dir and profile_root):
-        return False  # not a corpus-profiling run; let the agent handle it
+    missing = [k for k, v in (("FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR", baseline_out),
+                              ("FUZZ_SOURCE_FOLDS_CORPUS_DIR", corpus_dir),
+                              ("FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR", fixed_dir),
+                              ("FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR", profile_root))
+               if not v]
+    if missing:
+        return _prebuild_result(env, False, "env",
+                                f"profiling env incomplete, missing {missing}")
 
     scripts = Path(getattr(config, "PHASE2_SKILL_SCRIPTS_DIR", ""))
     build_corpus = scripts / "build_corpus.py"
     replay_profile = scripts / "replay_fuzzer_profile.py"
     if not (build_corpus.exists() and replay_profile.exists()):
-        logger.warning("Phase-2 prebuild scripts missing under %s; agent will build "
-                       "the corpus itself", scripts)
-        return False
+        return _prebuild_result(env, False, "scripts",
+                                f"prebuild scripts missing under {scripts}")
 
     profile_dir = str(Path(profile_root) / "profile_once")
     duration = str(env.get("FUZZ_SOURCE_FOLDS_CORPUS_BUILD_DURATION",
@@ -1446,13 +1437,39 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
     cpu = str(env.get("FUZZ_SOURCE_FOLDS_PROFILE_CPU", "0"))
     min_sample = str(env.get("FUZZ_SOURCE_FOLDS_REPLAY_PROFILE_SECONDS", "120"))
 
-    # Idempotent: if a non-empty snapshot already exists (e.g. a resumed run), just
-    # flag it as prebuilt.
+    # Profile and corpus-build INSIDE the prework image. The skill's scripts
+    # default to base-runner, which cannot load a target linked against the
+    # pinned LLVM's libc++: the run dies at exit 127 before main, yet perf
+    # exits 0 and writes a profile anyway -- of ld.so and the timing loop.
+    _prebuild_env = dict(os.environ)
+    if env.get("PHASE2_PREWORK_IMAGE"):
+        _prebuild_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = env["PHASE2_PREWORK_IMAGE"]
+
+    def _profile() -> tuple[bool, str, str]:
+        """Profile the baseline over the frozen corpus -> (ok, stage, reason)."""
+        logger.info("Phase-2 prebuild: profiling baseline over the fixed corpus")
+        return run_baseline_profile(
+            replay_profile=replay_profile, out_dir=baseline_out, corpus_dir=fixed_dir,
+            profile_dir=profile_dir, fuzz_target=fuzz_target,
+            min_sample_seconds=int(min_sample), cpu=cpu, env=env,
+            proc_env=_prebuild_env)
+
+    # Resumed run: a frozen corpus already exists. Reuse it, and the profile only
+    # if it passes the same checks a fresh one must (hotspots.json + sample floor).
     if _dir_has_files(fixed_dir):
-        env["FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS"] = "1"
-        logger.info("Phase-2 prebuild: fixed corpus already present at %s; skipping",
-                    fixed_dir)
-        return True
+        ok, why = _check_profile_target_samples(profile_dir, fuzz_target, quiet=True)
+        if ok:
+            return _prebuild_result(env, True, "resume",
+                                    f"fixed corpus and profile already present ({why})")
+        logger.info("Phase-2 prebuild: fixed corpus already present at %s; the "
+                    "profile is not usable (%s), re-profiling", fixed_dir, why)
+        try:
+            ok, stage, why = _profile()
+        except subprocess.TimeoutExpired as e:
+            return _prebuild_result(env, False, "timeout", str(e))
+        except Exception as e:  # noqa: BLE001
+            return _prebuild_result(env, False, "exception", repr(e))
+        return _prebuild_result(env, ok, stage, why)
 
     # Augment the seed corpus with the mutations libFuzzer generates from it, so the
     # single profile + the replay-timing gate reflect the real fuzzing workload (not
@@ -1461,7 +1478,13 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
     # the target failed. On success build_corpus.py still crash-filters + freezes the
     # combined set, but its time-budget sizing is skipped (the mutation corpus is
     # already bounded by the ~5min generation cap -- see replay_budget below).
-    combined = _augment_corpus_with_mutations(env, fuzz_target)
+    try:
+        combined = _augment_corpus_with_mutations(env, fuzz_target)
+    except MutationAugmentationError:
+        raise                   # its own outcome (augmentation-failed), by design
+    except Exception as e:  # noqa: BLE001 - anything else is a failed prebuild
+        return _prebuild_result(env, False, "mutations",
+                                f"mutation augmentation crashed: {e!r}")
     if combined:
         corpus_dir = combined
 
@@ -1478,21 +1501,14 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
     # its crash filter passes libFuzzer flags the AFL driver does not understand,
     # so it never executed an input (bulk exit 0, nothing removed, every round).
     live = bool(combined and env.get("FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS"))
-    # Profile and corpus-build INSIDE the prework image. The skill's scripts
-    # default to base-runner, which cannot load a target linked against the
-    # pinned LLVM's libc++: the run dies at exit 127 before main, yet perf
-    # exits 0 and writes a profile anyway -- of ld.so and the timing loop.
-    # Every status signal reports success and the optimizer gets a hotspot
-    # list with no target symbols in it at all. Set before the branch: the
-    # profile step below needs it on the live-mutation path too.
-    _prebuild_env = dict(os.environ)
-    if env.get("PHASE2_PREWORK_IMAGE"):
-        _prebuild_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = env["PHASE2_PREWORK_IMAGE"]
     try:
         if live:
             frozen, _ = _freeze_corpus_snapshot(combined, fixed_dir)
             logger.info("Phase-2 prebuild: froze %d crash-filtered live mutations "
                         "into %s", frozen, fixed_dir)
+            if not _dir_has_files(fixed_dir):
+                return _prebuild_result(env, False, "corpus",
+                                        f"froze 0 live mutations into {fixed_dir}")
         else:
             logger.info("Phase-2 prebuild: grow+freeze fixed corpus (duration=%ss) for %s",
                         dur_int, fuzz_target)
@@ -1538,58 +1554,87 @@ def _prebuild_phase2_corpus_and_profile(env: dict[str, str], fuzz_target: str) -
                 timeout=dur_int + filter_timeout + 1800 + 3600,
             )
             if bc.returncode != 0 or not _dir_has_files(fixed_dir):
-                logger.warning("Phase-2 prebuild corpus failed (rc=%s); agent will build it. "
-                               "tail: %s", bc.returncode, (bc.stderr or "")[-400:])
-                return False
+                return _prebuild_result(
+                    env, False, "corpus",
+                    f"build_corpus.py rc={bc.returncode}, fixed corpus "
+                    f"{'empty' if not _dir_has_files(fixed_dir) else 'present'}: "
+                    f"{(bc.stderr or '')[-400:]}")
 
-        logger.info("Phase-2 prebuild: profiling baseline over the fixed corpus")
-        rp = subprocess.run(
-            ["python3", str(replay_profile),
-             "--out-dir", baseline_out, "--corpus-dir", fixed_dir,
-             "--artifact-dir", profile_dir, "--fuzz-target", fuzz_target,
-             "--min-sample-seconds", min_sample, "--cpu", cpu],
-            capture_output=True, text=True, env=_prebuild_env,
-            timeout=int(min_sample) + 1800,
-        )
-        if rp.returncode != 0:
-            logger.warning("Phase-2 prebuild profile failed (rc=%s); agent will profile. "
-                           "tail: %s", rp.returncode, (rp.stderr or "")[-400:])
-            return False
-        if not _profile_has_target_symbols(profile_dir, fuzz_target):
-            logger.error(
-                "Phase-2 prebuild produced a profile with no target symbols -- the "
-                "binary did not run (check %s/fuzzer.log). Refusing to hand the "
-                "optimizer a hotspot list sampled from something else.", profile_dir)
-            return False
+        ok, stage, why = _profile()
     except subprocess.TimeoutExpired as e:
-        logger.warning("Phase-2 prebuild timed out (%s); agent will build the corpus itself", e)
-        return False
-    except Exception as e:  # noqa: BLE001 - best-effort, never block optimization
-        logger.warning("Phase-2 prebuild error (%s); agent will build the corpus itself", e)
-        return False
-
-    env["FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS"] = "1"
-    logger.info("Phase-2 prebuild complete: fixed corpus + profile ready; the optimizer "
-                "agent will skip its build/profile steps.")
-    return True
+        return _prebuild_result(env, False, "timeout", str(e))
+    except Exception as e:  # noqa: BLE001 - recorded as a failed prebuild, never raised
+        return _prebuild_result(env, False, "exception", repr(e))
+    return _prebuild_result(env, ok, stage, why)
 
 
-# Minimum share of perf samples that must land in the target's own DSO for the
-# profile to be usable as a hotspot ranking. Measured on real campaigns: healthy
-# profiles run 58-78% (wolfssl 78, selinux 70, libxml2 66, yara 64), while
-# contaminated ones run 1.5% (assimp, where llvm-symbolizer held 52%), 10.5%
-# (lcms) and 34% (PcapPlusPlus). 25 separates the two populations with margin.
-PHASE2_MIN_TARGET_DSO_SHARE = float(
-    os.environ.get("PHASE2_MIN_TARGET_DSO_SHARE", "25")
+def run_baseline_profile(*, replay_profile, out_dir, corpus_dir, profile_dir,
+                         fuzz_target, min_sample_seconds: int, cpu, env: dict,
+                         proc_env: dict | None = None,
+                         min_target_samples: int | None = None) -> tuple[bool, str, str]:
+    """Run replay_fuzzer_profile.py (profile + hotspot table) and apply the
+    target-source sample floor -> (ok, stage, reason).
+
+    Stages: ``profile-run`` (the perf container failed both attempts: docker or
+    perf trouble, possibly transient), ``corpus`` (nothing to replay),
+    ``profile`` (the profiler script itself failed some other way),
+    ``hotspots`` (the table could not be built), ``sanity`` (the target's own
+    functions got too few samples). A timeout raises TimeoutExpired. The
+    in-image source root, harness and the host's editable tree come from
+    ``env`` (PHASE2_PROFILE_*, set by optimize_and_build / the online setup).
+    """
+    cmd = ["python3", str(replay_profile),
+           "--out-dir", str(out_dir), "--corpus-dir", str(corpus_dir),
+           "--artifact-dir", str(profile_dir), "--fuzz-target", fuzz_target,
+           "--min-sample-seconds", str(int(min_sample_seconds)), "--cpu", str(cpu)]
+    if env.get("PHASE2_PROFILE_SOURCE_ROOT"):
+        cmd += ["--source-root", env["PHASE2_PROFILE_SOURCE_ROOT"]]
+    if env.get("PHASE2_PROFILE_SOURCE_TREE"):
+        cmd += ["--source-tree", env["PHASE2_PROFILE_SOURCE_TREE"]]
+    if env.get("PHASE2_PROFILE_HARNESS"):
+        cmd += ["--harness", env["PHASE2_PROFILE_HARNESS"]]
+    rp = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                        env=proc_env if proc_env is not None else dict(os.environ),
+                        timeout=int(min_sample_seconds) + 1800)
+    err = rp.stderr or ""
+    if rp.returncode != 0:
+        if "HOTSPOT TABLE FAILED" in err:
+            stage = "hotspots"
+        elif "perf replay-profile failed after" in err:
+            stage = "profile-run"
+        elif "TimeoutExpired" in err:
+            stage = "timeout"           # the perf container's own wall-clock cap
+        elif "replay-profile corpus is empty" in err:
+            stage = "corpus"
+        else:
+            stage = "profile"
+        return False, stage, f"replay_fuzzer_profile.py rc={rp.returncode}: {err[-600:]}"
+    for line in err.splitlines():
+        if line.startswith("hotspots:"):
+            logger.info("Phase-2 profile %s", line)
+    ok, why = _check_profile_target_samples(profile_dir, fuzz_target,
+                                            floor=min_target_samples)
+    return ok, ("profile" if ok else "sanity"), why
+
+
+# Sanity floor for the profile: samples credited to the target's OWN source
+# functions (hotspots.json totals.target_attributed.samples). This is the only
+# profile gate. It catches perf not sampling the target processes at all -- a
+# perf/kernel mismatch that records afl-showmap but not its forkserver children,
+# a binary that died before main -- where the count collapses to ~0, while a
+# healthy 120 s profile carries tens of thousands (libxml2 121k, php 94k, mbedtls
+# 92k of ~130k). An absolute count, deliberately not a percentage: a target whose
+# sanitizer or afl-showmap share is large is still a valid profile.
+PHASE2_MIN_TARGET_SOURCE_SAMPLES = int(
+    os.environ.get("PHASE2_MIN_TARGET_SOURCE_SAMPLES", "500")
 )
 
 
 def _profile_target_dso_share(profile_dir: str | Path, fuzz_target: str) -> float | None:
     """Percent of perf samples in the target's own DSO, or None if unknown.
 
-    Reads ``dso.txt`` (``perf report --sort dso --percent-limit 0``), which
-    unlike ``flat.txt`` has no reporting floor and so can answer what fraction
-    of the profile is even the target.
+    Reads ``dso.txt`` (``perf report --sort dso --percent-limit 0``). Logged as
+    information only; it gates nothing.
     """
     path = Path(profile_dir) / "dso.txt"
     try:
@@ -1613,43 +1658,39 @@ def _profile_target_dso_share(profile_dir: str | Path, fuzz_target: str) -> floa
     return total
 
 
-def _profile_has_target_symbols(profile_dir: str | Path, fuzz_target: str) -> bool:
-    """True if the flat profile actually sampled the target, and mostly it.
+def _check_profile_target_samples(profile_dir: str | Path, fuzz_target: str,
+                                  *, quiet: bool = False,
+                                  floor: int | None = None) -> tuple[bool, str]:
+    """(ok, reason): is this profile usable as the optimizer's hotspot ranking?
 
-    Two failure modes, not one. The binary may never have run at all -- `perf
-    record` happily samples whatever DID execute and exits 0. Or the binary ran
-    but something else dominated the samples: on one assimp campaign the target
-    held 6.4% of the profile while llvm-symbolizer's DWARF parsing held 46%, and
-    the ranked hotspot list the optimizer worked from was mostly symbolizer
-    internals. An existence check passes both; a share check catches the second.
-
-    When ``dso.txt`` is present the share gate applies. Older profile dirs have
-    no ``dso.txt``, so those fall back to the original existence check.
+    Requires hotspots.json (the agent's primary ranking input) and at least
+    PHASE2_MIN_TARGET_SOURCE_SAMPLES samples attributed to target-source
+    functions. The target-DSO share is logged as information.
     """
     share = _profile_target_dso_share(profile_dir, fuzz_target)
-    if share is not None:
-        if share < PHASE2_MIN_TARGET_DSO_SHARE:
-            logger.warning(
-                "Profile in %s is only %.2f%% target DSO (floor %.0f%%) -- the "
-                "hotspot ranking describes something other than %s. Rejecting.",
-                profile_dir, share, PHASE2_MIN_TARGET_DSO_SHARE, fuzz_target)
-            return False
-        logger.info("Profile in %s is %.2f%% target DSO", profile_dir, share)
-        return True
-
-    flat = Path(profile_dir) / "flat.txt"
+    path = Path(profile_dir) / "hotspots.json"
     try:
-        text = flat.read_text(errors="replace")
-    except OSError:
-        return False
-    for line in text.splitlines():
-        if line.startswith("#") or not line.strip():
-            continue
-        # perf's flat report puts the shared object in the third column; a frame
-        # from the target names the binary (or its statically linked image).
-        if fuzz_target in line:
-            return True
-    return False
+        data = json.loads(path.read_text())
+        tot = data["totals"]
+        n = int(tot["target_attributed"]["samples"])
+        total = int(tot["samples"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return False, (f"{path} missing or unreadable ({e.__class__.__name__}: {e}); "
+                       "it is the optimizer's primary ranking input")
+    floor = PHASE2_MIN_TARGET_SOURCE_SAMPLES if floor is None else int(floor)
+    info = (f"{n} of {total} samples attributed to target-source functions; "
+            f"target DSO share {share if share is None else round(share, 2)}%")
+    if n < floor:
+        return False, (f"only {n} samples attributed to {fuzz_target}'s own source "
+                       f"functions (floor {floor}; "
+                       f"{total} samples in all, target DSO share "
+                       f"{share if share is None else round(share, 2)}%) -- perf "
+                       "almost certainly did not sample the target processes (perf/"
+                       "kernel mismatch, or the binary never ran). See "
+                       f"{Path(profile_dir) / 'fuzzer.log'}")
+    if not quiet:
+        logger.info("Profile in %s: %s", profile_dir, info)
+    return True, info
 
 
 def _load_replay_timing_module():
@@ -2334,10 +2375,10 @@ def _deadline_capped_timeout(deadline: float | None) -> int | None:
 _HEADLESS_SYNC_DIRECTIVE = (
     "HEADLESS SINGLE-TURN MODE: this session is non-interactive and ends the "
     "moment you stop — you will NOT be resumed and any deferred or backgrounded "
-    "work is discarded. Run every step (corpus build, profiling, replay, "
-    "rebuilds) synchronously in the FOREGROUND and block until each finishes; "
-    "long steps (e.g. crash-filtering a large seed corpus) are expected — just "
-    "wait for them. Never start background or detached processes (no "
+    "work is discarded. Run every step (rebuilds, smoke runs, replay timing) "
+    "synchronously in the FOREGROUND and block until each finishes; long steps "
+    "(e.g. a full rebuild) are expected — just wait for them. Never start "
+    "background or detached processes (no "
     "run_in_background, no trailing '&', no nohup, no setsid) and never call "
     "ScheduleWakeup or otherwise defer work to a later turn. Complete all source "
     "edits and the replay-timing validation before your final message, then "
@@ -2372,15 +2413,18 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
     validation_lines = [
         "The outer phase 2 wrapper performs the authoritative rebuild and "
         "smoke-run after you finish.",
-        "Build the fixed corpus once: fuzz the baseline binary "
-        "(FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR, else FUZZ_SOURCE_FOLDS_OUT_DIR) "
-        "on FUZZ_SOURCE_FOLDS_CORPUS_DIR for "
-        "FUZZ_SOURCE_FOLDS_CORPUS_BUILD_DURATION seconds, then freeze it to "
-        "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR. Do not rebuild the baseline.",
-        "Profile the baseline once by replaying that fixed corpus to produce "
-        "one ranked hotspot list. Do not re-profile or run any refresh "
-        "profile.",
-        "Iterate the ranked hotspots from that single profile; for each, apply "
+        "The harness has already frozen the fixed corpus "
+        "(FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR) and profiled the baseline once "
+        "on a replay of it (FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR/"
+        "profile_once/). Never build or grow a corpus, run the fuzzer, or "
+        "profile anything yourself, and do not rebuild the baseline. If the "
+        "fixed corpus or the profile (hotspots.txt) is missing or empty, "
+        "output exactly BLOCKED_LOW_CONFIDENCE and stop.",
+        "Pick candidates from the top rows of profile_once/hotspots.txt "
+        "(target-source functions ranked by the cost they cause, sanitizer and "
+        "allocator work included); use children.txt and callgraph.txt only to "
+        "drill into a candidate's call tree. Do not re-profile.",
+        "Iterate those ranked hotspots from that single profile; for each, apply "
         "source folds and keep the change only if deterministic replay timing "
         "on the fixed corpus is measurably faster than the previous best, else "
         "revert it. Report the cumulative speedup at the end.",
@@ -2425,7 +2469,7 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
         validation_lines.append(
             "do not stop just because this is an extracted tree. First try "
             "to use the staged support files and recover a real OSS-Fuzz "
-            "build/profile/smoke loop. If that still remains blocked, do not "
+            "build/smoke loop. If that still remains blocked, do not "
             "silently fall back to static-only heuristics. Output exactly "
             "BLOCKED_LOW_CONFIDENCE and stop.",
         )
@@ -2468,21 +2512,23 @@ def _make_retry_prompt(
             "BLOCKED_LOW_CONFIDENCE and stop instead of relying on "
             "static-only heuristics. Never run the wrapper build and smoke "
             "commands in parallel. Reuse the single fixed corpus "
-            "(FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR) and the one "
-            "profile-on-replay hotspot list you already built; do not "
-            "re-profile. Keep each fold only if deterministic replay timing on "
-            "the fixed corpus beats the previous best, else revert it."
+            "(FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR) and the harness-built "
+            "profile (profile_once/hotspots.txt); never re-profile, build a "
+            "corpus, or run the fuzzer. Keep each fold only if deterministic "
+            "replay timing on the fixed corpus beats the previous best, else "
+            "revert it."
         )
     else:
         validation_text = (
             "The outer phase 2 wrapper performs the authoritative rebuild and "
-            "smoke-run. If you cannot recover a real build/profile/smoke loop, "
+            "smoke-run. If you cannot recover a real build/smoke loop, "
             "output exactly BLOCKED_LOW_CONFIDENCE and stop instead of "
             "relying on static-only heuristics. Reuse the single fixed corpus "
-            "(FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR) and the one "
-            "profile-on-replay hotspot list you already built; do not "
-            "re-profile. Keep each fold only if deterministic replay timing on "
-            "the fixed corpus beats the previous best, else revert it."
+            "(FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR) and the harness-built "
+            "profile (profile_once/hotspots.txt); never re-profile, build a "
+            "corpus, or run the fuzzer. Keep each fold only if deterministic "
+            "replay timing on the fixed corpus beats the previous best, else "
+            "revert it."
         )
     prompt = (
         f"You are optimizing the fuzz target '{fuzz_target}' in the current "
@@ -2820,6 +2866,27 @@ def _invoke_codex(
     return bool(result["ok"])
 
 
+def profile_layout_env(source_dir: str | Path, fuzz_target: str,
+                       harness_path: str | None = None) -> dict[str, str]:
+    """PHASE2_PROFILE_* keys telling the profiler where this tree lives.
+
+    The in-image source root (FuzzBench copies the tree over $SRC/<basename>,
+    ARVO mounts it at /src/<project>), the host tree itself (a copy of it built
+    under another prefix still maps back by path suffix, and each hotspot row
+    says whether its file is editable), and the in-image harness path. Private
+    to the harness: none of these are on the sandbox env allowlist.
+    """
+    in_image_root = f"/src/{Path(source_dir).name}"
+    env = {"PHASE2_PROFILE_SOURCE_ROOT": in_image_root,
+           "PHASE2_PROFILE_SOURCE_TREE": str(Path(source_dir).resolve())}
+    if harness_path is None:
+        harness_path = _find_harness_source(str(source_dir), fuzz_target)
+    if harness_path and harness_path != fuzz_target and not os.path.isabs(harness_path):
+        env["PHASE2_PROFILE_HARNESS"] = os.path.normpath(
+            os.path.join(in_image_root, harness_path))
+    return env
+
+
 def optimize_and_build(
     source_dir: str, fuzz_target: str, diff_output_dir: str,
     project: str, build_fn, max_attempts: int = 10,
@@ -2865,6 +2932,9 @@ def optimize_and_build(
     )
 
     harness_path = _find_harness_source(source_dir, fuzz_target)
+    if codex_extra_env is not None:
+        for k, v in profile_layout_env(source_dir, fuzz_target, harness_path).items():
+            codex_extra_env.setdefault(k, v)
     # Under the sandbox only the PROJECT dir is mounted, at /work/src. OSS-Fuzz
     # keeps the harness beside that dir rather than inside it, so the resolved
     # path is "../<target>.cc" -- which resolves to /work/<target>.cc in the
@@ -2889,16 +2959,33 @@ def optimize_and_build(
     _auth_retried = False          # at most one auth retry per round
     _rotating_fallback = False     # that retry skips a rejected long-lived token
 
-    # Do the deterministic heavy steps (corpus grow/freeze + baseline profile) in
-    # the harness so the single-turn agent never has to background a long docker
-    # step and yield. Best-effort: if it fails, the agent builds the corpus itself.
+    # The deterministic heavy steps (corpus freeze + baseline profile + hotspot
+    # table) run in the harness, ALWAYS, before any agent session. They are
+    # required: the agent has no fall-back that builds a corpus, runs the fuzzer
+    # or profiles, so if they fail the round ends here, with no agent invoked.
     #
     # This is the single largest CPU item in a round -- mutation augmentation,
     # the corpus crash-filter/grow/freeze, and the baseline profile all run here,
     # pinned to FUZZ_SOURCE_FOLDS_PROFILE_CPU -- so it is charged as one stage.
-    if codex_extra_env:
-        with cpu_ledger.timed("profile_prebuild", cores=1):
-            _prebuild_phase2_corpus_and_profile(codex_extra_env, fuzz_target)
+    if not codex_extra_env:
+        # No caller does this today (every phase-2 path and every online round
+        # passes the _make_phase2_profile_env env). It used to start the agent
+        # with no prebuilt corpus or profile, i.e. "build it yourself".
+        raise PrebuildFailedError(
+            "no profiling env was passed, so no fixed corpus or profile can be "
+            "prebuilt; refusing to start an agent without them", stage="env")
+    with cpu_ledger.timed("profile_prebuild", cores=1) as _pinfo:
+        _prebuilt = _prebuild_phase2_corpus_and_profile(codex_extra_env, fuzz_target)
+        _pinfo["ok"] = bool(_prebuilt)
+    if not _prebuilt:
+        reason = codex_extra_env.get(PREBUILD_FAILURE_KEY) or "prebuild failed"
+        try:
+            with open(os.path.join(diff_output_dir, "prebuild_failed.txt"), "w") as f:
+                f.write(f"No optimizer agent was started for this round.\n{reason}\n")
+        except OSError:
+            pass
+        raise PrebuildFailedError(reason,
+                                  stage=codex_extra_env.get(PREBUILD_STAGE_KEY, ""))
 
     for attempt in range(max_attempts):
         # Choose prompt based on whether we have a previous build failure
@@ -3558,6 +3645,11 @@ def setup_cve_arvo(
             exc, entry=entry, experiment_dir=experiment_dir,
             experiment_id=experiment_id, project=project)
         return False
+    except PrebuildFailedError as exc:
+        _record_prebuild_failure(
+            exc, entry=entry, experiment_dir=experiment_dir,
+            experiment_id=experiment_id, project=project)
+        return False
 
     # Check if optimization was applied
     opt_diff = os.path.join(diff_dir, "optimization.diff")
@@ -3745,6 +3837,11 @@ def setup_cve_arvo_image(
             exc, entry=entry, experiment_dir=experiment_dir,
             experiment_id=experiment_id, project=project)
         return False
+    except PrebuildFailedError as exc:
+        _record_prebuild_failure(
+            exc, entry=entry, experiment_dir=experiment_dir,
+            experiment_id=experiment_id, project=project)
+        return False
 
     opt_diff = os.path.join(diff_dir, "optimization.diff")
     opt_applied = False
@@ -3922,6 +4019,11 @@ def setup_cve_osv(
                     )
                 except MutationAugmentationError as exc:
                     _record_mutation_augmentation_failure(
+                        exc, entry=entry, experiment_dir=experiment_dir,
+                        experiment_id=experiment_id, project=project)
+                    return False
+                except PrebuildFailedError as exc:
+                    _record_prebuild_failure(
                         exc, entry=entry, experiment_dir=experiment_dir,
                         experiment_id=experiment_id, project=project)
                     return False
@@ -4177,6 +4279,21 @@ def _record_mutation_augmentation_failure(
     _record_setup_failure(
         entry=entry, experiment_dir=experiment_dir, experiment_id=experiment_id,
         stage="mutation_augmentation", reason=str(exc),
+    )
+
+
+def _record_prebuild_failure(
+    exc: Exception, *, entry: dict, experiment_dir: str, experiment_id: str,
+    project: str,
+) -> None:
+    """Mark a target failed because the harness could not freeze the corpus or
+    profile the baseline (stage=profile_prebuild). No agent ran: there is no
+    agent-side fall-back that builds a corpus or profiles."""
+    logger.error("[FAIL] %s: profile prebuild failed (%s); no optimizer agent was "
+                 "started", project, exc)
+    _record_setup_failure(
+        entry=entry, experiment_dir=experiment_dir, experiment_id=experiment_id,
+        stage="profile_prebuild", reason=str(exc),
     )
 
 

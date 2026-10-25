@@ -23,6 +23,15 @@ recorded binary lives at ``/out`` and a matching perf is installed, so symbols
 resolve to function names -- host-side reporting against a container-recorded
 ``perf.data`` only yields raw addresses (the ``/out`` path does not exist on the
 host).
+
+The same container run also dumps every sample's call chain (``perf script``,
+symbol-resolved there) to ``perf_script.txt.gz``, each sample's own IP
+(``perf script -G``) to ``perf_script_ip.txt.gz``, and perf report's exact
+sample count. The host then builds the ranked target-source hotspot table from
+them (``hotspot_table.py`` -> ``hotspots.txt`` / ``hotspots.json``), the
+optimizer's primary ranking input. A failure to build that table -- including a
+failed or truncated dump, or a perf without ``-F dsoff`` -- fails the profile
+loudly.
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ import importlib.util
 import json
 import subprocess
 import os
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -65,11 +75,33 @@ RUNNER_IMAGE = rfp.RUNNER_IMAGE
 # value to restore the old (kernel-fragile) behaviour.
 PROFILER_IMAGE = os.environ.get("FUZZ_SOURCE_FOLDS_PROFILER_IMAGE", "bench-sandbox/profiler")
 
-# Fail the profile if the target's own code is not where the samples landed. This
-# is the loud-failure guard for the perf/kernel-mismatch bug above: a healthy AFL
-# or libFuzzer profile puts double-digit self-time in the target DSO; a broken one
-# is ~0%. Set to 0 to disable.
-MIN_TARGET_DSO_SHARE = float(os.environ.get("FUZZ_SOURCE_FOLDS_MIN_TARGET_DSO_SHARE", "8.0"))
+# The perf/kernel-mismatch failure above (perf never samples the target) is
+# caught by the harness, from hotspots.json: it refuses a profile whose
+# target-source functions received almost no samples (an absolute sample floor,
+# phase2_setup.PHASE2_MIN_TARGET_SOURCE_SAMPLES). The DSO shares below are kept
+# in metadata.json as information only; there is no percentage gate.
+
+
+def _load_hotspot_table():
+    """Load the sibling hotspot_table module (it has no other dependencies)."""
+    path = Path(__file__).with_name("hotspot_table.py")
+    spec = importlib.util.spec_from_file_location("hotspot_table", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load hotspot_table from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+hotspot_table = _load_hotspot_table()
+PERF_SCRIPT_NAME = "perf_script.txt.gz"
+PERF_SCRIPT_IP_NAME = "perf_script_ip.txt.gz"
+PERF_SCRIPT_STATUS = "perf_script.status"
+# Everything a profile attempt writes. Removed before an attempt and after a
+# failed one, so a retry or a resumed run can never pick up a stale report.
+PROFILE_OUTPUTS = ("perf.data", "flat.txt", "callgraph.txt", "children.txt",
+                   "dso.txt", PERF_SCRIPT_NAME, PERF_SCRIPT_IP_NAME,
+                   PERF_SCRIPT_STATUS, "hotspots.json", "hotspots.txt")
 
 
 def flat_target_share(flat_path, fuzz_target: str) -> float:
@@ -281,8 +313,39 @@ def build_replay_profile_docker_command(
             # This can, and metadata.json records the share.
             '"$PERF_BIN" report --stdio --no-children -g none --sort dso --percent-limit 0 '
             "-i /artifacts/perf.data > /artifacts/dso.txt 2>>/artifacts/fuzzer.log || true; "
+            # Every sample's full call chain, leaf first, symbols resolved HERE
+            # (the /out binary and a matching perf exist only in this container),
+            # and in a second pass (-G) each sample's own IP: under LBR the first
+            # chain entry can be a callee that has not run yet. The host turns
+            # both into hotspots.txt/json (hotspot_table.py). No percent floor.
+            # --no-inline: there is no addr2line in this image, and inlined frames
+            # are reported under their container anyway. Both pipelines' exit
+            # codes, the dsoff support and perf report's exact sample count go to
+            # perf_script.status so the host can refuse a failed or truncated
+            # dump, loudly; none of it can mask a good flat.txt.
+            "t0=$(date +%s%N); cg_rc=na; ip_rc=na; "
+            # `perf script -h` exits 129, so under pipefail a `| grep -q` test
+            # would always fail; match the captured usage text instead.
+            'ph=$("$PERF_BIN" script -h 2>&1 || true); '
+            'case "$ph" in *dsoff*) dsoff=yes; '
+            '"$PERF_BIN" script -i /artifacts/perf.data --no-inline '
+            "-F comm,pid,period,ip,sym,symoff,dso,dsoff 2>>/artifacts/fuzzer.log "
+            "| gzip -1 > /artifacts/perf_script.txt.gz; "
+            'cg_rc="${PIPESTATUS[0]} ${PIPESTATUS[1]}"; '
+            '"$PERF_BIN" script -i /artifacts/perf.data --no-inline -G '
+            "-F comm,pid,period,ip,sym,symoff,dso,dsoff 2>>/artifacts/fuzzer.log "
+            "| gzip -1 > /artifacts/perf_script_ip.txt.gz; "
+            'ip_rc="${PIPESTATUS[0]} ${PIPESTATUS[1]}"; '
+            ";; *) dsoff=no;; esac; "
+            'ns=$("$PERF_BIN" report -i /artifacts/perf.data --stats 2>/dev/null '
+            "| awk '/SAMPLE events:/{print $3; exit}'); "
+            '{ echo "dsoff=$dsoff"; echo "cg_rc=$cg_rc"; echo "ip_rc=$ip_rc"; '
+            'echo "report_samples=${ns:-}"; '
+            'echo "perf=$("$PERF_BIN" version 2>/dev/null)"; '
+            'echo "ms=$(( ($(date +%s%N) - t0) / 1000000 ))"; } '
+            "> /artifacts/perf_script.status; "
             "fi; "
-            "chmod a+r /artifacts/perf.data /artifacts/fuzzer.log /artifacts/flat.txt /artifacts/callgraph.txt /artifacts/children.txt /artifacts/dso.txt 2>/dev/null || true; "
+            "chmod a+r /artifacts/perf.data /artifacts/fuzzer.log /artifacts/flat.txt /artifacts/callgraph.txt /artifacts/children.txt /artifacts/dso.txt /artifacts/perf_script.txt.gz /artifacts/perf_script_ip.txt.gz /artifacts/perf_script.status 2>/dev/null || true; "
             "exit $rc"
         ),
     ]
@@ -303,6 +366,9 @@ def run_replay_profile(args: argparse.Namespace) -> int:
     callgraph = artifact_dir / "callgraph.txt"
     dso = artifact_dir / "dso.txt"
     timeout = max(int(args.loop_timeout), int(args.min_sample_seconds) + 600)
+
+    # Nothing from an earlier attempt or run may survive into this one.
+    _remove_profile_outputs(artifact_dir)
 
     # perf inside a container is occasionally flaky (apt/network/transient), so
     # retry once and surface the docker + fuzzer.log output on failure instead of
@@ -336,11 +402,7 @@ def run_replay_profile(args: argparse.Namespace) -> int:
             last_err += "\n--- fuzzer.log tail ---\n" + log_path.read_text(
                 errors="replace"
             )[-1000:]
-        for stale in (perf_data, flat, callgraph, dso):
-            try:
-                stale.unlink()
-            except FileNotFoundError:
-                pass
+        _remove_profile_outputs(artifact_dir)
 
     if not success:
         raise RuntimeError(
@@ -348,12 +410,12 @@ def run_replay_profile(args: argparse.Namespace) -> int:
             f"(last docker rc={docker_rc}); output:\n{last_err}"
         )
 
-    # Two independent reads of "did perf sample the target at all": the dso.txt
-    # share (no percent floor, but can be None) and the flat.txt target-DSO sum
-    # (floored at 0.5%, so a lower bound, but always available). Take the larger.
+    # Shares of samples in the target's own DSO, recorded as INFORMATION only
+    # (dso.txt has no percent floor but can be missing; the flat.txt sum is
+    # floored at 0.5%). Whether perf sampled the target at all is decided by the
+    # harness from hotspots.json's absolute target-source sample count.
     dso_share = target_dso_share(dso, args.fuzz_target)
     flat_share = flat_target_share(flat, args.fuzz_target)
-    observed_share = max(flat_share, dso_share or 0.0)
 
     metadata = {
         "mode": "replay",
@@ -363,32 +425,129 @@ def run_replay_profile(args: argparse.Namespace) -> int:
         "corpus_dir": str(corpus_dir),
         "corpus_file_count": corpus_count,
         "docker_exit_code": docker_rc,
-        # Share of samples in the target's own DSO. Anything low means the
-        # hotspot ranking is dominated by something that is not the target.
         "target_dso_share_pct": dso_share,
         "flat_target_share_pct": round(flat_share, 2),
         "profiler_image": PROFILER_IMAGE,
     }
+
+    # The ranked target-source hotspot table: the optimizer's primary input, so
+    # a failure here fails the profile (loudly) instead of handing the agent a
+    # profile without it.
+    hot_err = None
+    try:
+        hot = build_hotspots(
+            artifact_dir=artifact_dir, out_dir=args.out_dir,
+            fuzz_target=args.fuzz_target,
+            source_root=getattr(args, "source_root", None),
+            harness=getattr(args, "harness", None) or [],
+            source_tree=getattr(args, "source_tree", None),
+        )
+        metadata["hotspots"] = hot
+    except Exception as e:  # noqa: BLE001 - any failure is a failed profile, loudly
+        hot_err = (str(e) if isinstance(e, hotspot_table.HotspotError)
+                   else f"{type(e).__name__}: {e}")
+        metadata["hotspots_error"] = hot_err
+        for stale in (artifact_dir / hotspot_table.HOTSPOTS_JSON,
+                      artifact_dir / hotspot_table.HOTSPOTS_TXT):
+            try:
+                stale.unlink()
+            except FileNotFoundError:
+                pass
     (artifact_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True)
     )
-
-    # Loud failure instead of a silently corrupt hotspot list. A perf that does
-    # not match the host kernel records the afl-showmap parent but not its
-    # forkserver children, so the target's share collapses to ~0 and the profile
-    # is pure harness noise. Refuse it rather than let the optimizer iterate on
-    # garbage (which reads downstream as "the optimizer found nothing").
-    if MIN_TARGET_DSO_SHARE > 0 and observed_share < MIN_TARGET_DSO_SHARE:
-        raise RuntimeError(
-            f"profile REJECTED: only {observed_share:.1f}% of self-time is in the "
-            f"target DSO ({args.fuzz_target}), below the {MIN_TARGET_DSO_SHARE:.0f}% "
-            "floor. perf almost certainly is not sampling the target -- typically a "
-            "perf/kernel mismatch in the profiler image (afl-showmap forkserver "
-            "children go unsampled). Check that PROFILER_IMAGE ships a perf matching "
-            f"`uname -r`; the top of flat.txt is likely afl-showmap. See "
-            f"{artifact_dir / 'flat.txt'}."
-        )
+    if hot_err is not None:
+        print(f"HOTSPOT TABLE FAILED: {hot_err}", file=sys.stderr)
+        raise RuntimeError(f"hotspot table (hotspots.json) could not be built: "
+                           f"{hot_err}")
+    h = metadata["hotspots"]
+    print(f"hotspots: {h['target_source_samples']} of {h['total_samples']} samples "
+          f"attributed to {h['target_source_functions']} target-source functions; "
+          f"added {h['seconds_total']:.1f}s (perf script {h['perf_script_seconds']}s "
+          f"in-container, host {h['host_seconds']:.1f}s)", file=sys.stderr)
     return 0
+
+
+def _remove_profile_outputs(artifact_dir: Path) -> None:
+    for name in PROFILE_OUTPUTS:
+        try:
+            (Path(artifact_dir) / name).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def read_perf_script_status(path: Path) -> dict:
+    """perf_script.status -> dict. Raises HotspotError on any sign that the
+    container's dumps are missing, failed, or cannot be trusted."""
+    HE = hotspot_table.HotspotError
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError as e:
+        raise HE(f"{path} missing: the perf script step never ran ({e})") from e
+    st = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    if st.get("dsoff") != "yes":
+        raise HE(f"the profiler image's perf ({st.get('perf', '?')}) does not "
+                 "support `perf script -F dsoff`, which the hotspot table needs; "
+                 "use a kernel-matched perf >= 6.x (FUZZ_SOURCE_FOLDS_PROFILER_IMAGE)")
+    for key in ("cg_rc", "ip_rc"):
+        if st.get(key, "").split() != ["0", "0"]:
+            raise HE(f"perf script | gzip failed ({key}={st.get(key)!r}: exit codes "
+                     "of perf script and gzip); see fuzzer.log")
+    try:
+        st["report_samples"] = int(st.get("report_samples", ""))
+    except ValueError:
+        raise HE("perf report --stats gave no sample count to cross-check the "
+                 "perf script dump against") from None
+    try:
+        st["ms"] = int(st.get("ms", ""))
+    except ValueError:
+        st["ms"] = None
+    return st
+
+
+def build_hotspots(*, artifact_dir: Path, out_dir, fuzz_target: str,
+                   source_root: str | None, harness, source_tree=None) -> dict:
+    """hotspots.txt/json from the container's perf script dumps.
+
+    Returns a summary for metadata.json; raises hotspot_table.HotspotError. The
+    dumps are deleted on success (perf.data stays, so they can be regenerated)
+    and kept on failure for debugging.
+    """
+    artifact_dir = Path(artifact_dir)
+    script = artifact_dir / PERF_SCRIPT_NAME
+    ip_script = artifact_dir / PERF_SCRIPT_IP_NAME
+    st = read_perf_script_status(artifact_dir / PERF_SCRIPT_STATUS)
+    perf_script_s = round(st["ms"] / 1000.0, 2) if st.get("ms") is not None else None
+    timings: dict = {}
+    t0 = time.monotonic()
+    res = hotspot_table.build_hotspot_table(
+        perf_script=script, ip_script=ip_script,
+        binary=Path(out_dir) / fuzz_target, host_out_dir=out_dir,
+        fuzz_target=fuzz_target, out_dir=artifact_dir,
+        source_root=source_root, harness_paths=harness, source_tree=source_tree,
+        expected_samples=st["report_samples"], timings=timings)
+    host_s = time.monotonic() - t0
+    for stale in (script, ip_script, artifact_dir / PERF_SCRIPT_STATUS):
+        try:
+            stale.unlink()
+        except FileNotFoundError:
+            pass
+    tot = res["totals"]
+    return {
+        "total_samples": tot["samples"],
+        "target_source_samples": tot["target_attributed"]["samples"],
+        "target_source_pct": tot["target_attributed"]["pct"],
+        "outside_target_samples": tot["outside_target"]["samples"],
+        "target_source_functions": res["target_source_functions"],
+        "source_root": res["source_root"],
+        "editable_tree_known": res["editable_tree_known"],
+        "build_dsos": res["build_dsos"],
+        "harness_files": res["harness_files"],
+        "perf_script_seconds": perf_script_s,
+        "host_seconds": round(host_s, 2),
+        "seconds_total": round(host_s + (perf_script_s or 0.0), 2),
+        "host_timings": timings,
+    }
 
 
 def target_dso_share(dso_path, fuzz_target: str) -> float | None:
@@ -442,6 +601,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu", type=int, default=3)
     parser.add_argument("--memory", default="4g")
     parser.add_argument("--shm-size", default="2g")
+    parser.add_argument("--source-root", default=None,
+                        help="in-image project source root (e.g. /src/<project>) "
+                             "for hotspots.txt; inferred from the harness's debug "
+                             "info when omitted")
+    parser.add_argument("--source-tree", default=None,
+                        help="host path of the editable project tree; maps debug "
+                             "paths of copies built elsewhere and sets each "
+                             "row's editable flag")
+    parser.add_argument("--harness", action="append", default=[],
+                        help="in-image harness source path(s), excluded from "
+                             "hotspots.txt (the LLVMFuzzerTestOneInput file is "
+                             "always excluded)")
     return parser.parse_args()
 
 

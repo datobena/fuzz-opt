@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import configparser
 import os
+import re
 import shlex
 from dataclasses import dataclass, field
 
@@ -61,6 +62,38 @@ def fuzzbench_out_set(fuzz_target: str) -> list[str]:
     must replace all of them together; a relaunch mixing a new target with an
     old cmplog binary would run CmpLog on code the target no longer has."""
     return [fuzz_target, os.path.join("cmplog", fuzz_target), "afl++.dict"]
+
+
+# AFL++ compiler plugins and preload helpers that can sit in an /out but are
+# never loaded by the fuzz target at run time.
+_AFL_TOOL_SO_RE = re.compile(
+    r"(-pass\.so$|^SanitizerCoverage|^afl-|^lib(dislocator|tokencap|compcov|qasan|"
+    r"AFLDriver|AFLQemuDriver)\b|^(argv|socket)fuzz)")
+_SHARED_LIB_RE = re.compile(r"\.so(\.\d+)*$")
+
+
+def fuzzbench_runtime_libs(bin_dir: str) -> list[str]:
+    """Shared libraries the build put under /out, relative to it, main build
+    and cmplog/ alike (systemd's src/shared/libsystemd-shared-*.so, php's
+    modules/*.so).
+
+    They belong to the same build as the target and must be swapped with it.
+    The optimizer ranks and edits code in them, and the gate measures the
+    round's whole /out, so a fold there was measured but never deployed; worse,
+    a fold that changes a shared struct or inline header would pair the new
+    target with the old library. Trials mount the bin dir at /out, so the
+    target's $ORIGIN rpath (and LD_LIBRARY_PATH=/out) resolve to the swapped
+    copies. AFL++ compiler plugins are excluded: nothing loads them at run time.
+    """
+    out = []
+    if not bin_dir or not os.path.isdir(bin_dir):
+        return out
+    for root, _dirs, files in os.walk(bin_dir):
+        for f in files:
+            if not _SHARED_LIB_RE.search(f) or _AFL_TOOL_SO_RE.search(f):
+                continue
+            out.append(os.path.relpath(os.path.join(root, f), bin_dir))
+    return sorted(out)
 
 
 def fuzzbench_options_dict(host_bin_dir: str, fuzz_target: str) -> str | None:

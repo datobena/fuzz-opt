@@ -6,18 +6,20 @@ How to turn the **one** baseline profile into a ranked working set of fold candi
 This is analysis only: it produces candidates, it does not apply them. Do not call `claude`, `codex`,
 or any external skill runner from here — do the analysis yourself.
 
-**Cadence reminder.** This skill profiles exactly once, on the frozen corpus, using the baseline
-binary. There is no evolving corpus, no refresh window, and no re-profile after a fold lands. Rank
-once from that single profile, then work the list.
+**Cadence reminder.** The harness profiles exactly once, on the frozen corpus, using the baseline
+binary, before your session starts. There is no evolving corpus, no refresh window, and no
+re-profile after a fold lands — and you never build a corpus, fuzz, or profile yourself. Rank once
+from that single profile, then work the list.
 
 ## Inputs
 
 - `source_dir` — local project source checkout to edit
 - `harness_path` — harness file, relative to `source_dir` or absolute
 - `OSS_FUZZ_PROJECT`, `OSS_FUZZ_DIR`
-- the profile artifacts written by `scripts/replay_fuzzer_profile.py` (or staged by the wrapper) in
-  `<FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR>/profile_once/`: `flat.txt`, `callgraph.txt`,
-  `metadata.json`
+- the profile artifacts the harness wrote to `<FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR>/profile_once/`:
+  `hotspots.txt` (primary ranking input) and `hotspots.json`, plus `children.txt`, `callgraph.txt`,
+  `flat.txt`, `dso.txt`, `metadata.json`. If `hotspots.txt` is missing or empty, output
+  `BLOCKED_LOW_CONFIDENCE` and stop — never profile to replace it
 - `FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR` — the frozen corpus that profile was taken on
 - `FUZZ_SOURCE_FOLDS_OUT_DIR`, `FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR`, `FUZZ_SOURCE_FOLDS_PROFILE_CPU`
 
@@ -35,14 +37,15 @@ fine; removing one never is.
 1. Recommend changes in library and project source only. Never optimize the harness itself or shared
    fuzz-only support code.
 2. Never recommend non-source-file edits (`build.sh`, Dockerfiles, metadata, corpora).
-3. Rank from the **inclusive time** of the single baseline profile — the `children.txt` report
-   (`perf report --children`, its **Children** column), which credits each function with the cost of
-   everything it calls. This is what attributes the cost of an allocation (the `__asan` allocator +
-   libc + kernel page-fault traffic it triggers) back to the **target source function that drives
-   it**, instead of leaving it stranded on uneditable `__asan`/libc leaf rows that no fold can touch.
-   Use **self time** (`flat.txt`, `--no-children`) as the tiebreaker and to pinpoint the editable
-   work inside a hot caller. If `children.txt` is empty or absent (the call graph failed to record),
-   fall back to self-time ranking and say so in the report.
+3. Rank from **`hotspots.txt`**, by its **caused%** column. Each row is one target-source function
+   (project code in the target binary; the harness, fuzz-support code, sanitizer runtime, libc and
+   kernel are never rows). A sample is credited to the NEAREST target-source function on its call
+   chain, walking from the leaf, so a row's caused% is its own code plus the sanitizer, allocator,
+   libc and kernel work it triggers directly — the `__asan` allocator, quarantine, fake-stack and
+   interceptor cost that would otherwise sit stranded on uneditable leaf rows — but not the work of
+   other target functions it calls, which have rows of their own. Use `children.txt` (inclusive call
+   trees) and `callgraph.txt` (who calls a leaf) only to drill into a chosen row; use `flat.txt` for
+   self-time detail.
 4. Rank by expected reduction in **replay time on the frozen corpus**, not raw CPU percentage alone.
    That is the exact quantity the acceptance gate measures.
 5. **Weight algorithmic and data-structure candidates (Category 3) highest.** Under the fuzzing
@@ -77,81 +80,107 @@ fine; removing one never is.
 
 ## Phase 2 — Read the profile
 
-The profile artifacts already exist; do not re-record them. `children.txt` is `perf report
---children` (an inclusive **Children** column and a **Self** column) — the PRIMARY ranking input.
-`flat.txt` is `perf report --stdio --no-children` (self time only) — the tiebreaker. `callgraph.txt`
-is the callee-annotated view (useful for reading a caller chain); `metadata.json` records how the
-sample was taken. If `children.txt` is empty (no LBR/FP call graph recorded), rank on `flat.txt` and
-note the degraded confidence in the report.
+The profile artifacts already exist; do not re-record them, and never profile anything yourself.
 
-Read `metadata.json` first and confirm the profile is real: it must show target symbols and a
-completed sample window. A profile whose top frames are only process startup, dynamic-loader, or
-`main` means the replay form did not execute the target — report `BLOCKED_LOW_CONFIDENCE` rather than
-ranking noise.
+Read `metadata.json` and the header of `hotspots.txt` first. The header gives the total samples and
+splits them into **target-attributed** (credited to some target-source function) and **outside
+target** (afl-showmap, the driver and harness, the loader, kernel work with no target function on
+the chain), each broken down by class. The harness has already refused profiles in which the
+target's own functions got almost no samples; if the table nevertheless has no rows, report
+`BLOCKED_LOW_CONFIDENCE` rather than ranking noise.
 
-**Why inclusive, not self.** A target function that allocates is cheap in *self* time — the cost
-lands downstream on `__asan::Allocator::Allocate`, libc, and kernel page-fault handling, all of which
-you cannot edit. Self-time ranking therefore buries the exact functions worth folding and surfaces
-uneditable allocator leaves. Inclusive time credits that whole chain to the *source* function that
-started it, so the allocation-heavy parser routine rises to where it belongs. Reducing the
-allocations it drives (fewer/cheaper allocations, buffer reuse, stack allocation, hoisting out of a
-loop) harvests the target + `__asan` + libc + kernel cost together.
+`hotspots.txt` columns, all in % of ALL samples except `of-tgt%`:
 
-Signals worth extra weight (read them in `children.txt` by inclusive %, then confirm the editable
-site with `flat.txt` + the caller chain):
+| column | meaning |
+|---|---|
+| `caused%` | samples credited to this function (nearest target-source frame from the leaf) |
+| `of-tgt%` | the same, as % of target-attributed samples |
+| `self%` | the leaf is this function's own code |
+| `san/cov%` | leaf in the sanitizer or coverage runtime (`__asan*`, `__sanitizer*`, interceptors, fake stack, AFL's coverage callback), triggered directly by this function |
+| `3rdp%` | leaf in std-library templates (`std::map`, `std::vector`, ... from the libc++/libstdc++ headers) or third-party code compiled into the binary, called directly |
+| `alloc%` | under malloc/free/calloc/realloc/new/delete or the ASan allocator internals, called directly by this function |
+| `libc%`, `kern%` | leaf in a shared library / the kernel, reached directly from this function |
+| `other%` | leaf in the harness or driver code this function calls back into |
+| `incl%` | inclusive: this function anywhere on the chain (counted once per sample) |
 
-- a target-source function with **high inclusive but low self** time → it drives expensive
-  descendants; the usual descendant is allocation (`malloc`/`free`/`calloc`/`operator new` →
-  `__asan` allocator → page faults). Fold the allocation at this source site; never the allocator.
-- `memset` / `calloc` / init / reset / teardown / destroy / clear high anywhere → capacity-
-  proportional per-iteration cost (heuristics Part 2, shape a and c); find its target caller
+`self + san/cov + 3rdp + alloc + libc + kern + other = caused`. Inlined functions appear under the
+non-inlined function that contains them.
+
+The `ed` column says whether you can edit the row's file: `y` — it is in your tree and a
+`.c/.cc/.cpp/.cxx/.h/.hh/.hpp/.hxx` file; `n` — the hot function's code lives in a generated file
+(`hotspots.json` gives the reason in `edit_note`): either a file the build generates that is not in
+your tree (an amalgamation: one generated `.c` concatenated from the project's sources), a generator input
+the debug info points at (a `.l`/`.y`/`.re` scanner or parser), or a checked-in file of a type you
+may not edit (an `.inc` fragment included into a `.c`). Treat an `n` row like this:
+
+- the cost is real, so the row still ranks; but never edit the generated file — the next build
+  regenerates it and the fold silently disappears;
+- find the function's real source in your tree (`grep -rn` for its name) and fold there if that
+  file is editable C/C++;
+- if the code exists only in a file you may not edit (`.l`, `.y`, `.inc`), fold the C/C++
+  functions it calls or that include it, or the data it is handed, instead; the row itself is then
+  out of reach.
+
+What the columns tell you (confirm the editable site in the source and with `children.txt` /
+`callgraph.txt` before folding):
+
+- **high `alloc%`** → the function allocates or frees a lot per call; fewer/cheaper allocations,
+  buffer reuse, inline storage. Fold at this source site; never the allocator.
+- **high `san/cov%`** → sanitizer or coverage-runtime work this function triggers. Drill into
+  `callgraph.txt` to see which: `__asan_stack_malloc_*` (a local whose address is taken, so ASan
+  builds a fake stack frame on every call — move the buffer into a cold helper), a per-byte
+  interceptor call (`memcpy`, `strlen`, `strchr` on tiny inputs), or the coverage callback
+  (`__sanitizer_cov_trace_pc_guard`), which only drops when the function executes fewer edges,
+  i.e. through an algorithmic fold.
+- **high `3rdp%`** → the function spends its time in std-library containers or third-party code
+  it calls (`std::map` lookups, a vendored library). You cannot edit that code; a fold replaces the
+  container or algorithm the function uses, or calls it less.
+- **high `self%`** → the function's own instructions: algorithmic and data-structure folds.
+- **a project allocator or string-copy wrapper** (the project's own `malloc`/`strdup` wrapper,
+  whose row is nearly all `alloc%`) is where its callers' allocations land. Look up its callers in
+  `callgraph.txt` / `children.txt`; the fold is usually in a caller that allocates per call.
+- **high `incl%` but low `caused%`** → a wrapper; its cost is in the rows of the functions it calls.
+  Do not take it for its `incl%` (a top-level parse or dispatch loop): descend to those rows.
+- `memset` / `calloc` / init / reset / teardown / destroy / clear rows high up → capacity-
+  proportional per-iteration cost (heuristics Part 2, shapes a and c).
 - generic container internals (hash, tree, map, `rehash`, `bucket`) ranking above the project's own
-  parsing code → a container provisioned for a regime the fuzzer never reaches
-- a broad tail with no single dominant self frame → inclusive ranking already rolls it into the
-  owning subsystem; fold at that subsystem level
+  parsing code → a container provisioned for a regime the fuzzer never reaches.
 
 ## Phase 3 — Build the working set
 
-Work from `children.txt`, ranking by **inclusive (Children) %**. Build two lists:
+Work down `hotspots.txt` in rank order (by `caused%`):
 
-1. target-source functions with more than `2%` inclusive time
-2. grouped subsystems or caller chains whose combined inclusive time exceeds `5%`
+1. **Rows.** A single row is a candidate when its `caused%` is at least the keep bar of the
+   acceptance gate (about 1% of replay time, or the jitter you measured, whichever is larger). That
+   is the most a fold confined to that function can save, so a row below the bar cannot pass the
+   gate alone.
+2. **Groups.** Rows below the bar are candidates only as part of a group that ONE change fixes —
+   rows sharing a cause (the same per-character helper family, the same buffer pattern, the same
+   subsystem or file) — whose summed `caused%` reaches the bar.
 
-A function with low self but high inclusive time is a PRIMARY candidate, not a skip — it is cheap
-itself but drives expensive descendants. Do not, however, just grab the outermost target frame
-(`LLVMFuzzerTestOneInput`, a top-level parse entry) because its inclusive % is near-total: descend
-its caller chain to the specific source site where the expensive work (usually allocation) is
-actually driven, and fold there.
+The list is exhausted when no untried row or group clears the bar.
 
-For each item capture: function or subsystem name, **inclusive % and self %**, source module or DSO,
-and a representative caller chain.
+For each item capture: function or group, its `hotspots.txt` rank, `caused%` and dominant
+column(s), its source file:line, and a representative caller chain from `children.txt` /
+`callgraph.txt`.
 
-Exclude as EDIT TARGETS (never fold these directly — but see the reattribution note below):
+The table already leaves out everything you must not fold. Keep these out of your edit targets
+when you drill into `children.txt` / `callgraph.txt` / `flat.txt`, which still show them:
 
 - functions defined in the harness file or in shared fuzz-only support code
 - kernel, dynamic-loader, and system-library frames you cannot edit from project source
 - sanitizer and coverage-runtime frames — build-level, not source-level, and out of scope.
   Match both the C spellings (`__asan_*`, `__sanitizer_cov_*`) **and the C++-namespaced ones**
-  (`__asan::*`, `__sanitizer::*`, `__lsan::*`, `__ubsan::*`), which is where the bulk of the
-  *self*-time cost sits: on a real PcapPlusPlus profile the top two self-time rows were
-  `__asan::Allocator::Allocate` (12.3%) and `__sanitizer::StackDepotBase<...>::Put` (6.1%),
-  ranking *above* the first project function (`pcpp::BgpLayer::parseBgpLayer`, 4.8%). These
-  frames live inside the target's own DSO, so the DSO-share check will not remove them — only
-  this filter will. An agent handed them unfiltered will try to fold code it does not own.
+  (`__asan::*`, `__sanitizer::*`, `__lsan::*`, `__ubsan::*`). They sit inside the target's own DSO,
+  so they top `flat.txt`; their cost is already credited to the target rows that trigger them.
 
-**Reattribution (the point of inclusive ranking).** Excluding a leaf as an edit target does NOT mean
-discarding its cost. In `children.txt` that cost is already counted inside the inclusive % of the
-target-source function that called it. So when an `__asan`/libc/kernel leaf is hot, walk its caller
-chain (in `children.txt` / `callgraph.txt`) up to the nearest **target-source** ancestor and credit
-the cost there — that ancestor becomes the candidate. The fold reduces the work the ancestor drives
-(fewer/cheaper allocations, reuse, stack allocation). **Contract reminder:** reducing genuine,
-redundant allocations is a behavior-preserving Category 1/3 fold; pooling, interning, or replacing
-the allocator to *dodge* ASan is Forbidden — every real allocation the target still makes must keep
-its sanitizer coverage.
+**Contract reminder:** reducing genuine, redundant allocations is a behavior-preserving Category 1/3
+fold; pooling, interning, or replacing the allocator to *dodge* ASan is Forbidden — every real
+allocation the target still makes must keep its sanitizer coverage.
 
-Still report the sanitizer self-time share you set aside. It is a large, unfoldable constant in every
-profile (ASan ~7–30% depending on allocation and call density), and knowing it is the difference
-between "the target spends 5% in parsing" and "5% in parsing and 22% in ASan".
+Still report the sanitizer share from the header. It is a large, unfoldable constant in every
+profile, and knowing it is the difference between "the target spends 5% in parsing" and "5% in
+parsing and 22% in ASan".
 
 ## Phase 4 — Deep analysis
 
@@ -231,10 +260,10 @@ is illegal, and no timing win rescues it.
 
 ### Corpus and profile
 - frozen corpus: N files, median unit X bytes, max Y bytes
-- profile: sample seconds, engine/replay form, top hotspot files
+- profile: target-attributed vs outside-target split from the `hotspots.txt` header, top rows
 
 ### Optimization Candidates
-| Rank | Scope | Function / Subsystem | Inclusive % (Self %) | Category | Safety | Coverage Risk | Impact | Recommendation |
+| Rank | Scope | Function / Subsystem | caused% (dominant column) | Category | Safety | Coverage Risk | Impact | Recommendation |
 
 ### Detailed Analysis (per candidate)
 - location and caller chain
@@ -251,7 +280,7 @@ is illegal, and no timing win rescues it.
 FOLDS_FOUND: N
 ```
 
-## If `perf` was unavailable
+## If the profile is missing
 
-Follow `fallback_profiling.md`, use the same report shape, and mark the pass explicitly as lower
-confidence with the profiler or method that was actually used.
+There is no fall-back profiler and no static-only pass. If `hotspots.txt` is missing or empty,
+output `BLOCKED_LOW_CONFIDENCE` and stop.

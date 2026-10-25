@@ -199,6 +199,12 @@ The existing guard does not catch this: `_profile_has_target_symbols`
 (`phase2_setup.py:1486`) accepts a profile if *any* frame is attributed to the target
 binary, so a 1.5 %-target profile passes.
 
+*Update, Oct 2026:* `_profile_has_target_symbols` and the target-DSO-share gates that
+followed it are gone. The profile now carries a ranked target-source table
+(`hotspots.json`), in which symbolizer, loader and runtime frames can never become rows,
+and the only gate is an absolute floor on samples credited to the target's own
+functions (`phase2_setup._check_profile_target_samples`, default 500).
+
 ---
 
 ## PHASE 3 — direct measurement (the decisive one)
@@ -430,6 +436,7 @@ magnitude larger):
    corpus barely reaches the library (44 of 7 232 edges, 0.61 %).
 4. The existing sanity check `_profile_has_target_symbols` (`phase2_setup.py:1486`) accepts
    any profile with *one* target frame, so the assimp profiles (1.5 % target) passed it.
+   *(Since replaced; see the update note in the section above.)*
 
 ---
 

@@ -169,3 +169,21 @@ def test_docker_command_pins_the_agent_cpuset():
     assert cmd[cmd.index("--cpuset-cpus") + 1] == "0-1,32-39"
     # A docker option, so it must precede the image.
     assert cmd.index("--cpuset-cpus") < cmd.index("bench-sandbox/agent")
+
+
+def test_fixed_corpus_points_at_the_mounted_copy():
+    """The harness freezes the fixed corpus inside the profile dir, the only one
+    mounted (/work/profile). The skill blocks on a missing fixed corpus, so the
+    agent must be pointed at the copy it can read, never at an unmounted path."""
+    base = {
+        "FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR":
+            "/home/x/results/exp/libxml2-arvo-1972/iter_01/source_diff/profiles",
+        "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR":
+            "/home/x/results/exp/libxml2-arvo-1972/iter_01/source_diff/profiles/fixed_corpus",
+    }
+    env = build_agent_env(base)
+    assert env["FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR"] == "/work/profile/fixed_corpus"
+    assert env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"] == "/work/profile"
+    # Outside the profile dir: the neutral default, never the host path.
+    env = build_agent_env({**base, "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR": "/elsewhere/fixed"})
+    assert env["FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR"] == "/work/corpus-fixed"

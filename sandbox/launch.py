@@ -6,7 +6,7 @@ with full filesystem, network, and docker access.
 
 What the agent gets:
     /work/src       the source tree, writable, .git stripped
-    /work/profile   the hotspot list, read-only
+    /work/profile   the harness-built profile (hotspots.txt ...) and fixed corpus, read-only
     /work/bin       broker-client scripts, read-only
     /run/broker.sock the only way to reach docker
 
@@ -75,11 +75,37 @@ _PATH_REWRITES = {
 }
 
 
+def _relative_to(path, root) -> str:
+    """``path`` relative to ``root`` when strictly inside it, else ''. The result
+    is a sub-path of the profile dir (e.g. 'fixed_corpus'), never a host path."""
+    if not path or not root:
+        return ""
+    p, r = PurePosixPath(str(path)), PurePosixPath(str(root))
+    try:
+        rel = p.relative_to(r)
+    except ValueError:
+        return ""
+    rel_s = str(rel)
+    if rel_s in ("", ".") or ".." in rel.parts:
+        return ""
+    return rel_s
+
+
 def build_agent_env(base: dict) -> dict:
     """Rebuild the child environment from the allowlist, rewriting host paths."""
     env: dict[str, str] = {}
     for key in ENV_ALLOWLIST:
         if key not in base:
+            continue
+        if key == "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR":
+            # The harness freezes the fixed corpus INSIDE the profile artifact
+            # dir (<profiles>/fixed_corpus), and only that dir is mounted
+            # (/work/profile). Point the agent at the copy it can actually read;
+            # the skill treats a missing or empty fixed corpus as
+            # BLOCKED_LOW_CONFIDENCE, so a dangling /work/corpus-fixed would end
+            # every round.
+            rel = _relative_to(base[key], base.get("FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"))
+            env[key] = f"{PROFILE_MOUNT}/{rel}" if rel else _PATH_REWRITES[key]
             continue
         if key in _PATH_REWRITES:
             env[key] = _PATH_REWRITES[key]

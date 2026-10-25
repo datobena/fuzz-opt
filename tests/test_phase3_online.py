@@ -1065,3 +1065,313 @@ def test_launcher_pid_file_is_named_by_experiment_id():
     text = _LAUNCHER.read_text()
     assert '.online_pertrial_${exp}.pid"' in text
     assert "online_pertrial_${PROJ}.pid" not in text
+
+
+# --- prebuild failure: the round ends without an agent -------------------------
+def _prebuild_round_ctx(tmp_path):
+    online = tmp_path / "trial_02"
+    ctx = phase3_online.RoundContext(
+        entry={"cve": "x", "project": "libxml2"}, experiment_id="e",
+        experiment_dir=str(tmp_path), online_dir=str(online), source_tree="",
+        source_root="", project="libxml2", image="", fuzz_target="xml",
+        poc_path=None, previous_best_bin=str(tmp_path / "iter_00_bin"),
+        prev_tag="iter_00", optimized_bin_dir="",
+        ledger_path=str(online / "ledger.json"), swap_timeline_path="",
+        profile_cpu=1, wrapper_env_fn=lambda root, state: {})
+    ctx.trial = types.SimpleNamespace(trial_id=2, project="libxml2", cve="x",
+                                      variant="optimized")
+    ctx.fixed_mutations = str(tmp_path / "fixed_mutations")
+    ctx.fixed_mutation_count = 10
+    return ctx
+
+
+def test_prebuild_failure_ends_the_round_without_an_agent(monkeypatch, tmp_path):
+    """optimize_and_build raises PrebuildFailedError before any agent session;
+    run_round must record outcome prebuild-failed in every place a measured
+    round records its outcome, and report it as NOT evidence."""
+    monkeypatch.setattr(phase3_online.config, "ONLINE_FIXED_MUTATION_CORPUS", True)
+    rc = {k: 1 for k in ("harvested", "checked_count", "crashers_removed",
+                         "tuning_count", "units_per_s", "budget_secs", "smoke_count")}
+    rc.update(tuning=str(tmp_path / "tuning"), smoke=str(tmp_path / "smoke"),
+              checked=str(tmp_path / "checked"), gate=str(tmp_path / "gate"))
+    monkeypatch.setattr(phase3_online, "prepare_round_corpus", lambda **k: rc)
+    monkeypatch.setattr(phase3_online, "prework_image_for", lambda e: "img")
+    monkeypatch.setattr(phase3_online, "_gate_replay_rate", lambda d: None)
+    monkeypatch.setattr(phase3_online, "build_round_env", lambda **k: {"K": "v"})
+    monkeypatch.setattr(phase3_online, "_reassert_edit_mtimes", lambda t: None)
+    monkeypatch.setattr(phase3_online, "_carry_forward_agent_memory", lambda d, n: False)
+    monkeypatch.setattr(phase2_setup, "optimizer_provenance", lambda: {"model": "m"})
+    reverted, summaries = [], []
+    monkeypatch.setattr(phase3_online, "apply_round_outcome",
+                        lambda accepted, **k: reverted.append(accepted)
+                        or k["previous_best_bin"])
+    monkeypatch.setattr(phase3_online, "_write_cpu_cost_summary",
+                        lambda ctx: summaries.append(ctx.iter_n))
+
+    def no_prebuild(*a, **k):
+        raise phase2_setup.PrebuildFailedError(
+            "sanity: only 3 samples attributed to xml's own source functions")
+    monkeypatch.setattr(phase2_setup, "optimize_and_build", no_prebuild)
+
+    ctx = _prebuild_round_ctx(tmp_path)
+    result = phase3_online.run_round(ctx, phase3_online.OnlineState(), 4)
+
+    assert result == (False, None, False, False)  # rejected, not evidence, keep going
+    assert reverted == [False]
+    assert summaries == [4]
+    iter_dir = tmp_path / "trial_02" / "iter_04"
+    prov = json.loads((iter_dir / "round_provenance.json").read_text())
+    assert prov["outcome"] == phase3_online.PREBUILD_FAILED_OUTCOME == "prebuild-failed"
+    assert prov["agent_started"] is False and prov["speedup"] is None
+    assert "only 3 samples" in prov["prebuild_failure"]
+    assert prov["corpus"] == rc
+    ledger = json.loads((tmp_path / "trial_02" / "ledger.json").read_text())
+    assert ledger[-1]["outcome"] == "prebuild-failed" and ledger[-1]["iter"] == 4
+    meta = json.loads((iter_dir / "setup_metadata.json").read_text())
+    assert meta["failure"]["stage"] == "profile_prebuild"
+    assert ctx.previous_best_bin == str(tmp_path / "iter_00_bin")
+
+
+def test_prebuild_failed_rounds_never_converge_the_loop():
+    """Prebuild failures are infrastructure: a run of them must not end
+    optimization (the loop keeps scheduling rounds until the trials end)."""
+    rounds = []
+
+    def run_round(i):
+        rounds.append(i)
+        return (False, None, False)              # what a prebuild-failed round returns
+
+    n = phase3_online.run_optimizer_loop(
+        run_round_fn=run_round, hot_swap_fn=lambda b: None, convergence_k=2,
+        wait_fn=lambda: None, all_terminal_fn=lambda: len(rounds) >= 6)
+    assert n == 6
+
+
+def _prebuild_failing_round(monkeypatch, tmp_path, stage):
+    """run_round wired so optimize_and_build raises PrebuildFailedError(stage)."""
+    monkeypatch.setattr(phase3_online.config, "ONLINE_FIXED_MUTATION_CORPUS", True)
+    rc = {k: 1 for k in ("harvested", "checked_count", "crashers_removed",
+                         "tuning_count", "units_per_s", "budget_secs", "smoke_count")}
+    rc.update(tuning="t", smoke="s", checked="c", gate="g")
+    monkeypatch.setattr(phase3_online, "prepare_round_corpus", lambda **k: rc)
+    monkeypatch.setattr(phase3_online, "prework_image_for", lambda e: "img")
+    monkeypatch.setattr(phase3_online, "_gate_replay_rate", lambda d: None)
+    monkeypatch.setattr(phase3_online, "build_round_env", lambda **k: {"K": "v"})
+    monkeypatch.setattr(phase3_online, "_reassert_edit_mtimes", lambda t: None)
+    monkeypatch.setattr(phase3_online, "_carry_forward_agent_memory", lambda d, n: False)
+    monkeypatch.setattr(phase2_setup, "optimizer_provenance", lambda: {})
+    monkeypatch.setattr(phase3_online, "apply_round_outcome",
+                        lambda accepted, **k: k["previous_best_bin"])
+    monkeypatch.setattr(phase3_online, "_write_cpu_cost_summary", lambda ctx: None)
+    stages = iter(stage) if isinstance(stage, list) else None
+
+    def no_prebuild(*a, **k):
+        st = next(stages) if stages else stage
+        raise phase2_setup.PrebuildFailedError(f"{st}: nope", stage=st)
+    monkeypatch.setattr(phase2_setup, "optimize_and_build", no_prebuild)
+    return _prebuild_round_ctx(tmp_path)
+
+
+def test_a_deterministic_prebuild_failure_stops_the_optimizer_after_three(monkeypatch, tmp_path):
+    monkeypatch.setattr(phase3_online.config, "ONLINE_PREBUILD_FAIL_STOP", 3)
+    ctx = _prebuild_failing_round(monkeypatch, tmp_path, "sanity")
+    got = [phase3_online.run_round(ctx, phase3_online.OnlineState(), i)[3]
+           for i in (1, 2, 3)]
+    assert got == [False, False, True]
+    prov = json.loads((tmp_path / "trial_02" / "iter_03" / "round_provenance.json").read_text())
+    assert prov["optimizer_stopped"] is True and prov["prebuild_fail_streak"] == 3
+
+
+def test_transient_or_changing_prebuild_failures_never_stop_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(phase3_online.config, "ONLINE_PREBUILD_FAIL_STOP", 3)
+    ctx = _prebuild_failing_round(monkeypatch, tmp_path, "timeout")
+    assert not any(phase3_online.run_round(ctx, phase3_online.OnlineState(), i)[3]
+                   for i in range(1, 6))
+    ctx = _prebuild_failing_round(monkeypatch, tmp_path / "b",
+                                  ["sanity", "sanity", "profile", "sanity", "sanity"])
+    assert not any(phase3_online.run_round(ctx, phase3_online.OnlineState(), i)[3]
+                   for i in range(1, 6))
+
+
+def test_the_loop_ends_when_a_round_asks_to_stop():
+    rounds = []
+
+    def run_round(i):
+        rounds.append(i)
+        return (False, None, False, i == 3)
+
+    n = phase3_online.run_optimizer_loop(
+        run_round_fn=run_round, hot_swap_fn=lambda b: None, convergence_k=0,
+        wait_fn=lambda: None, all_terminal_fn=lambda: len(rounds) >= 10)
+    assert n == 3
+
+
+# --- setup-time profile check ---------------------------------------------------
+def _preflight_dirs(tmp_path):
+    exp = tmp_path / "exp"
+    (exp / "seed_corpus" / "merged").mkdir(parents=True)
+    (exp / "seed_corpus" / "merged" / "s0").write_bytes(b"hi")
+    src = tmp_path / "src" / "demo"
+    (src / "fuzz").mkdir(parents=True)
+    (src / "fuzz" / "demo_fuzzer.c").write_text("int LLVMFuzzerTestOneInput(void){return 0;}")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "replay_fuzzer_profile.py").write_text("# stub")
+    return exp, src, scripts
+
+
+def _fake_hotspots(prof_dir, target_n, build_n):
+    p = Path(prof_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "hotspots.json").write_text(json.dumps({
+        "totals": {"samples": 1000, "build_dso_samples": build_n,
+                   "target_attributed": {"samples": target_n}},
+        "functions": [{"function": "f", "caused_pct": 1.0}] if target_n else []}))
+
+
+def _preflight_kw(tmp_path, exp, src):
+    return dict(entry={"cve": "x"}, baseline_bin_dir=str(tmp_path / "bin"),
+                experiment_dir=str(exp), project_src_dir=str(src),
+                fuzz_target="demo_fuzzer", online_dir=str(tmp_path / "online"),
+                profile_cpu=4)
+
+
+@pytest.fixture
+def preflight_env(monkeypatch, tmp_path):
+    exp, src, scripts = _preflight_dirs(tmp_path)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_SKILL_SCRIPTS_DIR", str(scripts))
+    monkeypatch.setattr(phase3_online.config, "ONLINE_PREFLIGHT_PROFILE_SECS", 30)
+    monkeypatch.setattr(phase3_online.config, "ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES", 100)
+    monkeypatch.setattr(phase3_online, "prework_image_for", lambda e: "img")
+    return exp, src
+
+
+def test_preflight_profile_profiles_like_a_round(monkeypatch, tmp_path, preflight_env):
+    exp, src = preflight_env
+    seen = {}
+
+    def fake_profile(**kw):
+        seen.update(kw)
+        _fake_hotspots(kw["profile_dir"], 5000, 9000)
+        return True, "profile", "5000 of 9000"
+    monkeypatch.setattr(phase2_setup, "run_baseline_profile", fake_profile)
+    ok, why = phase3_online._preflight_profile(**_preflight_kw(tmp_path, exp, src))
+    assert ok is True
+    assert seen["env"]["PHASE2_PROFILE_SOURCE_ROOT"] == "/src/demo"
+    assert seen["env"]["PHASE2_PROFILE_SOURCE_TREE"] == str(src.resolve())
+    assert seen["corpus_dir"].endswith("seed_corpus/merged")
+    assert seen["min_target_samples"] == 0          # the floor never refuses here
+    assert seen["proc_env"]["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] == "img"
+
+
+def test_preflight_profile_only_warns_on_a_lone_tiny_seed(monkeypatch, tmp_path,
+                                                         preflight_env, caplog):
+    """zlib/re2/jsoncpp/libpcap get only the "hi" seed: almost no project code
+    runs on it. That must not refuse a healthy campaign."""
+    exp, src = preflight_env
+
+    def fake_profile(**kw):
+        _fake_hotspots(kw["profile_dir"], 3, 1800)
+        return True, "profile", "3 of 26000"
+    monkeypatch.setattr(phase2_setup, "run_baseline_profile", fake_profile)
+    with caplog.at_level("WARNING"):
+        ok, _ = phase3_online._preflight_profile(**_preflight_kw(tmp_path, exp, src))
+    assert ok is True
+    assert any("only 3 samples" in r.getMessage() for r in caplog.records
+               if r.levelname == "WARNING")
+    rec = json.loads((tmp_path / "online" / "preflight_profile.json").read_text())
+    assert rec["ok"] is True and rec["target_source_samples"] == 3
+
+
+def test_preflight_profile_refuses_only_what_breaks_every_round(monkeypatch, tmp_path,
+                                                                preflight_env):
+    exp, src = preflight_env
+    kw = _preflight_kw(tmp_path, exp, src)
+    # perf saw nothing of the build at all
+    monkeypatch.setattr(phase2_setup, "run_baseline_profile", lambda **k: (
+        _fake_hotspots(k["profile_dir"], 0, 0), (True, "profile", "0 of 26000"))[1])
+    ok, why = phase3_online._preflight_profile(**kw)
+    assert ok is False and "no sample at all" in why
+    # the hotspot table could not be built (mismatch, symbolizer, dsoff, dump)
+    monkeypatch.setattr(phase2_setup, "run_baseline_profile",
+                        lambda **k: (False, "hotspots", "source-root mismatch: ..."))
+    ok, why = phase3_online._preflight_profile(**kw)
+    assert ok is False and why.startswith("hotspots: source-root mismatch")
+
+
+def test_preflight_profile_retries_a_transient_perf_failure_once(monkeypatch, tmp_path,
+                                                                preflight_env):
+    exp, src = preflight_env
+    calls = []
+
+    def flaky(**kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return False, "profile-run", "perf replay-profile failed after 2 attempts"
+        _fake_hotspots(kw["profile_dir"], 900, 1000)
+        return True, "profile", "ok"
+    monkeypatch.setattr(phase2_setup, "run_baseline_profile", flaky)
+    assert phase3_online._preflight_profile(**_preflight_kw(tmp_path, exp, src))[0] is True
+    assert len(calls) == 2
+
+
+def test_preflight_profile_disables_and_needs_seeds(monkeypatch, tmp_path, preflight_env):
+    exp, src = preflight_env
+    kw = _preflight_kw(tmp_path, exp, src)
+    monkeypatch.setattr(phase3_online.config, "ONLINE_PREFLIGHT_PROFILE_SECS", 0)
+    assert phase3_online._preflight_profile(**kw) == (True, "disabled")
+    monkeypatch.setattr(phase3_online.config, "ONLINE_PREFLIGHT_PROFILE_SECS", 30)
+    (exp / "seed_corpus" / "merged" / "s0").unlink()
+    ok, why = phase3_online._preflight_profile(**kw)
+    assert ok is False and "no seed corpus" in why
+
+
+# --- hot swap deploys the build's own shared libraries ---------------------------
+def _fb_build(root, lib_bytes):
+    for rel in ("t", "cmplog/t", "afl++.dict", "src/shared/libproj-shared-1.so",
+                "cmplog/src/shared/libproj-shared-1.so", "modules/opcache.so",
+                "afl-llvm-pass.so", "SanitizerCoveragePCGUARD.so"):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(lib_bytes if rel.endswith(".so") else b"bin-" + lib_bytes)
+
+
+def test_runtime_libs_are_the_builds_own_shared_objects(tmp_path):
+    from lib import afl_launch
+    _fb_build(tmp_path, b"v1")
+    assert afl_launch.fuzzbench_runtime_libs(str(tmp_path)) == [
+        "cmplog/src/shared/libproj-shared-1.so", "modules/opcache.so",
+        "src/shared/libproj-shared-1.so"]
+
+
+def test_hot_swap_deploys_new_shared_libraries_and_drops_stale_ones(tmp_path):
+    """A fold in /out/**/lib*.so is measured by the gate (the round's whole /out)
+    and must reach the trial with the target: never a new binary on an old lib."""
+    live, new = tmp_path / "live", tmp_path / "new"
+    _fb_build(live, b"v1")
+    (live / "src" / "shared" / "libgone.so").write_bytes(b"old")
+    _fb_build(new, b"v2")
+    entry = {"kind": "fuzzbench"}
+    extra = (phase3_online._swap_extra_files(entry, "t")
+             + phase3_online._swap_runtime_libs(entry, new, live))
+    assert "src/shared/libgone.so" in extra and "afl-llvm-pass.so" not in extra
+    phase3_online._overwrite_binary(str(live / "t"), str(new / "t"), extra_files=extra)
+    assert (live / "t").read_bytes() == b"bin-v2"
+    assert (live / "src/shared/libproj-shared-1.so").read_bytes() == b"v2"
+    assert (live / "cmplog/src/shared/libproj-shared-1.so").read_bytes() == b"v2"
+    assert (live / "modules/opcache.so").read_bytes() == b"v2"
+    assert not (live / "src/shared/libgone.so").exists()
+    assert (live / "afl-llvm-pass.so").read_bytes() == b"v1"   # tool plugin untouched
+    assert phase3_online._swap_runtime_libs({"kind": "arvo"}, new, live) == ()
+
+
+def test_run_online_checks_the_profile_before_any_trial_starts():
+    import inspect
+    src = inspect.getsource(phase3_online.run_online)
+    assert src.index("_preflight_profile(") < src.index("_build_online_trials(entry, experiment_dir)\n    state")
+
+
+def test_both_swap_paths_deploy_the_runtime_libraries():
+    import inspect
+    for fn in (phase3_online.hot_swap_one, phase3_online.hot_swap):
+        assert "_swap_runtime_libs(" in inspect.getsource(fn), fn.__name__

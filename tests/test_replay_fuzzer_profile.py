@@ -1,8 +1,11 @@
 import importlib.util
 import json
+import re
 import subprocess
 import types
 from pathlib import Path
+
+import pytest
 
 
 # The skill is vendored in this repo under skills/, where config.py points.
@@ -16,6 +19,14 @@ def _load_module(name):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _fake_hotspots(**kw):
+    return {"total_samples": 1000, "target_source_samples": 900,
+            "target_source_pct": 90.0, "outside_target_samples": 100,
+            "target_source_functions": 3, "source_root": "/src/demo",
+            "harness_files": [], "perf_script_seconds": 1.5, "host_seconds": 2.0,
+            "seconds_total": 3.5, "host_timings": {}}
 
 
 def test_replay_profile_command_perf_records_a_readonly_replay_loop(tmp_path):
@@ -73,6 +84,21 @@ def test_replay_profile_command_perf_records_a_readonly_replay_loop(tmp_path):
     assert "/artifacts/callgraph.txt" in script
     assert "/artifacts/children.txt" in script
     assert "chmod a+r /artifacts/perf.data /artifacts/fuzzer.log" in script
+    # Every sample's call chain, symbol-resolved in the SAME container run, for
+    # the hotspot table (no percent floor).
+    assert ("script -i /artifacts/perf.data --no-inline "
+            "-F comm,pid,period,ip,sym,symoff,dso,dsoff") in script
+    assert "| gzip -1 > /artifacts/perf_script.txt.gz" in script
+    # ... plus each sample's own IP (-G), both pipelines' exit codes, dsoff
+    # support and perf report's exact sample count, for the host to verify.
+    assert ("script -i /artifacts/perf.data --no-inline -G "
+            "-F comm,pid,period,ip,sym,symoff,dso,dsoff") in script
+    assert "| gzip -1 > /artifacts/perf_script_ip.txt.gz" in script
+    assert 'cg_rc="${PIPESTATUS[0]} ${PIPESTATUS[1]}"' in script
+    assert 'ip_rc="${PIPESTATUS[0]} ${PIPESTATUS[1]}"' in script
+    assert 'case "$ph" in *dsoff*)' in script and "dsoff=no" in script
+    assert "report -i /artifacts/perf.data --stats" in script
+    assert "> /artifacts/perf_script.status" in script
 
 
 def test_replay_profile_command_resolves_relative_paths_to_absolute():
@@ -122,6 +148,7 @@ def test_run_replay_profile_writes_reports_and_metadata(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    monkeypatch.setattr(profile, "build_hotspots", _fake_hotspots)
 
     args = types.SimpleNamespace(
         out_dir=tmp_path / "out",
@@ -167,6 +194,7 @@ def test_run_replay_profile_retries_once_on_transient_failure(tmp_path, monkeypa
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    monkeypatch.setattr(profile, "build_hotspots", _fake_hotspots)
     args = types.SimpleNamespace(
         out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=artifact_dir,
         fuzz_target="t", min_sample_seconds=60, loop_timeout=1800, seed=1337,
@@ -221,3 +249,118 @@ def test_run_replay_profile_rejects_empty_corpus(tmp_path):
         assert "empty" in str(exc)
     else:
         raise AssertionError("expected RuntimeError on empty corpus")
+
+
+def test_profile_has_no_target_dso_share_gate(tmp_path, monkeypatch):
+    """The 8% floor is gone: a profile whose flat.txt shows no target rows still
+    succeeds here. Whether perf sampled the target is the harness's call, made
+    from hotspots.json's target-source sample count."""
+    profile = _load_module("replay_fuzzer_profile")
+    assert not hasattr(profile, "MIN_TARGET_DSO_SHARE")
+    corpus = tmp_path / "fixed"
+    corpus.mkdir()
+    (corpus / "u0").write_text("a")
+    art = tmp_path / "a"
+
+    def fake_run(cmd, *, timeout=None):
+        art.mkdir(parents=True, exist_ok=True)
+        (art / "perf.data").write_bytes(b"PERF")
+        (art / "flat.txt").write_text("    75.00%  afl-showmap  afl-showmap  [.] main\n")
+        (art / "dso.txt").write_text("    75.00%  afl-showmap\n     2.00%  t\n")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(profile, "_run", fake_run)
+    monkeypatch.setattr(profile, "build_hotspots", _fake_hotspots)
+    args = types.SimpleNamespace(
+        out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=art,
+        fuzz_target="t", min_sample_seconds=60, loop_timeout=1800, seed=1337,
+        cpu=3, memory="4g", shm_size="2g")
+    assert profile.run_replay_profile(args) == 0
+    meta = json.loads((art / "metadata.json").read_text())
+    # Shares stay recorded, as information.
+    assert meta["target_dso_share_pct"] == 2.0
+    assert meta["hotspots"]["target_source_samples"] == 900
+
+
+def test_hotspot_table_failure_fails_the_profile_loudly(tmp_path, monkeypatch, capsys):
+    profile = _load_module("replay_fuzzer_profile")
+    corpus = tmp_path / "fixed"
+    corpus.mkdir()
+    (corpus / "u0").write_text("a")
+    art = tmp_path / "a"
+
+    def fake_run(cmd, *, timeout=None):
+        art.mkdir(parents=True, exist_ok=True)
+        (art / "perf.data").write_bytes(b"PERF")
+        (art / "flat.txt").write_text("    10.00%  t  t  [.] foo\n")
+        (art / "hotspots.json").write_text("{}")      # stale, must be removed
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(profile, "_run", fake_run)
+    # The real build: no perf_script.txt.gz was produced.
+    args = types.SimpleNamespace(
+        out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=art,
+        fuzz_target="t", min_sample_seconds=60, loop_timeout=1800, seed=1337,
+        cpu=3, memory="4g", shm_size="2g")
+    try:
+        profile.run_replay_profile(args)
+    except RuntimeError as exc:
+        assert "hotspots.json" in str(exc)
+    else:
+        raise AssertionError("a missing hotspot table must fail the profile")
+    assert "HOTSPOT TABLE FAILED" in capsys.readouterr().err
+    meta = json.loads((art / "metadata.json").read_text())
+    assert "perf script step never ran" in meta["hotspots_error"]
+    assert not (art / "hotspots.json").exists()
+
+
+@pytest.mark.parametrize("status,needle", [
+    ("dsoff=no\ncg_rc=na\nip_rc=na\nreport_samples=10\nperf=perf version 5.4\n",
+     "-F dsoff"),
+    ("dsoff=yes\ncg_rc=1 0\nip_rc=0 0\nreport_samples=10\n", "cg_rc"),
+    ("dsoff=yes\ncg_rc=0 0\nip_rc=0 141\nreport_samples=10\n", "ip_rc"),
+    ("dsoff=yes\ncg_rc=0 0\nip_rc=0 0\nreport_samples=\n", "sample count"),
+])
+def test_a_failed_or_unsupported_perf_script_is_refused(tmp_path, status, needle):
+    profile = _load_module("replay_fuzzer_profile")
+    p = tmp_path / "perf_script.status"
+    p.write_text(status)
+    with pytest.raises(profile.hotspot_table.HotspotError, match=re.escape(needle)):
+        profile.read_perf_script_status(p)
+
+
+def test_good_status_parses(tmp_path):
+    profile = _load_module("replay_fuzzer_profile")
+    p = tmp_path / "perf_script.status"
+    p.write_text("dsoff=yes\ncg_rc=0 0\nip_rc=0 0\nreport_samples=137144\n"
+                 "perf=perf version 6.8.12\nms=1949\n")
+    st = profile.read_perf_script_status(p)
+    assert st["report_samples"] == 137144 and st["ms"] == 1949
+
+
+def test_stale_reports_never_survive_into_a_new_attempt(tmp_path, monkeypatch):
+    """A retry or a resumed run must not pick up children.txt / hotspots.* from
+    an earlier attempt: they are removed before each attempt and after a failed
+    one."""
+    profile = _load_module("replay_fuzzer_profile")
+    corpus = tmp_path / "fixed"
+    corpus.mkdir()
+    (corpus / "u0").write_text("a")
+    art = tmp_path / "a"
+    art.mkdir()
+    for n in ("children.txt", "hotspots.json", "hotspots.txt", "perf_script.status"):
+        (art / n).write_text("stale")
+    seen = []
+
+    def fake_run(cmd, *, timeout=None):
+        seen.append(sorted(p.name for p in art.iterdir()))
+        return subprocess.CompletedProcess(cmd, 1, "", "perf died")
+
+    monkeypatch.setattr(profile, "_run", fake_run)
+    args = types.SimpleNamespace(
+        out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=art,
+        fuzz_target="t", min_sample_seconds=60, loop_timeout=1800, seed=1337,
+        cpu=3, memory="4g", shm_size="2g")
+    with pytest.raises(RuntimeError):
+        profile.run_replay_profile(args)
+    assert seen and all(not names for names in seen)

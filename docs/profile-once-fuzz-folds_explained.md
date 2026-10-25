@@ -54,6 +54,8 @@ The payoff of freezing everything: **what you profile is exactly what you measur
 3. **Build the fixed corpus once** (`build_corpus.py`) — filter out crashing/hanging seeds, optionally fuzz the baseline for a window to grow it, then freeze an immutable snapshot. *(In our selinux runs this is where the corpus cap took effect; grow-duration was 0, so it just crash-filtered and froze.)*
 4. **Profile the baseline once** (`replay_fuzzer_profile.py`) — `perf`-record the baseline replaying the frozen corpus → `flat.txt` (hot functions), `callgraph.txt`, `metadata.json`.
 5. **Rank the hotspots** (using `references/profile_guided_analysis.md`) and enrich with heuristic candidates.
+
+*Update, Oct 2026:* steps 3 and 4 are now done by the harness only, before the agent starts (`phase2_setup._prebuild_phase2_corpus_and_profile`); the agent never builds a corpus, fuzzes, or profiles, and a failed prebuild ends the round without an agent (`prebuild-failed`). The profile also produces `hotspots.txt`/`hotspots.json`, the ranked target-source table the agent now ranks from (`scripts/hotspot_table.py`).
 6. **Anchor the baseline time** (`replay_timing.py`) — record `baseline_median`; this is the number every fold must beat.
 7. **Iterate hotspots** — for each candidate: apply the fold → verify only source files changed → rebuild + smoke-test → **time it; keep only if faster than the previous best, else revert.** Never re-profile.
 8. **Stop** when the hotspot list is exhausted (or a safety cap), and report the cumulative speedup.
@@ -73,7 +75,7 @@ The step-by-step procedure above, plus required/optional inputs (env vars like `
 |---|---|
 | **`fuzz_fold_heuristics.md`** (232 ln) | the catalog of *which* rewrites are allowed, how to classify them, and when to refuse — see §6 |
 | **`profile_guided_analysis.md`** (354 ln) | how to turn raw `perf` output into a ranked, evidence-backed hotspot working set |
-| **`fallback_profiling.md`** (60 ln) | what to do if `perf` is unavailable: try `samply` → `callgrind` → static scan, and downgrade the confidence label |
+| ~~`fallback_profiling.md`~~ | removed Oct 2026: there is no agent-side profiling fall-back any more; a missing profile means `BLOCKED_LOW_CONFIDENCE` |
 
 ### `scripts/` — the tools (so the agent doesn't reinvent them)
 
@@ -119,4 +121,4 @@ When you asked to optimize selinux, the benchmark ran `codex exec "Use $profile-
 
 ---
 
-*Source: `~/.codex/skills/profile-once-fuzz-folds/` — `SKILL.md`, `references/{fuzz_fold_heuristics,profile_guided_analysis,fallback_profiling}.md`, `scripts/{build_corpus,replay_fuzzer_profile,replay_timing,real_fuzzer_profile,phase2_build_check,verify_source_only_changes}.py`, `agents/openai.yaml`.*
+*Source: `~/.codex/skills/profile-once-fuzz-folds/` — `SKILL.md`, `references/{fuzz_fold_heuristics,profile_guided_analysis,fallback_profiling}.md`, `scripts/{build_corpus,replay_fuzzer_profile,replay_timing,real_fuzzer_profile,phase2_build_check,verify_source_only_changes}.py`, `agents/openai.yaml`. (As of Oct 2026 the live copy is `skills/profile-once-fuzz-folds/` in this repo; `fallback_profiling.md` is gone and `scripts/hotspot_table.py` is new.)*

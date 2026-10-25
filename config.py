@@ -367,6 +367,19 @@ ONLINE_ROUND_MIN_LEAD_SECS = int(os.environ.get("ONLINE_ROUND_MIN_LEAD_SECS", "3
 # stretch of rejects does not predict the next round: the optimizer profiles a
 # corpus that is still growing, so a foldable hotspot can appear late.
 ONLINE_CONVERGENCE_K = int(os.environ.get("ONLINE_CONVERGENCE_K", "0"))
+# Stop ONE optimizer after this many consecutive prebuild-failed rounds at the
+# same deterministic stage (profile / hotspots / sanity / env / scripts): the
+# same binary and source layout give the same failure every round, so retrying
+# for 24 h only burns the profile core. 0 disables.
+ONLINE_PREBUILD_FAIL_STOP = int(os.environ.get("ONLINE_PREBUILD_FAIL_STOP", "3"))
+# Setup-time profile check, before any trial starts: profile the baseline on the
+# seed corpus for this many seconds and refuse the campaign only if the hotspot
+# table cannot be built or perf recorded nothing in the build's own DSOs. Fewer
+# than ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES target-source samples is a WARNING
+# only (a lone "hi" seed barely exercises the project). 0 seconds disables it.
+ONLINE_PREFLIGHT_PROFILE_SECS = int(os.environ.get("ONLINE_PREFLIGHT_PROFILE_SECS", "30"))
+ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES = int(
+    os.environ.get("ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES", "100"))
 # Cores pinned to the 20 fuzzing trials vs the disjoint pool reserved for the
 # optimizer's docker work, so optimization does not steal (and bias) trial cycles.
 ONLINE_TRIAL_CORES = os.environ.get("ONLINE_TRIAL_CORES", "4-23")

@@ -1364,6 +1364,17 @@ def _prebuild_env(tmp_path):
     }
 
 
+def _write_hotspots(profile_dir, target_samples, total=None):
+    """Stand in for the hotspots.json replay_fuzzer_profile.py writes."""
+    profile_dir = pathlib.Path(profile_dir)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    total = total if total is not None else max(target_samples, 1) * 2
+    (profile_dir / "hotspots.json").write_text(json.dumps({"totals": {
+        "samples": total,
+        "target_attributed": {"samples": target_samples},
+        "outside_target": {"samples": total - target_samples}}}))
+
+
 def _fake_scripts_dir(tmp_path, monkeypatch):
     sc = tmp_path / "scripts"
     sc.mkdir()
@@ -1391,31 +1402,33 @@ def test_prebuild_sets_flag_and_runs_both_scripts_on_success(monkeypatch, tmp_pa
     ran = []
     def fake_run(cmd, **kw):
         ran.append(cmd[1])
-        # Stand in for what replay_fuzzer_profile.py writes. Without a report
-        # naming the target the prebuild now refuses the round -- a profile with
-        # no target frames means the binary never ran (base-runner cannot load a
-        # libc++ target), and perf exits 0 having sampled ld.so instead.
+        # Stand in for what replay_fuzzer_profile.py writes. Without a
+        # hotspots.json carrying enough target-source samples the prebuild
+        # refuses the round -- a profile with no target samples means perf never
+        # sampled the binary (it died before main, or perf missed the children).
         if "replay_fuzzer_profile.py" in cmd[1]:
             prof = pathlib.Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
-            (prof / "profile_once").mkdir(parents=True, exist_ok=True)
-            (prof / "profile_once" / "flat.txt").write_text(
-                "# comment\n    15.70%  demo_fuzz  demo_fuzzer  [.] xmlParseDoc\n")
+            _write_hotspots(prof / "profile_once", 90000, 130000)
         return _proc(returncode=0)
     monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
 
     ok = phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer")
     assert ok is True
     assert env.get("FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS") == "1"
+    assert phase2_setup.PREBUILD_FAILURE_KEY not in env
     assert any("build_corpus.py" in c for c in ran)
     assert any("replay_fuzzer_profile.py" in c for c in ran)
+    status = json.loads((tmp_path / "profiles" / "prebuild_status.json").read_text())
+    assert status["ok"] is True
 
 
-def test_prebuild_refuses_a_profile_with_no_target_symbols(monkeypatch, tmp_path):
+def test_prebuild_refuses_a_profile_with_no_target_samples(monkeypatch, tmp_path):
     """The silent failure this guards: base-runner cannot load a target linked
     against the pinned LLVM's libc++, so it dies at exit 127 before main -- but
     `perf record` still exits 0 and writes a profile of the dynamic loader and
-    the timing loop. Everything reports success and the optimizer gets a hotspot
-    list with no target frames in it."""
+    the timing loop. Everything reports success and the optimizer would get a
+    hotspot list with no target frames in it. The target-source sample floor
+    catches it, and the round is a prebuild failure (no agent)."""
     _fake_scripts_dir(tmp_path, monkeypatch)
     monkeypatch.setattr(phase2_setup.config, "PHASE2_MUTATION_REQUIRED", False)
     env = _prebuild_env(tmp_path)
@@ -1428,10 +1441,14 @@ def test_prebuild_refuses_a_profile_with_no_target_symbols(monkeypatch, tmp_path
             (prof / "profile_once").mkdir(parents=True, exist_ok=True)
             (prof / "profile_once" / "flat.txt").write_text(
                 "# comment\n    13.60%  date  ld-2.31.so  [.] _dl_rtld_di_serinfo\n")
+            _write_hotspots(prof / "profile_once", 3, 120000)
         return _proc(returncode=0)
     monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
 
     assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is False
+    assert "FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS" not in env
+    assert env[phase2_setup.PREBUILD_FAILURE_KEY].startswith("sanity:")
+    assert "only 3 samples" in env[phase2_setup.PREBUILD_FAILURE_KEY]
 
 
 def test_prebuild_profiles_in_the_prework_image_not_base_runner(monkeypatch, tmp_path):
@@ -1449,9 +1466,7 @@ def test_prebuild_profiles_in_the_prework_image_not_base_runner(monkeypatch, tmp
         envs.append((kw.get("env") or {}).get("FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"))
         if "replay_fuzzer_profile.py" in cmd[1]:
             prof = pathlib.Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
-            (prof / "profile_once").mkdir(parents=True, exist_ok=True)
-            (prof / "profile_once" / "flat.txt").write_text(
-                "    9.9%  demo  demo_fuzzer  [.] parse\n")
+            _write_hotspots(prof / "profile_once", 5000)
         return _proc(returncode=0)
     monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
 
@@ -1459,13 +1474,14 @@ def test_prebuild_profiles_in_the_prework_image_not_base_runner(monkeypatch, tmp
     assert envs and all(e == "bench-aflpp/demo-arvo-1" for e in envs)
 
 
-def test_prebuild_idempotent_when_corpus_already_present(monkeypatch, tmp_path):
+def test_prebuild_idempotent_when_corpus_and_profile_already_present(monkeypatch, tmp_path):
     _fake_scripts_dir(tmp_path, monkeypatch)
     env = _prebuild_env(tmp_path)
     monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: True)
+    _write_hotspots(tmp_path / "profiles" / "profile_once", 5000)
 
     def boom(*a, **k):
-        raise AssertionError("must not run scripts when the corpus is already frozen")
+        raise AssertionError("must not run scripts when corpus + profile are present")
     monkeypatch.setattr(phase2_setup.subprocess, "run", boom)
 
     ok = phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer")
@@ -1473,7 +1489,25 @@ def test_prebuild_idempotent_when_corpus_already_present(monkeypatch, tmp_path):
     assert env.get("FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS") == "1"
 
 
-def test_prebuild_falls_back_when_build_fails(monkeypatch, tmp_path):
+def test_prebuild_reprofiles_a_resumed_corpus_without_a_usable_profile(monkeypatch, tmp_path):
+    """A frozen corpus alone used to count as 'prebuilt' -- with no profile at
+    all. The profile (hotspots.json + sample floor) must be present too."""
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    env = _prebuild_env(tmp_path)
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: True)
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd[1])
+        _write_hotspots(tmp_path / "profiles" / "profile_once", 5000)
+        return _proc(returncode=0)
+    monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
+
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is True
+    assert ran and all("replay_fuzzer_profile.py" in c for c in ran)
+
+
+def test_prebuild_fails_without_fallback_when_build_fails(monkeypatch, tmp_path):
     _fake_scripts_dir(tmp_path, monkeypatch)
     monkeypatch.setattr(phase2_setup.config, "PHASE2_MUTATION_REQUIRED", False)
     env = _prebuild_env(tmp_path)
@@ -1483,8 +1517,121 @@ def test_prebuild_falls_back_when_build_fails(monkeypatch, tmp_path):
 
     ok = phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer")
     assert ok is False
-    # flag NOT set -> the agent will build the corpus itself (graceful fallback)
+    # No flag, and a recorded reason: the caller ends the round without an agent.
     assert "FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS" not in env
+    assert env[phase2_setup.PREBUILD_FAILURE_KEY].startswith("corpus:")
+    status = json.loads((tmp_path / "profiles" / "prebuild_status.json").read_text())
+    assert status == {**status, "ok": False, "stage": "corpus"}
+
+
+def test_prebuild_fails_when_the_profile_script_fails(monkeypatch, tmp_path):
+    """e.g. the hotspot table could not be built: replay_fuzzer_profile.py exits
+    non-zero, which is a prebuild failure (stage profile)."""
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    env = _prebuild_env(tmp_path)
+    env["FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS"] = "1"
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "m0").write_bytes(b"x")
+    monkeypatch.setattr(phase2_setup, "_augment_corpus_with_mutations",
+                        lambda e, t: str(live))
+    monkeypatch.setattr(phase2_setup, "_freeze_corpus_snapshot",
+                        lambda src, dst: (1, None))
+    seq = iter([False])
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: next(seq, True))
+    monkeypatch.setattr(phase2_setup.subprocess, "run", lambda cmd, **kw: _proc(
+        returncode=1, stderr="HOTSPOT TABLE FAILED: no addr2line"))
+
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is False
+    reason = env[phase2_setup.PREBUILD_FAILURE_KEY]
+    assert reason.startswith("hotspots:") and "HOTSPOT TABLE FAILED" in reason
+    assert env[phase2_setup.PREBUILD_STAGE_KEY] == "hotspots"
+    assert "hotspots" in phase2_setup.DETERMINISTIC_PREBUILD_STAGES
+
+
+def test_a_crash_in_mutation_augmentation_is_a_prebuild_failure(monkeypatch, tmp_path):
+    """Only MutationAugmentationError (its own outcome) may escape the prebuild.
+    An OSError there used to escape and kill the trial's optimizer for good."""
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    env = _prebuild_env(tmp_path)
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: False)
+
+    def boom(e, t):
+        raise OSError("No space left on device")
+    monkeypatch.setattr(phase2_setup, "_augment_corpus_with_mutations", boom)
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is False
+    assert env[phase2_setup.PREBUILD_STAGE_KEY] == "mutations"
+    assert "No space left" in env[phase2_setup.PREBUILD_FAILURE_KEY]
+
+    def required(e, t):
+        raise phase2_setup.MutationAugmentationError("no image")
+    monkeypatch.setattr(phase2_setup, "_augment_corpus_with_mutations", required)
+    with pytest.raises(phase2_setup.MutationAugmentationError):
+        phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer")
+
+
+def test_prebuild_timeout_and_exception_are_failures(monkeypatch, tmp_path):
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    env = _prebuild_env(tmp_path)
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: True)
+
+    def timeout(cmd, **kw):
+        raise TimeoutExpired(cmd, 5)
+    monkeypatch.setattr(phase2_setup.subprocess, "run", timeout)
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is False
+    assert env[phase2_setup.PREBUILD_FAILURE_KEY].startswith("timeout:")
+
+    def boom(cmd, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(phase2_setup.subprocess, "run", boom)
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is False
+    assert env[phase2_setup.PREBUILD_FAILURE_KEY].startswith("exception:")
+
+
+def test_prebuild_passes_source_root_and_harness_to_the_profiler(monkeypatch, tmp_path):
+    _fake_scripts_dir(tmp_path, monkeypatch)
+    env = _prebuild_env(tmp_path)
+    env["PHASE2_PROFILE_SOURCE_ROOT"] = "/src/demo"
+    env["PHASE2_PROFILE_SOURCE_TREE"] = "/host/tree/demo"
+    env["PHASE2_PROFILE_HARNESS"] = "/src/demo/fuzz/demo_fuzzer.c"
+    monkeypatch.setattr(phase2_setup, "_dir_has_files", lambda d: True)
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        _write_hotspots(tmp_path / "profiles" / "profile_once", 5000)
+        return _proc(returncode=0)
+    monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
+
+    assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is True
+    cmd = cmds[0]
+    assert cmd[cmd.index("--source-root") + 1] == "/src/demo"
+    assert cmd[cmd.index("--source-tree") + 1] == "/host/tree/demo"
+    assert cmd[cmd.index("--harness") + 1] == "/src/demo/fuzz/demo_fuzzer.c"
+
+
+def test_profile_sanity_floor_is_an_absolute_sample_count(monkeypatch, tmp_path):
+    prof = tmp_path / "profile_once"
+    monkeypatch.setattr(phase2_setup, "PHASE2_MIN_TARGET_SOURCE_SAMPLES", 500)
+    _write_hotspots(prof, 499, 120000)
+    ok, why = phase2_setup._check_profile_target_samples(prof, "demo_fuzzer")
+    assert ok is False and "only 499 samples" in why
+    _write_hotspots(prof, 500, 120000)
+    assert phase2_setup._check_profile_target_samples(prof, "demo_fuzzer")[0] is True
+    # No percentage gate: a 4% target-DSO share with plenty of target samples
+    # (e.g. a large afl-showmap share) is still a valid profile.
+    (prof / "dso.txt").write_text("    4.00%  demo_fuzzer\n    96.00%  afl-showmap\n")
+    _write_hotspots(prof, 5000, 125000)
+    assert phase2_setup._check_profile_target_samples(prof, "demo_fuzzer")[0] is True
+    # Missing table = unusable profile (it is the agent's primary input).
+    (prof / "hotspots.json").unlink()
+    ok, why = phase2_setup._check_profile_target_samples(prof, "demo_fuzzer")
+    assert ok is False and "hotspots.json" in why
+
+
+def test_removed_target_dso_share_gate_is_gone():
+    assert not hasattr(phase2_setup, "PHASE2_MIN_TARGET_DSO_SHARE")
+    assert not hasattr(phase2_setup, "_profile_has_target_symbols")
 
 
 def test_prebuild_hard_fails_when_mutation_required_and_no_image(monkeypatch, tmp_path):
@@ -1504,11 +1651,81 @@ def test_prebuild_hard_fails_when_mutation_required_and_no_image(monkeypatch, tm
     assert "FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS" not in env
 
 
-def test_prebuild_noop_without_corpus_env(tmp_path):
+def test_prebuild_fails_without_corpus_env(tmp_path):
     env = {"FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR": str(tmp_path)}  # missing the rest
     ok = phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer")
     assert ok is False
     assert "FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS" not in env
+    assert env[phase2_setup.PREBUILD_FAILURE_KEY].startswith("env:")
+
+
+def _optimize_and_build_harness(monkeypatch, tmp_path):
+    """Run optimize_and_build up to the agent call, with the agent replaced by a
+    tripwire. Returns (src_dir, diff_dir, agent_calls)."""
+    src = tmp_path / "src" / "demo"
+    (src / "fuzz").mkdir(parents=True)
+    (src / "fuzz" / "demo_fuzzer.c").write_text(
+        "int LLVMFuzzerTestOneInput(const char *d, long n) { return 0; }\n")
+    agent_calls = []
+    monkeypatch.setattr(phase2_setup, "_invoke_agent_capture",
+                        lambda *a, **k: agent_calls.append(1) or {
+                            "ok": True, "timed_out": False, "stdout": "", "stderr": ""})
+    monkeypatch.setattr(phase2_setup, "_stage_project_fuzz_support", lambda *a: None)
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_SANDBOX", False)
+    return src, tmp_path / "diff", agent_calls
+
+
+def test_optimize_and_build_never_starts_the_agent_when_prebuild_fails(monkeypatch, tmp_path):
+    src, diff, agent_calls = _optimize_and_build_harness(monkeypatch, tmp_path)
+    seen = {}
+
+    def failing_prebuild(env, target):
+        seen.update(env)
+        env[phase2_setup.PREBUILD_FAILURE_KEY] = "sanity: only 3 samples"
+        env[phase2_setup.PREBUILD_STAGE_KEY] = "sanity"
+        return False
+    monkeypatch.setattr(phase2_setup, "_prebuild_phase2_corpus_and_profile",
+                        failing_prebuild)
+    env = _prebuild_env(tmp_path)
+    with pytest.raises(phase2_setup.PrebuildFailedError, match="only 3 samples") as ei:
+        phase2_setup.optimize_and_build(
+            str(src), "demo_fuzzer", str(diff), project="demo",
+            build_fn=lambda: (True, ""), codex_extra_env=env,
+            use_wrapper_validation=True)
+    assert ei.value.stage == "sanity"
+    assert agent_calls == [], "no agent session may start without the prebuilt profile"
+    assert "No optimizer agent" in (diff / "prebuild_failed.txt").read_text()
+    # The profiler is told where the project and its harness live in the image.
+    assert seen["PHASE2_PROFILE_SOURCE_ROOT"] == "/src/demo"
+    assert seen["PHASE2_PROFILE_HARNESS"] == "/src/demo/fuzz/demo_fuzzer.c"
+    assert seen["PHASE2_PROFILE_SOURCE_TREE"] == str(src.resolve())
+
+
+@pytest.mark.parametrize("empty_env", [None, {}])
+def test_optimize_and_build_refuses_to_run_without_a_profiling_env(
+        monkeypatch, tmp_path, empty_env):
+    """An empty codex_extra_env used to skip the prebuild and start the agent
+    with no corpus or profile ("build it yourself")."""
+    src, diff, agent_calls = _optimize_and_build_harness(monkeypatch, tmp_path)
+    with pytest.raises(phase2_setup.PrebuildFailedError):
+        phase2_setup.optimize_and_build(
+            str(src), "demo_fuzzer", str(diff), project="demo",
+            build_fn=lambda: (True, ""), codex_extra_env=empty_env)
+    assert agent_calls == []
+
+
+def test_prompts_never_tell_the_agent_to_build_a_corpus_or_profile():
+    for wrapper in (True, False):
+        prompt = phase2_setup._make_apply_fuzz_source_folds_prompt(
+            "fuzz/target.cc", use_wrapper_validation=wrapper, backend="claude")
+        retry = phase2_setup._make_retry_prompt(
+            "demo_fuzzer", "error", use_wrapper_validation=wrapper, backend="claude")
+        for text in (prompt, retry):
+            assert "Build the fixed corpus" not in text
+            assert "fuzz the baseline" not in text
+            assert "corpus build" not in text
+            assert "hotspots.txt" in text
+        assert "Never build or grow a corpus, run the fuzzer, or profile" in prompt
 
 
 def test_setup_cve_arvo_records_bug_removal_and_keeps_the_fold(monkeypatch, tmp_path):
@@ -1688,12 +1905,33 @@ def test_prebuild_live_mutations_skip_build_corpus_and_profile(monkeypatch, tmp_
     def fake_run(cmd, **kw):
         ran.append((cmd[1], kw.get("env", {}).get("FUZZ_SOURCE_FOLDS_RUNNER_IMAGE")))
         prof = pathlib.Path(env["FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR"])
-        (prof / "profile_once").mkdir(parents=True, exist_ok=True)
-        (prof / "profile_once" / "flat.txt").write_text(
-            "    15.70%  demo_fuzz  demo_fuzzer  [.] xmlParseDoc\n")
+        _write_hotspots(prof / "profile_once", 90000)
         return _proc(returncode=0)
     monkeypatch.setattr(phase2_setup.subprocess, "run", fake_run)
 
     assert phase2_setup._prebuild_phase2_corpus_and_profile(env, "demo_fuzzer") is True
     assert not any("build_corpus.py" in c for c, _ in ran)
     assert [img for c, img in ran if "replay_fuzzer_profile.py" in c] == ["prework:img"]
+
+
+@pytest.mark.parametrize("stderr,stage", [
+    ("HOTSPOT TABLE FAILED: no addr2line", "hotspots"),
+    ("RuntimeError: perf replay-profile failed after 2 attempts (last docker rc=125)",
+     "profile-run"),
+    ("subprocess.TimeoutExpired: Command '['docker', 'run'...]' timed out", "timeout"),
+    ("RuntimeError: replay-profile corpus is empty: /x", "corpus"),
+    ("Traceback ... KeyError: 'x'", "profile"),
+])
+def test_profile_failures_are_staged_transient_or_deterministic(
+        monkeypatch, tmp_path, stderr, stage):
+    """Docker/perf trouble and timeouts are transient and never stop an
+    optimizer; a table that cannot be built or a broken script is deterministic."""
+    monkeypatch.setattr(phase2_setup.subprocess, "run",
+                        lambda cmd, **kw: _proc(returncode=1, stderr=stderr))
+    ok, got, why = phase2_setup.run_baseline_profile(
+        replay_profile="r.py", out_dir="o", corpus_dir="c", profile_dir=str(tmp_path),
+        fuzz_target="t", min_sample_seconds=1, cpu=0, env={})
+    assert ok is False and got == stage
+    transient = stage in phase2_setup.TRANSIENT_PREBUILD_STAGES
+    assert transient != (stage in phase2_setup.DETERMINISTIC_PREBUILD_STAGES)
+    assert transient == (stage in ("profile-run", "timeout", "corpus"))

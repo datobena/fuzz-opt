@@ -526,9 +526,10 @@ def _overwrite_binary(shared_bin_path, new_bin_path, *, extra_files=()) -> None:
 
     ``extra_files`` (FuzzBench only) names further files, relative to the bin
     dir, that belong to the same build and must be swapped with it: the CmpLog
-    binary and afl++.dict (lib/afl_launch.fuzzbench_out_set). Without them the
-    relaunched trial would pair the new target with the baseline's cmplog
-    binary and dictionary forever.
+    binary and afl++.dict (lib/afl_launch.fuzzbench_out_set) and the build's
+    runtime shared libraries (afl_launch.fuzzbench_runtime_libs). Without them
+    the relaunched trial would pair the new target with the baseline's cmplog
+    binary, dictionary and libraries forever.
 
     The set is swapped "atomically enough": every file is first copied to a
     temporary name next to its destination -- the step that can fail (disk,
@@ -587,6 +588,17 @@ def _swap_extra_files(entry, fuzz_target) -> tuple:
     if not afl_launch.is_fuzzbench(entry):
         return ()
     return tuple(afl_launch.fuzzbench_out_set(fuzz_target)[1:])
+
+
+def _swap_runtime_libs(entry, new_bin_dir, live_bin_dir) -> tuple:
+    """FuzzBench only: the build's runtime shared libraries under /out (main and
+    cmplog), from the new build AND the live set -- so a library the new build
+    no longer has is removed rather than left behind. Swapped together with the
+    target (see afl_launch.fuzzbench_runtime_libs); nothing for ARVO."""
+    if not afl_launch.is_fuzzbench(entry):
+        return ()
+    return tuple(sorted(set(afl_launch.fuzzbench_runtime_libs(str(new_bin_dir)))
+                        | set(afl_launch.fuzzbench_runtime_libs(str(live_bin_dir)))))
 
 
 def _overwrite(shared_bin_path, new_bin_path, extra_files) -> None:
@@ -665,8 +677,11 @@ def hot_swap_one(ctx: RoundContext, state: OnlineState, new_bin_dir):
     relaunched.clear()
     bin_path = os.path.join(str(trial.bin_dir_override), ctx.fuzz_target)
     new_bin = os.path.join(str(new_bin_dir), ctx.fuzz_target)
-    _stop_one_and_overwrite(trial, bin_path, new_bin,
-                            extra_files=_swap_extra_files(ctx.entry, ctx.fuzz_target))
+    _stop_one_and_overwrite(
+        trial, bin_path, new_bin,
+        extra_files=(_swap_extra_files(ctx.entry, ctx.fuzz_target)
+                     + _swap_runtime_libs(ctx.entry, new_bin_dir,
+                                          trial.bin_dir_override)))
     row = {"iter": ctx.iter_n, "ts": time.time(), "trial_id": trial.trial_id,
            "state_at_swap": _fuzzer_state(ctx.experiment_id, trial)}
     # The two clocks, for the plots' run_time -> wall conversion
@@ -833,6 +848,12 @@ def run_optimizer_loop(*, run_round_fn, hot_swap_fn, convergence_k: int,
         # campaign and the online arm silently becomes a second baseline.
         accepted, new_bin, *rest = result
         measured = rest[0] if rest else True
+        # Optional 4th element: this optimizer cannot make progress at all
+        # (e.g. its prebuild fails the same deterministic way every round).
+        if len(rest) > 1 and rest[1]:
+            logger.error("optimizer: round %d asked to stop this optimizer; no "
+                         "further rounds (its trial keeps fuzzing)", iter_n)
+            break
         if accepted:
             hot_swap_fn(new_bin)
             consecutive = 0
@@ -1033,6 +1054,10 @@ class RoundContext:
     # this optimizer runs. None until the first successful harvest.
     fixed_mutations: str | None = None
     fixed_mutation_count: int = 0
+    # Consecutive prebuild-failed rounds and the stage they failed at; reset by
+    # any round whose prebuild succeeds (see _end_prebuild_failed_round).
+    prebuild_fail_stage: str = ""
+    prebuild_fail_streak: int = 0
 
 
 @dataclass
@@ -1251,6 +1276,78 @@ def _round_produced_evidence(diff_dir: str, build_ok: bool) -> bool:
     if "[ok] False" in text and "NO source changes" not in text:
         return False                       # session failed for some other reason
     return True                            # ran to completion, kept nothing
+
+
+# Outcome of a round whose harness prebuild (corpus freeze, baseline profile,
+# hotspot table, target-source sample floor) failed. No agent runs for it.
+PREBUILD_FAILED_OUTCOME = "prebuild-failed"
+
+
+def _end_prebuild_failed_round(ctx: RoundContext, iter_n: int, *, diff_dir: str,
+                               opt_bin_dir: str, reason: str, round_corpus,
+                               carried_memory, stage: str = "") -> tuple:
+    """Close a round whose prebuild failed: everything a measured round records
+    (provenance, ledger, cpu cost, setup metadata, round line), with outcome
+    ``prebuild-failed``. Returns the loop's (accepted, bin, measured, stop)
+    tuple: not accepted, and NOT evidence -- the agent never ran, so the round
+    says nothing about the target and must not count toward convergence. ``stop``
+    is set once the prebuild has failed ONLINE_PREBUILD_FAIL_STOP rounds running
+    at the same deterministic stage: it would fail the same way all campaign."""
+    outcome = PREBUILD_FAILED_OUTCOME
+    if stage and stage == ctx.prebuild_fail_stage:
+        ctx.prebuild_fail_streak += 1
+    else:
+        ctx.prebuild_fail_stage, ctx.prebuild_fail_streak = stage, 1
+    limit = int(getattr(config, "ONLINE_PREBUILD_FAIL_STOP", 3) or 0)
+    stop = bool(limit and stage in phase2_setup.DETERMINISTIC_PREBUILD_STAGES
+                and ctx.prebuild_fail_streak >= limit)
+    iter_dir = os.path.dirname(diff_dir)
+    # Nothing was edited (no agent ran); reverting keeps the invariant that a
+    # rejected round always leaves the tree at prev_tag.
+    ctx.previous_best_bin = apply_round_outcome(
+        False, source_tree=ctx.source_tree, iter_n=iter_n, opt_bin_dir=opt_bin_dir,
+        previous_best_bin=ctx.previous_best_bin, prev_tag=ctx.prev_tag)
+    bug_survived = "no-poc" if not ctx.poc_path else "unchecked"
+    provenance.write_json(os.path.join(iter_dir, "round_provenance.json"), {
+        "iter": iter_n,
+        "outcome": outcome,
+        "speedup": None,
+        "applied": False,
+        "built": False,
+        "poc_reproduces": bug_survived,
+        "prebuild_failure": reason,
+        "prebuild_stage": stage,
+        "prebuild_fail_streak": ctx.prebuild_fail_streak,
+        "optimizer_stopped": stop,
+        "agent_started": False,
+        "attribution": None,
+        "gate": {"baseline": None, "optimized": None,
+                 "corpus_file_count": None, "partial": None},
+        "optimizer": phase2_setup.optimizer_provenance(),
+        "agent_memory_carried": carried_memory,
+        "corpus": round_corpus,
+        "crash_check": None,
+        "ccache": None,
+    })
+    logger.error(
+        "online round %d: outcome=%s speedup=None applied=False built=False "
+        "poc_reproduces=%s -- no optimizer agent was started: %s",
+        iter_n, outcome, bug_survived, reason)
+    _record_ledger(ctx, iter_n, diff_dir, outcome, None)
+    _write_cpu_cost_summary(ctx)
+    phase2_setup._save_setup_metadata(
+        ctx.entry, iter_dir, ctx.experiment_id, False, poc_path=ctx.poc_path,
+        baseline_ok=True, optimized_ok=False,
+        failure={"stage": "profile_prebuild", "reason": reason}, replay=None)
+    if stop:
+        logger.error(
+            "online round %d: the prebuild failed at stage %r for %d rounds in a "
+            "row -- deterministic, it will not recover. STOPPING this optimizer%s; "
+            "its trial keeps fuzzing on the current binary. Last reason: %s",
+            iter_n, stage, ctx.prebuild_fail_streak,
+            (f" (trial_{ctx.trial.trial_id:02d})" if ctx.trial is not None else ""),
+            reason)
+    return (False, None, False, stop)
 
 
 def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
@@ -1513,6 +1610,17 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             previous_best_bin=ctx.previous_best_bin, prev_tag=ctx.prev_tag)
         _record_ledger(ctx, iter_n, diff_dir, "augmentation-failed", None)
         return (False, None, False)      # nothing was measured
+    except phase2_setup.PrebuildFailedError as exc:
+        # The harness could not freeze the corpus or profile the baseline (or the
+        # profile failed its sample-count sanity check). No agent ran -- it has no
+        # fall-back that builds a corpus or profiles -- so nothing was measured:
+        # an infrastructure failure, never counted toward convergence.
+        return _end_prebuild_failed_round(
+            ctx, iter_n, diff_dir=diff_dir, opt_bin_dir=opt_bin_dir,
+            reason=str(exc), round_corpus=round_corpus,
+            carried_memory=carried_memory, stage=getattr(exc, "stage", ""))
+    # The prebuild got this round to an agent: any prebuild-failure streak ends.
+    ctx.prebuild_fail_stage, ctx.prebuild_fail_streak = "", 0
 
     # refresh the parsed profile (used to record attempt ranks + next round's re-open)
     ctx.last_profile = _parse_profile_ranks(os.path.join(diff_dir, "profiles", "profile_once"))
@@ -1769,7 +1877,9 @@ def hot_swap(ctx: RoundContext, state: OnlineState, new_bin_dir):
         new_bin = os.path.join(str(new_bin_dir), ctx.fuzz_target)
         _stop_all_and_overwrite(
             running, shared_bin, new_bin,
-            extra_files=_swap_extra_files(ctx.entry, ctx.fuzz_target))
+            extra_files=(_swap_extra_files(ctx.entry, ctx.fuzz_target)
+                         + _swap_runtime_libs(ctx.entry, new_bin_dir,
+                                              ctx.optimized_bin_dir)))
         # Snapshot each trial's fuzzing state at the swap. Without this the
         # effect of a restart can only be inferred from end-of-run totals -- the
         # assimp collapse (corpus depth 49 -> 20) took three refuted hypotheses
@@ -2400,6 +2510,84 @@ def _measure_noise_floor(*, ctx_entry, source_root, fuzz_target, online_dir,
             shutil.rmtree(d, ignore_errors=True)
 
 
+def _preflight_profile(*, entry: dict, baseline_bin_dir: str, experiment_dir: str,
+                       project_src_dir: str, fuzz_target: str, online_dir: str,
+                       profile_cpu: int) -> tuple[bool, str]:
+    """Profile the baseline on the seed corpus and build its hotspot table, as a
+    round would (phase2_setup.run_baseline_profile), before any trial starts.
+
+    Fails ONLY on what would break every round: the hotspot table cannot be
+    built (source-root mismatch, symbolizer failure, perf without dsoff, a
+    truncated or mismatched dump), the profiler could not run, or perf recorded
+    no sample at all in the build's own binary/libraries. A LOW target-source
+    count is a warning, never a refusal: seeds can be one tiny "hi" input that
+    exercises next to no project code (zlib's uncompress("hi") is ~1 us), and
+    the rounds profile real mutations instead. Written to
+    <online_dir>/preflight_profile/. 0 seconds disables the check.
+    """
+    secs = int(getattr(config, "ONLINE_PREFLIGHT_PROFILE_SECS", 30) or 0)
+    if secs <= 0:
+        return True, "disabled"
+    corpus = os.path.join(experiment_dir, "seed_corpus", "merged")
+    if not os.path.isdir(corpus) or not any(
+            p.is_file() for p in Path(corpus).rglob("*")):
+        return False, f"no seed corpus at {corpus} to profile"
+    script = Path(getattr(config, "PHASE2_SKILL_SCRIPTS_DIR", "")) / "replay_fuzzer_profile.py"
+    if not script.is_file():
+        return False, f"profiler script missing: {script}"
+    prof_dir = os.path.join(online_dir, "preflight_profile", "profile_once")
+    env = phase2_setup.profile_layout_env(project_src_dir, fuzz_target)
+    proc_env = dict(os.environ)
+    proc_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = prework_image_for(entry)
+    warn_below = int(getattr(config, "ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES", 100))
+    ok, stage, why = False, "", ""
+    with cpu_ledger.timed("preflight_profile", cores=1) as _info:
+        # A transient perf/docker failure gets one more try; anything else is
+        # final at once.
+        for attempt in (1, 2):
+            try:
+                ok, stage, why = phase2_setup.run_baseline_profile(
+                    replay_profile=script, out_dir=baseline_bin_dir, corpus_dir=corpus,
+                    profile_dir=prof_dir, fuzz_target=fuzz_target,
+                    min_sample_seconds=secs, cpu=profile_cpu, env=env,
+                    proc_env=proc_env, min_target_samples=0)
+            except subprocess.TimeoutExpired as e:
+                ok, stage, why = False, "timeout", str(e)
+            except Exception as e:  # noqa: BLE001 - a crash here is a failed check
+                ok, stage, why = False, "exception", repr(e)
+            if ok or stage not in phase2_setup.TRANSIENT_PREBUILD_STAGES:
+                break
+        _info["ok"] = ok
+    top, target_n, build_n = [], None, None
+    if ok:
+        try:
+            hs = json.loads((Path(prof_dir) / "hotspots.json").read_text())
+            target_n = int(hs["totals"]["target_attributed"]["samples"])
+            build_n = int(hs["totals"]["build_dso_samples"])
+            top = [f"{r['function']} {r['caused_pct']:.2f}%" for r in hs["functions"][:5]]
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            ok, stage, why = False, "hotspots", f"hotspots.json unreadable: {e}"
+    if ok and not build_n:
+        ok, stage, why = False, "sanity", (
+            f"perf recorded no sample at all in the build's own binary or libraries "
+            f"({fuzz_target}): it is not sampling the target processes")
+    if ok:
+        if target_n < warn_below:
+            logger.warning(
+                "online: setup profile check: only %d samples attributed to %s's own "
+                "source functions on the seeds (%d in the build's DSOs; warn below "
+                "%d). Not refusing: seeds can barely exercise the project; the "
+                "rounds profile real mutations.", target_n, fuzz_target, build_n,
+                warn_below)
+        logger.info("online: setup profile check passed (%s); top rows: %s", why,
+                    "; ".join(top) or "-")
+    provenance.write_json(os.path.join(online_dir, "preflight_profile.json"), {
+        "ok": ok, "stage": stage, "reason": why, "seconds": secs,
+        "target_source_samples": target_n, "build_dso_samples": build_n,
+        "warn_below": warn_below, "corpus": corpus, "layout": env, "top_rows": top})
+    return ok, f"{stage}: {why}"
+
+
 def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> bool:
     """Top-level online-optimization run for ONE target (LOCAL backend).
 
@@ -2542,6 +2730,22 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
                                baseline_bin_dir=baseline_bin_dir,
                                fuzz_target=fuzz_target, poc_path=poc_path,
                                profile_cpu=profile_cpu, setup_cpus=setup_cpus):
+        return False
+
+    # 1c'. Setup-time profile check, before any trial launches: profile the
+    # baseline on the seeds and build the hotspot table exactly the way every
+    # round will. A profiler that cannot see the project's code -- code in a
+    # shared library it misses, a source root that does not match the build, a
+    # perf that cannot sample the target -- otherwise surfaces as 24 h of
+    # prebuild-failed rounds and an online arm that is a second baseline.
+    ok, why = _preflight_profile(
+        entry=entry, baseline_bin_dir=baseline_bin_dir, experiment_dir=experiment_dir,
+        project_src_dir=project_src_dir, fuzz_target=fuzz_target,
+        online_dir=online_dir, profile_cpu=profile_cpu)
+    if not ok:
+        logger.error("online: setup profile check FAILED for %s: %s -- refusing to "
+                     "start a campaign whose optimizer rounds could not run",
+                     entry["cve"], why)
         return False
 
     # Build-to-build noise floor, measured once here on UNMODIFIED source so the

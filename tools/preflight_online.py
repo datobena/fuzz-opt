@@ -13,9 +13,11 @@ reporting where it breaks:
   6. aflbuild -- the unmodified source rebuilds under the pinned AFL++ toolchain,
                  AND the PoC still reproduces afterwards (that is the binary the
                  campaign actually measures, not the historical one)
-  7. smoke    -- afl-fuzz actually runs: exec rate, corpus growth, crash volume
+  7. profile  -- run_online's setup profile check: the baseline profiles on the
+                 seeds and its hotspot table builds (phase3_online._preflight_profile)
+  8. smoke    -- afl-fuzz actually runs: exec rate, corpus growth, crash volume
 
-Stage 7 is not redundant with 6. A target can build and reproduce its PoC and still
+Stage 8 is not redundant with 6. A target can build and reproduce its PoC and still
 be unusable: c-blosc2 was observed producing 756 crashes in 10 minutes, which floods
 the crash dir, and (with a userspace core_pattern) once left 36 apport processes
 holding ~8000% CPU against 39 afl-fuzz processes at 188%.
@@ -190,6 +192,16 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
                 setup_cpus=build_cpus or cpu)
             if not stage("aflbuild", built, secs=round(time.time() - t)):
                 return res
+
+        # run_online's setup profile check, the same function: a target that
+        # passes here must not then be refused by run_online.
+        t = time.time()
+        p_ok, p_why = phase3_online._preflight_profile(
+            entry=entry, baseline_bin_dir=bin_dir, experiment_dir=exp_dir,
+            project_src_dir=project_src_dir, fuzz_target=fuzz_target,
+            online_dir=online_dir, profile_cpu=cpu)
+        if not stage("profile", p_ok, reason=p_why, secs=round(time.time() - t)):
+            return res
 
         s = smoke(entry, exp_dir, fuzz_target, cpu, smoke_secs)
         stage("smoke", s.pop("ok"), **s)

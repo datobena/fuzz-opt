@@ -1,6 +1,6 @@
 ---
 name: profile-once-fuzz-folds
-description: Use when optimizing fuzz-target-reachable project source for throughput with a single up-front profile and a fixed corpus instead of repeated re-profiling. Build the corpus once, profile the baseline once on a deterministic replay of that fixed corpus, then iterate the ranked hotspots keeping only folds that beat the previous best replay time. The highest-value folds are algorithmic and data-structure rewrites tuned to the tiny inputs fuzzing actually feeds. For OSS-Fuzz throughput work where edits stay source-only and harnesses, shared fuzz support code, build scripts, Dockerfiles, and project metadata are off-limits, including wrapper-provided extracted historical trees validated through external build and smoke commands.
+description: Use when optimizing fuzz-target-reachable project source for throughput with a single up-front profile and a fixed corpus instead of repeated re-profiling. The harness freezes the corpus and profiles the baseline once on a deterministic replay of it (hotspots.txt); iterate those ranked hotspots keeping only folds that beat the previous best replay time. The highest-value folds are algorithmic and data-structure rewrites tuned to the tiny inputs fuzzing actually feeds. For OSS-Fuzz throughput work where edits stay source-only and harnesses, shared fuzz support code, build scripts, Dockerfiles, and project metadata are off-limits, including wrapper-provided extracted historical trees validated through external build and smoke commands.
 ---
 
 # Profile Once, Fuzz Folds
@@ -10,13 +10,15 @@ description: Use when optimizing fuzz-target-reachable project source for throug
 Make an OSS-Fuzz target's project source execute faster — more executions per second — without
 changing what the code computes on any input.
 
-The method is deliberately one-shot:
+The method is deliberately one-shot. The first two steps are done by the harness before you start;
+you never do them yourself:
 
-1. Grow a corpus once by fuzzing the baseline binary for a fixed window, then **freeze** it.
-2. Profile the baseline **once**, by `perf`-recording it *replaying* that frozen corpus.
-3. Walk that single ranked hotspot list. For each candidate, apply a source fold, rebuild, and keep
-   it only if a deterministic replay of the same frozen corpus is measurably faster than the best
-   time so far. Otherwise revert.
+1. (harness) A fixed corpus of the fuzzer's own inputs is **frozen**.
+2. (harness) The baseline is profiled **once**, by `perf`-recording it *replaying* that frozen
+   corpus, and ranked into `hotspots.txt`.
+3. (you) Walk that single ranked hotspot list. For each candidate, apply a source fold, rebuild, and
+   keep it only if a deterministic replay of the same frozen corpus is measurably faster than the
+   best time so far. Otherwise revert.
 
 Everything is measured on the same frozen input set, so **what you profiled is exactly what you
 measure**: the hotspot list and the keep/revert gate can never disagree, and every number is
@@ -123,8 +125,8 @@ exactly the tiny inputs the fuzzer spends all of its time on. The highest-yield 
   fixed-size buffer that spills to the heap above a threshold, with identical bytes handed back.
 - **Multi-allocation layouts** collapsed into one, when the bytes observed downstream are identical.
 
-`malloc`/`free`/`memset`/`calloc` and init/teardown symbols sitting high in `flat.txt` are the
-signature of this class. See `references/fuzz_fold_heuristics.md` Part 2 and Part 3 §1.
+A high `alloc%` column in `hotspots.txt` — or `malloc`/`free`/`memset`/`calloc` and init/teardown
+symbols sitting high in `flat.txt` — is the signature of this class. See `references/fuzz_fold_heuristics.md` Part 2 and Part 3 §1.
 
 ### The one guard you must keep
 
@@ -158,8 +160,10 @@ profile, or names this skill:
    the user explicitly expands scope.
 5. Apply only Category-1, Category-2, and Category-3 folds, per the Behavior-Preservation Contract.
    Never introduce obvious UB, non-termination, deadlock, or invalid lifetimes.
-6. Build the fixed corpus once, profile the baseline once on a replay of it, then iterate the ranked
-   hotspots from that single profile.
+6. Use the harness-built fixed corpus and its one profile (`hotspots.txt`), then iterate the ranked
+   hotspots from that single profile. Never build or grow a corpus, fuzz to collect inputs, or
+   profile anything yourself; if the corpus or profile is missing, output `BLOCKED_LOW_CONFIDENCE`
+   and stop.
 7. Rebuild and smoke-run after every accepted pass, and keep a fold only if it beats the previous
    best replay time.
 8. **Never re-profile.** Stop when the ranked hotspot list is exhausted or the safety cap is hit,
@@ -194,32 +198,26 @@ Optional environment:
 
 - `FUZZ_TARGET`
 - `FUZZ_SOURCE_FOLDS_MODE`
-- `FUZZ_SOURCE_FOLDS_CORPUS_DIR` — merged seed corpus (input to the grow window)
 - `FUZZ_SOURCE_FOLDS_OUT_DIR` — `/out` of the build under test (the optimized build)
-- `FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR` — `/out` of the baseline build; used to grow the corpus, take
-  the one profile, and anchor the baseline replay time
-- `FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR` — where the grown-and-frozen fixed corpus snapshot is
-  written/read
-- `FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS` — when `1`, the wrapper already grew+froze the fixed corpus
-  and profiled the baseline; skip steps 3 and 4 and read those artifacts instead of running
-  `build_corpus.py` / `replay_fuzzer_profile.py`
-- `FUZZ_SOURCE_FOLDS_CORPUS_BUILD_DURATION` — seconds to fuzz the baseline to grow the corpus
-  (default `3600`)
-- `FUZZ_SOURCE_FOLDS_REPLAY_PROFILE_SECONDS` — minimum perf-sample wall-clock for the replay profile
-  loop (default `120`)
+- `FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR` — `/out` of the baseline build the harness profiled; anchors
+  the baseline replay time
+- `FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR` — the harness-frozen fixed corpus (read it, never write it)
+- `FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR` — holds `profile_once/`, the harness-built profile
+- `FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS` — `1` when the harness prebuilt the corpus and profile. They
+  are always prebuilt; nothing in this skill builds them
 - `FUZZ_SOURCE_FOLDS_REPLAY_REPEATS` — replay repeats for the timing gate (default `3`)
-- `FUZZ_SOURCE_FOLDS_CORPUS_REPLAY_BUDGET` — time budget for corpus sizing (default `1800`); passed
-  to `build_corpus.py --replay-budget-secs`. The corpus is capped to the largest N whose full
-  replay-gate measurement fits this budget, so a slow target stays tractable; `0` keeps the full
-  corpus
-- `FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES` — absolute cap on corpus files, applied *after* time-sizing
-  (min of the two)
 - `FUZZ_SOURCE_FOLDS_PROFILE_CPU`
-- `FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR`
 - `FUZZ_SOURCE_FOLDS_BUILD_TIMEOUT`, `FUZZ_SOURCE_FOLDS_SMOKE_RUNS`, `FUZZ_SOURCE_FOLDS_SMOKE_SEED`,
   `FUZZ_SOURCE_FOLDS_RUN_TIMEOUT`
 - `FUZZ_SOURCE_FOLDS_VALIDATION_MODE`, `FUZZ_SOURCE_FOLDS_VALIDATE_COMMAND`,
   `FUZZ_SOURCE_FOLDS_BUILD_COMMAND`, `FUZZ_SOURCE_FOLDS_SMOKE_COMMAND`, `FUZZ_SOURCE_FOLDS_WORK_DIR`
+
+Harness-only — they configure how the harness builds the corpus and profile before you start.
+You may see them; never act on them (no corpus building, no fuzzing, no profiling):
+
+- `FUZZ_SOURCE_FOLDS_CORPUS_DIR`, `FUZZ_SOURCE_FOLDS_CORPUS_BUILD_DURATION`,
+  `FUZZ_SOURCE_FOLDS_CORPUS_REPLAY_BUDGET`, `FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES`,
+  `FUZZ_SOURCE_FOLDS_REPLAY_PROFILE_SECONDS`
 
 Accepted but ignored — this skill profiles once on a fixed corpus, so it never deepens a corpus or
 refreshes a profile:
@@ -232,11 +230,7 @@ Defaults:
 
 - mode: contract-compliant — Categories 1, 2, and 3 only. `FUZZ_SOURCE_FOLDS_MODE=aggressive` (or a caller asking for aggressive mode) raises ambition,
   never risk tolerance; see "Aggressive mode means ambitious, never unsafe" above
-- corpus build duration: `3600`
-- replay profile minimum sample seconds: `120`
 - replay repeats: `3`
-- corpus replay budget: `1800` (`0` = keep the full corpus); probe sample: `100`; sizing margin:
-  `0.7`; N floor: `200`
 - stop rule: ranked hotspot list exhausted, or the safety cap (max cycles / wall-clock) is hit
 
 If `source_dir` or `harness_path` is missing, ask once. If wrapper-provided validation commands are
@@ -250,13 +244,18 @@ Read these before the first cycle:
 - `references/fuzz_fold_heuristics.md` — the contract in full, the provenance audit, candidate
   classes, rewrite patterns, coverage suppression, refusal rules
 - `references/profile_guided_analysis.md` — how to rank the single profile into a working set
-- `references/fallback_profiling.md` — what to do when `perf` is unavailable
+
+Harness-only scripts. They ship here because the harness runs them before you start. **Never run
+them yourself**, and never reproduce what they do by other means (no corpus building, no fuzzing,
+no profiling):
+
+- `scripts/build_corpus.py` — grows and freezes a fixed corpus by fuzzing
+- `scripts/replay_fuzzer_profile.py` and `scripts/hotspot_table.py` — the one baseline profile and
+  its `hotspots.txt` / `hotspots.json`
 
 Reuse these bundled helper scripts rather than recreating their logic (paths are relative to this
 skill directory):
 
-- `scripts/build_corpus.py --out-dir <baseline-out> --corpus-dir <merged-corpus> --evolving-corpus-dir <grow-workdir> --snapshot-dir <fixed-corpus> --artifact-dir <artifacts> --fuzz-target <target> --duration <seconds> --cpu <cpu> [--replay-budget-secs <s>] [--filter-ncpu <n>] [--probe-sample <k>] [--replay-repeats <n>] [--sizing-margin <f>] [--n-min <n>] [--max-corpus-files <n>]`
-- `scripts/replay_fuzzer_profile.py --out-dir <baseline-out> --corpus-dir <fixed-corpus> --artifact-dir <profile-dir> --fuzz-target <target> --min-sample-seconds <seconds> --cpu <cpu>`
 - `scripts/replay_timing.py --out-dir <optimized-out> --baseline-out-dir <baseline-out> --corpus-dir <fixed-corpus> --fuzz-target <target> --repeats <n> [--cpu <cpu>] [--min-partial-units <k>]`
   - Prefers a clean full-corpus replay. If a *deterministic* corpus crasher (one the per-unit filter
     cannot catch — it only crashes deep in the batch, not in isolation) aborts every pass, it
@@ -269,7 +268,8 @@ skill directory):
 
 When wrapper-provided validation commands are absent, also reuse:
 
-- `scripts/phase2_build_check.py <source_dir> [--run-fuzzer <target>]`
+- `scripts/phase2_build_check.py <source_dir>` — build check only. Never pass `--run-fuzzer`: you
+  never run the fuzzer; the harness runs the authoritative smoke after you finish
 
 ## Workflow
 
@@ -279,7 +279,8 @@ When wrapper-provided validation commands are absent, also reuse:
 2. Infer and export `OSS_FUZZ_DIR` / `OSS_FUZZ_PROJECT` if unset (see Required Inputs); stop if
    ambiguous.
 3. Derive `fuzz_target` from `FUZZ_TARGET` if set, otherwise from the harness filename stem.
-4. Treat missing `docker` or `python3` as blockers.
+4. Treat missing `python3` as a blocker, and missing `docker` only when no wrapper-provided
+   validation commands are set.
 5. Resolve the **baseline binary** as `FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR` if set, otherwise
    `FUZZ_SOURCE_FOLDS_OUT_DIR`. The baseline binary is already built by the wrapper — never rebuild
    it for the baseline.
@@ -288,7 +289,6 @@ When wrapper-provided validation commands are absent, also reuse:
 7. If only `FUZZ_SOURCE_FOLDS_BUILD_COMMAND` and `FUZZ_SOURCE_FOLDS_SMOKE_COMMAND` are set, they are
    still sequential gates: never run them in parallel, because the smoke command depends on build
    artifacts from the build command.
-8. Prefer `perf`; if it is unavailable or blocked, follow `references/fallback_profiling.md`.
 
 ### 2. Protect existing work
 
@@ -306,75 +306,61 @@ If `source_dir/.git` does not exist:
 2. Commit a baseline snapshot with a local throwaway identity.
 3. Restore only the current cycle's changes from that local repo when needed.
 
-### 3. Build the fixed corpus (once)
+### 3. Use the fixed corpus (harness-built)
 
-**Prebuilt fast path:** if `FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS` is set, the wrapper has already grown
-and frozen the fixed corpus into `FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR` (and profiled the baseline —
-see step 4). **Do not run `scripts/build_corpus.py`.** Confirm the snapshot dir is non-empty and
-proceed; if it is empty, output `BLOCKED_LOW_CONFIDENCE` and stop. (The wrapper does this heavy step
-itself because a large-corpus crash-filter/replay exceeds the agent's per-tool timeout.)
+The harness has already frozen the fixed corpus into `FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR` before
+this session started. **Never build, grow, filter, or re-freeze a corpus, and never fuzz to
+collect inputs** — not with `scripts/build_corpus.py`, not by running the target in fuzzing mode,
+not any other way. (The smoke run inside the step-7 validation gate is not fuzzing.)
 
-Otherwise, build it yourself:
-
-1. Run `scripts/build_corpus.py` with the **baseline binary**, the merged seed corpus
-   (`FUZZ_SOURCE_FOLDS_CORPUS_DIR`), a grow working directory, and
-   `--snapshot-dir "$FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR"`. Use `--duration` from
-   `FUZZ_SOURCE_FOLDS_CORPUS_BUILD_DURATION` (default `3600`) and `--cpu` from
-   `FUZZ_SOURCE_FOLDS_PROFILE_CPU`. Also pass
-   `--replay-budget-secs "$FUZZ_SOURCE_FOLDS_CORPUS_REPLAY_BUDGET"` (default `1800`); if
-   `FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES` is set, pass it as `--max-corpus-files`.
-2. **Time-budget sizing happens before the crash filter.** The script probes per-unit replay time on
-   a small random sample of the merged corpus, then caps the corpus to the largest N whose full
-   replay-gate measurement (`2·repeats` passes) fits `--replay-budget-secs`. A slow target thus gets
-   a small representative corpus that completes the filter/profile/gate within budget; a fast target
-   keeps its full corpus. The chosen N and the measured per-unit time land in
-   `corpus_build_metadata.json → sizing` (flag `full`/`capped`/`too_slow`/`no_estimate`).
-3. It then seeds the grow corpus from the sized merged seeds (crashing/hanging inputs filtered out,
-   in parallel, `detect_leaks=0`, matching the replay), fuzzes the baseline read-write for the
-   duration, re-caps to N after growing, then freezes a flat immutable snapshot of the **grown**
-   corpus into `FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR`.
-4. **That snapshot is the fixed corpus for every later step.** If it is empty, output
+1. Confirm the snapshot dir exists and is non-empty. If it is missing or empty, output
    `BLOCKED_LOW_CONFIDENCE` and stop.
+2. **That snapshot is the fixed corpus for every later step.** The replay-timing gate replays
+   exactly it.
 
-### 4. Profile the baseline once (on replay)
+### 4. Read the baseline profile (harness-built, once)
 
-**Prebuilt fast path:** if `FUZZ_SOURCE_FOLDS_PREBUILT_CORPUS` is set, the wrapper has already
-profiled the baseline into `<FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR>/profile_once/` (`children.txt`
-— inclusive time, the primary ranking input — plus `flat.txt`, `callgraph.txt`, `metadata.json`).
-**Do not run `scripts/replay_fuzzer_profile.py`.** Read those
-artifacts as the single profile, persist a `current_profile.json` pointing at them, and go to step 5.
-If they are missing or empty, output `BLOCKED_LOW_CONFIDENCE` and stop.
+The harness has already profiled the baseline once, replaying the fixed corpus, into
+`<FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR>/profile_once/`:
 
-Otherwise, profile it yourself:
+- `hotspots.txt` — the **primary ranking input**: every target-source function, ranked by the cost
+  it causes (its own code plus the sanitizer, std-library/third-party, allocator, libc, and kernel
+  work it triggers).
+  `hotspots.json` holds the same table, every function with at least one sample.
+- `children.txt` (inclusive call trees), `callgraph.txt` (callee view), `flat.txt` (self time),
+  `dso.txt` (share by binary), `metadata.json` — for drilling into a candidate.
 
-1. Run `scripts/replay_fuzzer_profile.py` with the **baseline binary** and
-   `--corpus-dir "$FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR"`, writing into
-   `<FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR>/profile_once/`. Use `--min-sample-seconds` from
-   `FUZZ_SOURCE_FOLDS_REPLAY_PROFILE_SECONDS` (default `120`) and `--cpu` from
-   `FUZZ_SOURCE_FOLDS_PROFILE_CPU`.
-2. This perf-records the baseline replaying the fixed corpus read-only, looped to the sample floor,
-   and emits `children.txt` (inclusive), `flat.txt`, `callgraph.txt`, and `metadata.json`. The script picks the replay form from
-   the binary rather than assuming one: `afl-showmap -C` through the forkserver for an AFL build,
-   libFuzzer's `-runs=0` otherwise. Do not hand-run either form — a libFuzzer invocation against an
-   AFL binary exits before executing anything and yields a profile of process startup with no target
-   symbols in it.
-3. Persist the profile and write a small `current_profile.json` recording the artifact dir plus the
-   top hotspot files and symbols. **This is the only profile.**
-4. If the profiler produces no completed report, output `BLOCKED_LOW_CONFIDENCE` and stop.
+**Never profile anything yourself**: do not run `scripts/replay_fuzzer_profile.py`, `perf`, or any
+other profiler, and never re-profile. If `hotspots.txt` is missing or empty, output
+`BLOCKED_LOW_CONFIDENCE` and stop. (The other reports are for drilling down; work without any that
+are missing.)
+
+Persist a small `current_profile.json` recording the artifact dir plus the top `hotspots.txt` rows.
+**This is the only profile.**
 
 ### 5. Build the ranked hotspot working set (once)
 
-1. Follow `references/profile_guided_analysis.md` to rank hotspots by **inclusive time** from
-   `children.txt` (self-time `flat.txt` is the tiebreaker; `callgraph.txt` for caller chains). This
-   credits each target function with the allocator/libc/kernel cost it drives, so allocation-heavy
-   source — not the uneditable `__asan`/libc leaves — rises to the top of the list.
-2. Enrich the ranked list with heuristic candidates from `references/fuzz_fold_heuristics.md`, even
+1. Follow `references/profile_guided_analysis.md`. Take candidates from the **top rows of
+   `hotspots.txt`**, in rank order. Each row is one target-source function. Its `caused%` is the
+   share of all samples that function causes directly — own code plus the sanitizer/coverage,
+   std-library/third-party, allocator, libc and kernel work it triggers, but not the work of other
+   target functions it calls — so it is the most a fold confined to that function can save. Its
+   `ed` column says whether the function's file is one you can edit (see the reference for `n`
+   rows: generated files and generator inputs).
+2. A candidate — one row, or a group of rows that one change fixes together — needs a `caused%`
+   (summed, for a group) at least as large as the keep bar of the acceptance gate in step 7 (about
+   1%). A smaller row enters only as part of such a group.
+3. Use `children.txt` and `callgraph.txt` only to drill into a chosen candidate's call tree — which
+   sanitizer, allocator, or libc leaf its cost sits in, and who calls it — and `flat.txt` for
+   self-time detail. Do not rank from them: their top rows are wrappers (`LLVMFuzzerTestOneInput`,
+   the top-level parse entry) and runtime code nobody can edit.
+4. Enrich the ranked list with heuristic candidates from `references/fuzz_fold_heuristics.md`, even
    when the cost is split across helpers or only weakly visible in the profiler.
-3. Skip candidates that require harness edits, changes to shared harness support code, or
+5. Skip candidates that require harness edits, changes to shared harness support code, or
    non-source-file changes unless the user explicitly expands scope.
-4. Record each candidate with: exact source location, hotspot evidence or heuristic trigger,
-   provenance audit and assigned Category, rewrite pattern, expected impact, coverage risk, and risk
-   label (`Safe`, `Safe*`, `Aggressive`).
+6. Record each candidate with: exact source location, its `hotspots.txt` row (rank, `caused%`, the
+   dominant column), heuristic trigger if any, provenance audit and assigned Category, rewrite
+   pattern, expected impact, coverage risk, and risk label (`Safe`, `Safe*`, `Aggressive`).
 
 ### 6. Anchor the baseline replay time (once)
 
@@ -395,9 +381,9 @@ For each ranked candidate, in order:
    edits and rerun verification.
 3. Validate build and smoke run through the selected gate: `FUZZ_SOURCE_FOLDS_VALIDATE_COMMAND` if
    set; otherwise `FUZZ_SOURCE_FOLDS_BUILD_COMMAND` then, only after it succeeds,
-   `FUZZ_SOURCE_FOLDS_SMOKE_COMMAND`; otherwise
-   `phase2_build_check.py <source_dir> --run-fuzzer <fuzz_target>`. If build or smoke fails, repair
-   or revert this cycle's edits and continue to the next hotspot.
+   `FUZZ_SOURCE_FOLDS_SMOKE_COMMAND`; otherwise `phase2_build_check.py <source_dir>` (build only,
+   no `--run-fuzzer`). If build or smoke fails, repair or revert this cycle's edits and continue to
+   the next hotspot.
 4. **Acceptance gate (vs previous best).** First confirm the fold passed the provenance audit and is
    Category 1, 2, or 3 — the timing gate runs only on contract-compliant folds and cannot rescue one
    that fails the audit. Then run `replay_timing.py` on the fixed corpus for the optimized `/out`
@@ -410,8 +396,9 @@ For each ranked candidate, in order:
 
 ### 8. Stop
 
-Stop when the ranked hotspot list is exhausted, or when a conservative safety cap is hit (max cycles
-≈ list length plus small slack, or a wall-clock budget).
+Stop when the ranked hotspot list is exhausted — no untried row or group left whose `caused%`
+clears the keep bar — or when a conservative safety cap is hit (max cycles ≈ list length plus small
+slack, or a wall-clock budget).
 
 ## Candidate Guardrails
 
@@ -448,17 +435,16 @@ Finish only when all are true:
 1. the ranked hotspot list is exhausted or the safety cap was reached
 2. source-only verification succeeds on the accumulated final tree
 3. the selected final build succeeds
-4. the requested harness smoke run succeeds through the selected validation gate
+4. the wrapper's smoke run, when one is provided, succeeds through the selected validation gate
 5. every skipped, narrowed, or reverted candidate is documented with the reason
 
 ## Reporting
 
 Report:
 
-1. **corpus build** — duration used, seed-corpus file count in vs fixed-corpus file count out, the
-   time-budget sizing result (measured per-unit replay time, chosen N, flag
-   `full`/`capped`/`too_slow`/`no_estimate`), and whether `perf` or a fallback profiler was used
-2. **the single profile** — hotspot count and top hotspot files/symbols
+1. **fixed corpus** — file count and median/maximum unit size of the harness-built corpus
+2. **the single profile** — the `hotspots.txt` header split (target-attributed vs outside target)
+   and the top rows you worked from
 3. **headline cumulative speedup** — `baseline_median`, `final_optimized_median`, and
    `cumulative_speedup = baseline_median / final_optimized_median` as a multiplier and a percent
 4. **per-cycle table** — hotspot, kept or reverted, `previous_best → this_median`, and the delta
@@ -470,5 +456,6 @@ Report:
 9. final harness smoke-run status
 10. whether the stop condition was list-exhausted or cap-reached
 
-If the corpus build produced an empty corpus, or the replay profiler produced no usable report,
-output `BLOCKED_LOW_CONFIDENCE` instead of claiming success.
+If the harness-built fixed corpus is missing or empty, or the profile's `hotspots.txt` is missing
+or empty, output `BLOCKED_LOW_CONFIDENCE` instead of claiming success.
+Never build a corpus or profile to make up for it.
