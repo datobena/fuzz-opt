@@ -97,7 +97,7 @@ def _campaign(tmp_path, rows, finishes, starts):
     return exp
 
 
-def test_windows_put_setup_at_zero_and_rounds_at_their_finish(tmp_path, capsys):
+def test_windows_put_rounds_at_their_finish_and_leave_setup_uncharged(tmp_path, capsys):
     rows = [
         _row("ccache_template_noise_build", T0 - 900, T0 - 10, 2000.0),
         _row("rebuild", T0 + 1000, T0 + 1100, 100.0, trial_id=0, it=1),
@@ -109,11 +109,12 @@ def test_windows_put_setup_at_zero_and_rounds_at_their_finish(tmp_path, capsys):
                     starts={0: T0, 1: T0 + 5})
     # Trial 0 stopped 20 s for a swap at run_time 1300, before its round 2.
     w = P.per_trial_charge_windows(exp, {0: [(1300.0, 20.0)]})
-    assert w[0] == [(0.0, 1000.0), (1200.0, 100.0), (5180.0, 300.0)]
-    assert w[1] == [(0.0, 1000.0), (2195.0, 200.0)]
-    assert sum(c for v in w.values() for _, c in v) == pytest.approx(2600.0)
+    assert w[0] == [(1200.0, 100.0), (5180.0, 300.0)]
+    assert w[1] == [(2195.0, 200.0)]
+    assert sum(c for v in w.values() for _, c in v) == pytest.approx(600.0)
     out = capsys.readouterr().out
-    assert "charged at run_time 0" in out and "diff +0.000" in out
+    # Setup is still attributed, so the ledger conserves with it counted aside.
+    assert "NOT charged" in out and "diff +0.000" in out
 
 
 # --- old ledgers: broker rows placed by each session's broker_audit.log -------
@@ -219,8 +220,9 @@ def test_caption_names_setup_only_when_there_was_some(tmp_path):
     online.mkdir(parents=True)
     (online / "cpu_cost.json").write_text(json.dumps({"optimizers": 10}))
     assert "setup" not in P._charge_caption(tmp_path, True, setup_core_s=0.0)
-    assert "+ setup / 10 at t=0" in P._charge_caption(
-        tmp_path, True, setup_core_s=3600.0, optimizers=10)
+    cap = P._charge_caption(tmp_path, True, setup_core_s=3600.0, optimizers=10)
+    assert "setup (1.0 core-h, before trials started) not charged" in cap
+    assert "at t=0" not in cap
 
 
 def test_a_session_with_two_brokers_is_never_excluded_by_the_one_request_rule():

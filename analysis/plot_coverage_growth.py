@@ -493,7 +493,7 @@ def per_trial_charge_windows(exp_dir: Path, stops_by_trial: dict,
                              report: bool = True,
                              info: dict | None = None) -> dict:
     """{trial: [(run_time, charge_s)]} -- each trial's OWN optimizer CPU, charged
-    at the run_time each round FINISHED, plus its share of setup at run_time 0.
+    at the run_time each round FINISHED. Setup is NOT charged (see below).
 
     ``stops_by_trial``: {trial: [(run_time, duration)]}, the windows that turn
     that trial's run_time into wall-clock (axis_windows, or the logged swap
@@ -526,6 +526,13 @@ def per_trial_charge_windows(exp_dir: Path, stops_by_trial: dict,
     plotted point either way -- it is counted only in the caption's total. What
     clamping buys is that the printout names it, per trial, instead of it
     vanishing silently.
+
+    Setup -- the ccache template builds and the preflight profile, which run
+    before any trial starts -- is attributed (so the ledger still conserves) but
+    NOT charged: both arms start fuzzing at the same instant after it, and the
+    charge is meant to cover the rounds and what each round imposes. Charging
+    it at run_time 0 (Oct 20-25 2026) delayed every online curve by setup / n
+    (12 min on harfbuzz, 20 min on PROJ) for work done before the clock started.
 
     ``info``, when given, is filled with the attribution summary the caption
     needs ("setup_core_s", "optimizers").
@@ -563,14 +570,6 @@ def per_trial_charge_windows(exp_dir: Path, stops_by_trial: dict,
         down = stops_by_trial.get(t, [])
         start = starts.get(t, t0)
         wins = []
-        if setup_each > 0:
-            # SETUP IS CHARGED AT run_time 0. The ccache template builds ran
-            # before any trial started; that CPU was spent up front, so every
-            # optimizer's 1/n share delays its trial from the very beginning.
-            # This shifts the whole online curve right by setup/n (php r2:
-            # 46 core-h / 10 = 4.6 h) -- correct, and printed below so it is
-            # never a surprise on the figure.
-            wins.append((0.0, setup_each))
         for k, cs in att["charges"][t].items():
             elapsed = att["positions"][t][k] - start
             if elapsed > HOURS * 3600:
@@ -598,11 +597,10 @@ def per_trial_charge_windows(exp_dir: Path, stops_by_trial: dict,
         if att["setup_core_s"]:
             print(f"    setup {', '.join(att['setup_stages'])}: "
                   f"{att['setup_core_s']/h:.2f} core-h before any trial started "
-                  f"-> {setup_each/h:.2f} h per optimizer, charged at run_time 0")
+                  f"({setup_each/h:.2f} h per optimizer): NOT charged")
         for t in sorted(out):
             tot = sum(c for _, c in out[t])
-            print(f"    trial_{t:02d}: {tot/h:6.2f} h charged "
-                  f"(rounds {(tot - setup_each)/h:.2f} + setup {setup_each/h:.2f})"
+            print(f"    trial_{t:02d}: {tot/h:6.2f} h charged (rounds)"
                   + (f"; {late[t][0]/h:.2f} h finished past {HOURS:.0f} h "
                      f"(up to +{late[t][1]/h:.2f} h), clamped to the end"
                      if t in late else ""))
@@ -611,8 +609,10 @@ def per_trial_charge_windows(exp_dir: Path, stops_by_trial: dict,
                   f"charges finished past the {HOURS:.0f} h budget on "
                   f"{len(late)} trial(s): clamped to run_time at {HOURS:.0f} h")
         charged = sum(c for w in out.values() for _, c in w)
-        print(f"    total charged {charged/h:.3f} core-h vs ledger counted "
-              f"{att['ledger_core_s']/h:.3f} core-h (diff {(charged - att['ledger_core_s']):+.3f} "
+        accounted = charged + att["setup_core_s"]
+        print(f"    total charged {charged/h:.3f} core-h + setup not charged "
+              f"{att['setup_core_s']/h:.3f} vs ledger counted "
+              f"{att['ledger_core_s']/h:.3f} core-h (diff {(accounted - att['ledger_core_s']):+.3f} "
               f"core-s); mean {charged/n/h:.2f} h/trial")
     return out
 
@@ -1197,9 +1197,9 @@ def _charge_caption(exp_dir: Path, per_trial: bool = False,
     quantity 10x the one actually plotted -- the exact failure this caption was
     written to prevent, pointed the other way.
 
-    The setup term is named only when there was setup to charge
-    (``setup_core_s``, per_trial_charge_windows' info): campaigns without
-    ccache template builds otherwise read as if a t=0 shift had been applied.
+    Setup (``setup_core_s``, per_trial_charge_windows' info) is not charged;
+    the caption says so only when there was setup, so a campaign without ccache
+    template builds does not mention it at all.
     """
     for f in [exp_dir / "optimized" / "online" / "cpu_cost.json"]:
         if not f.exists():
@@ -1213,10 +1213,11 @@ def _charge_caption(exp_dir: Path, per_trial: bool = False,
             # Kept short: the suptitle is one line, and bbox_inches="tight"
             # widens the whole figure to fit it (13in -> 16in on the first try).
             # Each trial is charged its OWN optimizer's ledger rows, at the
-            # finish of the round they belong to, plus setup / n at t=0
-            # (per_trial_charge_windows); the n trials sum to the ledger total.
+            # finish of the round they belong to (per_trial_charge_windows);
+            # the n trials plus the uncharged setup sum to the ledger total.
             return ("as each trial's own optimizer CPU (ledger, per round)"
-                    + (f" + setup / {n} at t=0" if setup_core_s > 0 else ""))
+                    + (f"; setup ({setup_core_s / 3600:.1f} core-h, before trials "
+                       f"started) not charged" if setup_core_s > 0 else ""))
         model = d.get("charge_model")
         tc = d.get("trial_cores") or 9
         if model == "per-trial-optimizer":
