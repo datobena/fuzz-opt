@@ -257,6 +257,28 @@ def test_shared_libraries_of_the_build_produce_rows(tmp_path, fake_binary):
     assert "in libproj-shared.so" in txt
 
 
+def test_build_image_libraries_the_profiler_supplies_are_libc_class(tmp_path, monkeypatch,
+                                                                    fake_binary):
+    """target_libs.py mounts the build image's own libraries (glib) at
+    /opt/target-libs: outside /out, so never build DSOs or rows, never
+    symbolized, and their cost lands in the libc class like any system library."""
+    glib = "/opt/target-libs/libglib-2.0.so.0"
+    assert not ht.is_build_dso(glib, "demo")
+    assert ht.Classifier.classify_dso_frame(glib) == ht.CLS_LIBC
+    seen = []
+    monkeypatch.setattr(ht, "resolve_sources",
+                        lambda binary, addrs, **k: seen.append(binary) or _fake_resolve(binary, addrs))
+    text = (sample([lib("g_hash_table_lookup", dso=glib), fr("parse_doc")], 30)
+            + sample([lib("g_slice_alloc", dso=glib)], 10)
+            + sample([fr("next_char")], 60))
+    res = build(tmp_path, text)
+    pd = row(res, "parse_doc")
+    assert pd["libc_pct"] == 30.0 and pd["caused_pct"] == 30.0
+    assert not any(r["function"].startswith("g_") for r in res["functions"])
+    assert res["totals"]["outside_target"]["by_class"]["libc"]["pct"] == 10.0
+    assert glib not in res["build_dsos"] and not any(glib in b for b in seen)
+
+
 def test_a_build_library_missing_on_the_host_is_not_project_code(tmp_path, fake_binary):
     gone = "/out/lib/libgone.so"
     line = f"\t{0x9010:16x} gone_fn+0x10 ({gone}+0x9010)\n"

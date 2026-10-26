@@ -21,7 +21,9 @@ Every frame is put in one class:
   thirdparty  any other code in those DSOs: std-library templates (libc++ /
               libstdc++ headers), statically linked third-party libraries, code
               without debug info
-  libc        libc and every other shared library outside /out
+  libc        libc and every other shared library outside /out, including the
+              build image's own libraries the profiler supplies under
+              /opt/target-libs (target_libs.py; e.g. glib)
   kernel      kernel and kernel modules
   other       everything else: afl-showmap, the AFL / libFuzzer driver, the
               harness, shells

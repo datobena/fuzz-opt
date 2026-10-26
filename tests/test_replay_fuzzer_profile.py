@@ -29,6 +29,12 @@ def _fake_hotspots(**kw):
             "seconds_total": 3.5, "host_timings": {}}
 
 
+def _no_target_libs(profile, monkeypatch):
+    """These tests fake the perf container only; the shared-library probe that
+    runs before it has its own tests (test_profile_target_libs.py)."""
+    monkeypatch.setattr(profile, "prepare_target_libs", lambda **kw: None)
+
+
 def test_replay_profile_command_perf_records_a_readonly_replay_loop(tmp_path):
     profile = _load_module("replay_fuzzer_profile")
 
@@ -148,6 +154,7 @@ def test_run_replay_profile_writes_reports_and_metadata(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    _no_target_libs(profile, monkeypatch)
     monkeypatch.setattr(profile, "build_hotspots", _fake_hotspots)
 
     args = types.SimpleNamespace(
@@ -194,6 +201,7 @@ def test_run_replay_profile_retries_once_on_transient_failure(tmp_path, monkeypa
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    _no_target_libs(profile, monkeypatch)
     monkeypatch.setattr(profile, "build_hotspots", _fake_hotspots)
     args = types.SimpleNamespace(
         out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=artifact_dir,
@@ -214,6 +222,7 @@ def test_run_replay_profile_raises_with_docker_output(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 1, "", "perf: cannot open perf.data")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    _no_target_libs(profile, monkeypatch)
     args = types.SimpleNamespace(
         out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=tmp_path / "a",
         fuzz_target="t", min_sample_seconds=60, loop_timeout=1800, seed=1337,
@@ -270,6 +279,7 @@ def test_profile_has_no_target_dso_share_gate(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    _no_target_libs(profile, monkeypatch)
     monkeypatch.setattr(profile, "build_hotspots", _fake_hotspots)
     args = types.SimpleNamespace(
         out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=art,
@@ -297,6 +307,7 @@ def test_hotspot_table_failure_fails_the_profile_loudly(tmp_path, monkeypatch, c
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    _no_target_libs(profile, monkeypatch)
     # The real build: no perf_script.txt.gz was produced.
     args = types.SimpleNamespace(
         out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=art,
@@ -357,6 +368,7 @@ def test_stale_reports_never_survive_into_a_new_attempt(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 1, "", "perf died")
 
     monkeypatch.setattr(profile, "_run", fake_run)
+    _no_target_libs(profile, monkeypatch)
     args = types.SimpleNamespace(
         out_dir=tmp_path / "out", corpus_dir=corpus, artifact_dir=art,
         fuzz_target="t", min_sample_seconds=60, loop_timeout=1800, seed=1337,

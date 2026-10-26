@@ -32,6 +32,12 @@ them (``hotspot_table.py`` -> ``hotspots.txt`` / ``hotspots.json``), the
 optimizer's primary ranking input. A failure to build that table -- including a
 failed or truncated dump, or a perf without ``-F dsoff`` -- fails the profile
 loudly.
+
+Before recording, ``target_libs.py`` works out which shared libraries the binary
+loads in its OWN image (RUNNER_IMAGE) that the profiler image cannot resolve
+(a build that let meson auto-detect the build image's glib), copies them into the
+profile's ``target_libs`` dir and puts them on the target's LD_LIBRARY_PATH;
+one it cannot supply fails the profile loudly.
 """
 
 from __future__ import annotations
@@ -74,6 +80,9 @@ RUNNER_IMAGE = rfp.RUNNER_IMAGE
 # the env var to pin a different kernel-matched perf; set it to the RUNNER_IMAGE
 # value to restore the old (kernel-fragile) behaviour.
 PROFILER_IMAGE = os.environ.get("FUZZ_SOURCE_FOLDS_PROFILER_IMAGE", "bench-sandbox/profiler")
+# The profiler image's own library path (its copies of the 20.04 base-runner's
+# libc++/unwind/python). perf runs with it; the target gets target_libs in front.
+PROFILER_LD_LIBRARY_PATH = "/opt/oss-libs"
 
 # The perf/kernel-mismatch failure above (perf never samples the target) is
 # caught by the harness, from hotspots.json: it refuses a profile whose
@@ -94,6 +103,21 @@ def _load_hotspot_table():
 
 
 hotspot_table = _load_hotspot_table()
+
+
+def _load_target_libs():
+    """Load the sibling target_libs module (it has no other dependencies)."""
+    path = Path(__file__).with_name("target_libs.py")
+    spec = importlib.util.spec_from_file_location("target_libs", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load target_libs from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+tlibs = _load_target_libs()
+
 PERF_SCRIPT_NAME = "perf_script.txt.gz"
 PERF_SCRIPT_IP_NAME = "perf_script_ip.txt.gz"
 PERF_SCRIPT_STATUS = "perf_script.status"
@@ -158,6 +182,7 @@ def build_replay_profile_docker_command(
     rss_limit_mb: int = 3072,
     malloc_limit_mb: int = 1536,
     container_name: str | None = None,
+    target_libs: dict | None = None,
 ) -> list[str]:
     """Build a ``docker run`` that perf-records the binary replaying the corpus.
 
@@ -166,6 +191,11 @@ def build_replay_profile_docker_command(
     until ``min_sample_seconds`` of wall-clock has passed, all under a single
     ``perf record`` session, so the sample count does not depend on corpus size or
     target speed. Pinning to one CPU and fixing the seed keep the profile stable.
+
+    ``target_libs`` (from :func:`prepare_target_libs`): its ``host_dir`` is
+    mounted read-only at target_libs.TARGET_LIBS_MOUNT and its
+    ``ld_library_path`` exported inside the replay loop, so only the target (and
+    afl-showmap) sees it -- never perf.
     """
     # Inner replay loop. Single-quoted in the final script so the OUTER bash
     # passes it verbatim to the perf-launched bash; the $(date +%s) clock and the
@@ -211,6 +241,15 @@ def build_replay_profile_docker_command(
     replay_loop = (
         f'if [ -x /out/afl-showmap ]; then {afl_loop}; else {libfuzzer_loop}; fi'
     )
+    lib_mounts = []
+    if target_libs and target_libs.get("ld_library_path") not in (
+            None, "", PROFILER_LD_LIBRARY_PATH):
+        # Before the map-size dump too: a target that cannot load prints no size.
+        replay_loop = (f"export LD_LIBRARY_PATH={target_libs['ld_library_path']}; "
+                       + replay_loop)
+        if target_libs.get("host_dir"):
+            lib_mounts = ["-v", f"{Path(target_libs['host_dir']).resolve()}:"
+                                f"{tlibs.TARGET_LIBS_MOUNT}:ro"]
     cmd = ["docker", "run", "--rm"]
     if container_name:
         cmd += ["--name", container_name]
@@ -246,7 +285,9 @@ def build_replay_profile_docker_command(
         # The target was built against the 20.04 base-runner runtime; when the
         # profiler image differs (the kernel-matched 24.04 one), its own
         # libc++/unwind/python live here. Harmless with RUNNER_IMAGE (dir absent).
-        "-e", "LD_LIBRARY_PATH=/opt/oss-libs",
+        # Libraries of the target's own build image come on top of this, for the
+        # target process only (target_libs, exported in the replay loop).
+        "-e", f"LD_LIBRARY_PATH={PROFILER_LD_LIBRARY_PATH}",
         # Absolute paths are required: docker treats a relative `-v src:/dst` as
         # a named volume, not a bind mount (fails with "invalid characters for a
         # local volume name"). The agent may invoke this with paths relative to
@@ -254,6 +295,7 @@ def build_replay_profile_docker_command(
         "-v", f"{Path(out_dir).resolve()}:/out:ro",
         "-v", f"{Path(corpus_dir).resolve()}:/corpus:ro",
         "-v", f"{Path(artifact_dir).resolve()}:/artifacts",
+        *lib_mounts,
         PROFILER_IMAGE,
         "/bin/bash", "-lc",
         (
@@ -352,6 +394,20 @@ def build_replay_profile_docker_command(
     return cmd
 
 
+def prepare_target_libs(*, out_dir, fuzz_target: str, artifact_dir, cpu) -> dict | None:
+    """The libraries of the target's own image (RUNNER_IMAGE) the profiler image
+    lacks, copied into ``<artifact_dir>/target_libs`` (target_libs.prepare;
+    cached there per binary and image pair). None when the target's image IS the
+    profiler image: then nothing needs bridging. Raises target_libs.TargetLibsError
+    or TargetLibsProbeError, both loud and marked for the harness."""
+    if RUNNER_IMAGE == PROFILER_IMAGE:
+        return None
+    return tlibs.prepare(out_dir=out_dir, fuzz_target=fuzz_target,
+                         libs_dir=Path(artifact_dir) / tlibs.DIRNAME,
+                         target_image=RUNNER_IMAGE, profiler_image=PROFILER_IMAGE,
+                         base_ld_path=PROFILER_LD_LIBRARY_PATH, cpu=cpu)
+
+
 def run_replay_profile(args: argparse.Namespace) -> int:
     artifact_dir = Path(args.artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -360,6 +416,20 @@ def run_replay_profile(args: argparse.Namespace) -> int:
     corpus_count = rfp._count_files(corpus_dir)
     if corpus_count == 0:
         raise RuntimeError(f"replay-profile corpus is empty: {corpus_dir}")
+
+    # Once, before both attempts: what the binary loads in its own image that the
+    # profiler image lacks. Without it a target linking a build-image library
+    # (e.g. glib) dies in the loader, afl-showmap hides the error, and the
+    # profile is 0% target. Failures raise with a marker the harness stages on.
+    libs = prepare_target_libs(out_dir=args.out_dir, fuzz_target=args.fuzz_target,
+                               artifact_dir=artifact_dir, cpu=args.cpu)
+    if libs and (libs["libs"] or libs["append_out"]):
+        how = "cached" if libs["cached"] else f"resolved in {libs['seconds']}s"
+        # No image name: this stderr's tail can land in prebuild_status.json, in
+        # the profile dir the agent reads, and an ARVO image tag names the bug.
+        print(f"target libs: supplying {sorted(libs['libs'])} from the target's "
+              f"image, target LD_LIBRARY_PATH={libs['ld_library_path']} ({how})",
+              file=sys.stderr)
 
     perf_data = artifact_dir / "perf.data"
     flat = artifact_dir / "flat.txt"
@@ -388,6 +458,7 @@ def run_replay_profile(args: argparse.Namespace) -> int:
             memory=args.memory,
             shm_size=args.shm_size,
             container_name=f"poff-replay-{attempt}-{os.getpid()}-{uuid.uuid4().hex[:8]}",
+            target_libs=libs,
         )
         docker_result = _run(docker_cmd, timeout=timeout)
         docker_rc = docker_result.returncode
@@ -428,6 +499,9 @@ def run_replay_profile(args: argparse.Namespace) -> int:
         "target_dso_share_pct": dso_share,
         "flat_target_share_pct": round(flat_share, 2),
         "profiler_image": PROFILER_IMAGE,
+        "target_libs": (None if libs is None else
+                        {k: libs[k] for k in ("libs", "append_out", "ld_library_path",
+                                              "skipped_out_libs", "cached")}),
     }
 
     # The ranked target-source hotspot table: the optimizer's primary input, so

@@ -155,7 +155,10 @@ def check_prereqs() -> list[tuple[str, str, str]]:
     # full budget and accepts nothing. Silent because run_replay_speedup catches
     # its own failures by design, which is exactly why it is checked up front.
     scripts = Path(getattr(config, "PHASE2_SKILL_SCRIPTS_DIR", ""))
-    needed = ("replay_timing.py", "build_corpus.py", "replay_fuzzer_profile.py")
+    # hotspot_table.py and target_libs.py: replay_fuzzer_profile.py loads both
+    # when it starts, so without them every profile dies on import.
+    needed = ("replay_timing.py", "build_corpus.py", "replay_fuzzer_profile.py",
+              "hotspot_table.py", "target_libs.py")
     missing = [n for n in needed if not (scripts / n).is_file()]
     rows.append((
         f"optimizer skill ({config.PHASE2_OPTIMIZER_SKILL})",

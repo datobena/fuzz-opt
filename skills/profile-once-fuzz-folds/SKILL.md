@@ -250,8 +250,8 @@ them yourself**, and never reproduce what they do by other means (no corpus buil
 no profiling):
 
 - `scripts/build_corpus.py` — grows and freezes a fixed corpus by fuzzing
-- `scripts/replay_fuzzer_profile.py` and `scripts/hotspot_table.py` — the one baseline profile and
-  its `hotspots.txt` / `hotspots.json`
+- `scripts/replay_fuzzer_profile.py`, `scripts/hotspot_table.py` and `scripts/target_libs.py` — the
+  one baseline profile and its `hotspots.txt` / `hotspots.json`
 
 Reuse these bundled helper scripts rather than recreating their logic (paths are relative to this
 skill directory):

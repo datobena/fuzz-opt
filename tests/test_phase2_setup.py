@@ -1918,6 +1918,10 @@ def test_prebuild_live_mutations_skip_build_corpus_and_profile(monkeypatch, tmp_
     ("HOTSPOT TABLE FAILED: no addr2line", "hotspots"),
     ("RuntimeError: perf replay-profile failed after 2 attempts (last docker rc=125)",
      "profile-run"),
+    ("target_libs.TargetLibsError: TARGET LIBS UNRESOLVED: the profiler image cannot "
+     "load t: libfoo.so.1 (needed by /out/t; not in the target's image either)", "libs"),
+    ("target_libs.TargetLibsProbeError: TARGET LIBS PROBE FAILED: ldd in the target's "
+     "image failed twice (docker rc=125: ...)", "profile-run"),
     ("subprocess.TimeoutExpired: Command '['docker', 'run'...]' timed out", "timeout"),
     ("RuntimeError: replay-profile corpus is empty: /x", "corpus"),
     ("Traceback ... KeyError: 'x'", "profile"),

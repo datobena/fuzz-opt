@@ -66,7 +66,7 @@ class PrebuildFailedError(RuntimeError):
     ``prebuild-failed``; phase 2 records a setup failure (stage=profile_prebuild).
 
     ``stage`` names the step that failed (env, scripts, mutations, corpus,
-    profile-run, profile, hotspots, sanity, timeout, exception); the online loop
+    profile-run, libs, profile, hotspots, sanity, timeout, exception); the online loop
     stops an optimizer whose prebuild keeps failing at the same deterministic
     stage.
     """
@@ -105,11 +105,13 @@ def _containers_left(result: dict) -> list[str]:
 
 
 # Prebuild stages whose failure repeats identically every round: the same
-# binary, scripts and source layout give the same result. The others can be
-# transient -- profile-run (the perf container failed twice: docker, a busy
-# host), timeout, corpus, mutations, exception -- and never stop an optimizer.
+# binary, scripts and source layout give the same result (libs: a shared library
+# the target needs that the profiler image cannot be given). The others can be
+# transient -- profile-run (the perf container, or a library probe, failed twice:
+# docker, a busy host), timeout, corpus, mutations, exception -- and never stop
+# an optimizer.
 DETERMINISTIC_PREBUILD_STAGES = frozenset(
-    {"env", "scripts", "profile", "hotspots", "sanity"})
+    {"env", "scripts", "libs", "profile", "hotspots", "sanity"})
 TRANSIENT_PREBUILD_STAGES = frozenset(
     {"profile-run", "timeout", "corpus", "mutations", "exception"})
 
@@ -1603,8 +1605,10 @@ def run_baseline_profile(*, replay_profile, out_dir, corpus_dir, profile_dir,
     """Run replay_fuzzer_profile.py (profile + hotspot table) and apply the
     target-source sample floor -> (ok, stage, reason).
 
-    Stages: ``profile-run`` (the perf container failed both attempts: docker or
-    perf trouble, possibly transient), ``corpus`` (nothing to replay),
+    Stages: ``profile-run`` (the perf container, or a shared-library probe,
+    failed both attempts: docker or perf trouble, possibly transient), ``libs``
+    (a library the binary loads in its own image cannot be supplied to the
+    profiler image), ``corpus`` (nothing to replay),
     ``profile`` (the profiler script itself failed some other way),
     ``hotspots`` (the table could not be built), ``sanity`` (the target's own
     functions got too few samples). A timeout raises TimeoutExpired. The
@@ -1628,7 +1632,10 @@ def run_baseline_profile(*, replay_profile, out_dir, corpus_dir, profile_dir,
     if rp.returncode != 0:
         if "HOTSPOT TABLE FAILED" in err:
             stage = "hotspots"
-        elif "perf replay-profile failed after" in err:
+        elif "TARGET LIBS UNRESOLVED" in err:
+            stage = "libs"
+        elif ("perf replay-profile failed after" in err
+              or "TARGET LIBS PROBE FAILED" in err):
             stage = "profile-run"
         elif "TimeoutExpired" in err:
             stage = "timeout"           # the perf container's own wall-clock cap
