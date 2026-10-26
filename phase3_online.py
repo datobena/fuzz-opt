@@ -1058,6 +1058,16 @@ class RoundContext:
     # any round whose prebuild succeeds (see _end_prebuild_failed_round).
     prebuild_fail_stage: str = ""
     prebuild_fail_streak: int = 0
+    # Containers a session could not confirm removed (AgentNotRemovedError).
+    # While any is present the tree is not the harness's: no round runs, and
+    # the tree is neither reset nor committed. orphans_cleared names the ones
+    # this round found gone before it started.
+    orphan_containers: list = field(default_factory=list)
+    orphans_cleared: list = field(default_factory=list)
+    # Rounds that ran nothing while waiting for them (outcome
+    # agent-not-removed-wait): not attempts, so the campaign record counts them
+    # apart (rounds_attempted / rounds_waiting_for_orphans).
+    orphan_wait_rounds: int = 0
 
 
 @dataclass
@@ -1281,6 +1291,100 @@ def _round_produced_evidence(diff_dir: str, build_ok: bool) -> bool:
 # Outcome of a round whose harness prebuild (corpus freeze, baseline profile,
 # hotspot table, target-source sample floor) failed. No agent runs for it.
 PREBUILD_FAILED_OUTCOME = "prebuild-failed"
+AGENT_NOT_REMOVED_OUTCOME = "agent-not-removed"
+AGENT_NOT_REMOVED_WAIT_OUTCOME = "agent-not-removed-wait"
+
+
+def _end_agent_not_removed_round(ctx: RoundContext, iter_n: int, *, diff_dir: str,
+                                 containers: list) -> tuple:
+    """Close a round whose session left containers docker could not remove.
+
+    They may still be editing the tree, so it is NOT reset to prev_tag (that
+    would race them) and nothing is committed; the trial's next round waits for
+    them (_orphans_cleared). Not evidence about the target."""
+    ctx.orphan_containers = list(containers)
+    iter_dir = os.path.dirname(diff_dir)
+    provenance.write_json(os.path.join(iter_dir, "round_provenance.json"), {
+        "iter": iter_n,
+        "outcome": AGENT_NOT_REMOVED_OUTCOME,
+        "speedup": None,
+        "applied": False,
+        "built": False,
+        "agent_started": True,
+        "agent_containers_still_present": ctx.orphan_containers,
+        "orphans_cleared": ctx.orphans_cleared or None,
+        "optimizer": phase2_setup.optimizer_provenance(),
+    })
+    logger.error(
+        "online round %d%s: the optimizer's container(s) %s could not be removed "
+        "and may still be editing the source tree. Tree left as it is; no further "
+        "round starts until they are gone (docker rm -f them by hand).",
+        iter_n, (f" (trial_{ctx.trial.trial_id:02d})" if ctx.trial is not None else ""),
+        ", ".join(ctx.orphan_containers))
+    _record_ledger(ctx, iter_n, diff_dir, AGENT_NOT_REMOVED_OUTCOME, None)
+    _write_cpu_cost_summary(ctx)
+    return (False, None, False)
+
+
+def _rounds_record(contexts: list, per_trial: bool) -> dict:
+    """campaign_provenance's round counts. A round spent waiting for a leftover
+    container ran nothing, so it is not an attempt: rounds_attempted leaves it
+    out, and rounds_waiting_for_orphans (present only if any) counts it."""
+    def per(f):
+        return ({c.trial.trial_id: f(c) for c in contexts} if per_trial
+                else f(contexts[0]))
+    out = {"rounds_attempted": per(lambda c: c.iter_n - c.orphan_wait_rounds)}
+    if any(c.orphan_wait_rounds for c in contexts):
+        out["rounds_waiting_for_orphans"] = per(lambda c: c.orphan_wait_rounds)
+    return out
+
+
+def _orphans_cleared(ctx: RoundContext, iter_n: int) -> bool:
+    """Before a round: are the containers an earlier session left behind gone?
+
+    Tries to remove each once more; one that is gone or stopped for good can no
+    longer write (sandbox.session.remove_container). All of them -> hand the
+    tree back to the benchmark user, then reset it to prev_tag (they may have
+    edited and built in it after the round ended) and let the round run. The
+    chown comes first: a leftover ARVO build writes root-owned objects that
+    `git clean -fd` cannot remove, and the next round would build on top of
+    them. Any still live, or a chown that failed -> record a waiting round and
+    run nothing; the next round tries again."""
+    from sandbox import broker
+    from sandbox.launch import LABEL_ITER, LABEL_TRIAL
+    from sandbox.session import remove_container
+    still = [n for n in ctx.orphan_containers if not remove_container(n, attempts=3)]
+    owned = not still and broker.chown_back(
+        prework_image_for(ctx.entry), [ctx.source_tree],
+        labels={LABEL_TRIAL: ctx.trial.trial_id if ctx.trial is not None else None,
+                LABEL_ITER: iter_n})
+    if still or not owned:
+        if still:
+            ctx.orphan_containers = still
+        ctx.orphan_wait_rounds += 1
+        iter_dir = os.path.join(ctx.online_dir, f"iter_{iter_n:02d}")
+        provenance.write_json(os.path.join(iter_dir, "round_provenance.json"), {
+            "iter": iter_n,
+            "outcome": AGENT_NOT_REMOVED_WAIT_OUTCOME,
+            "speedup": None, "applied": False, "built": False,
+            "agent_started": False,
+            "agent_containers_still_present": still,
+            "ownership_restored": None if still else False,
+        })
+        if still:
+            logger.error("online round %d: container(s) %s from an earlier session "
+                         "are STILL present; not starting this round",
+                         iter_n, ", ".join(still))
+        else:
+            logger.error("online round %d: could not hand the source tree back from "
+                         "root before resetting it; not starting this round", iter_n)
+        return False
+    logger.warning("online round %d: container(s) %s from an earlier session are "
+                   "gone; ownership restored, resetting the source tree to %s before "
+                   "the round", iter_n, ", ".join(ctx.orphan_containers), ctx.prev_tag)
+    _revert_source_tree(ctx.source_tree, ctx.prev_tag)
+    ctx.orphans_cleared, ctx.orphan_containers = list(ctx.orphan_containers), []
+    return True
 
 
 def _end_prebuild_failed_round(ctx: RoundContext, iter_n: int, *, diff_dir: str,
@@ -1320,6 +1424,7 @@ def _end_prebuild_failed_round(ctx: RoundContext, iter_n: int, *, diff_dir: str,
         "prebuild_fail_streak": ctx.prebuild_fail_streak,
         "optimizer_stopped": stop,
         "agent_started": False,
+        "orphans_cleared": ctx.orphans_cleared or None,
         "attribution": None,
         "gate": {"baseline": None, "optimized": None,
                  "corpus_file_count": None, "partial": None},
@@ -1373,6 +1478,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         trial_id=ctx.trial.trial_id if ctx.trial is not None else None)
     if ctx.trial is None:
         cpu_ledger.set_round(project=ctx.project, iter_n=iter_n)
+    ctx.orphans_cleared = []
+    if ctx.orphan_containers and not _orphans_cleared(ctx, iter_n):
+        return (False, None, False)     # not measured: the tree is not ours yet
     iter_dir = os.path.join(ctx.online_dir, f"iter_{iter_n:02d}")
     diff_dir = os.path.join(iter_dir, "source_diff")
     opt_bin_dir = os.path.join(iter_dir, "bin")
@@ -1610,6 +1718,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             previous_best_bin=ctx.previous_best_bin, prev_tag=ctx.prev_tag)
         _record_ledger(ctx, iter_n, diff_dir, "augmentation-failed", None)
         return (False, None, False)      # nothing was measured
+    except phase2_setup.AgentNotRemovedError as exc:
+        return _end_agent_not_removed_round(ctx, iter_n, diff_dir=diff_dir,
+                                            containers=exc.containers)
     except phase2_setup.PrebuildFailedError as exc:
         # The harness could not freeze the corpus or profile the baseline (or the
         # profile failed its sample-count sanity check). No agent ran -- it has no
@@ -1769,6 +1880,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         # Last harness rebuild of this round (the binary the gate measured):
         # ccache use of its main and cmplog builds.
         "ccache": last_build.get("ccache"),
+        # Leftover containers of an earlier session this round waited out, then
+        # reset the tree after (_orphans_cleared).
+        "orphans_cleared": ctx.orphans_cleared or None,
     })
     logger.info(
         "online round %d: outcome=%s speedup=%s applied=%s built=%s "
@@ -3050,8 +3164,7 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
             logger.warning("campaign cpu cost rollup failed: %s", e)
     _campaign["finished_at"] = time.time()
     _campaign["orchestrator"] = _rss.stop()
-    _campaign["rounds_attempted"] = (
-        {c.trial.trial_id: c.iter_n for c in contexts} if per_trial else ctx.iter_n)
+    _campaign.update(_rounds_record(contexts, per_trial))
     provenance.write_json(os.path.join(online_dir, "campaign_provenance.json"),
                           _campaign)
     logger.info("online: run complete for %s (rounds attempted: %s, orchestrator "

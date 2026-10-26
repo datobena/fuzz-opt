@@ -1375,3 +1375,125 @@ def test_both_swap_paths_deploy_the_runtime_libraries():
     import inspect
     for fn in (phase3_online.hot_swap_one, phase3_online.hot_swap):
         assert "_swap_runtime_libs(" in inspect.getsource(fn), fn.__name__
+
+
+# --- a session that could not remove its containers ---------------------------
+#
+# They may still be editing the tree: the round neither resets nor commits it,
+# and the trial's next round waits until they are confirmed gone.
+
+def _orphan_ctx(tmp_path):
+    import types
+    online = tmp_path / "trial_03"
+    ctx = phase3_online.RoundContext(
+        entry={"cve": "x"}, experiment_id="e", experiment_dir=str(tmp_path),
+        online_dir=str(online), source_tree=str(tmp_path / "src"), source_root="",
+        project="p", image="", fuzz_target="t", poc_path=None,
+        previous_best_bin="/best", prev_tag="iter_02", optimized_bin_dir="",
+        ledger_path=str(online / "ledger.json"), swap_timeline_path="",
+        profile_cpu=1)
+    ctx.trial = types.SimpleNamespace(trial_id=3)
+    return ctx
+
+
+def _no_tree_ops(monkeypatch):
+    ops = []
+    monkeypatch.setattr(phase3_online, "_revert_source_tree",
+                        lambda tree, tag: ops.append(("revert", tag)))
+    monkeypatch.setattr(phase3_online, "apply_round_outcome",
+                        lambda *a, **k: ops.append(("outcome", a, k)))
+    monkeypatch.setattr(phase3_online, "_write_cpu_cost_summary", lambda ctx: None)
+    monkeypatch.setattr(phase3_online.phase2_setup, "optimizer_provenance", lambda: {})
+    return ops
+
+
+def test_a_round_whose_agent_was_not_removed_leaves_the_tree_alone(monkeypatch, tmp_path):
+    ops = _no_tree_ops(monkeypatch)
+    ctx = _orphan_ctx(tmp_path)
+    diff_dir = tmp_path / "trial_03" / "iter_04" / "source_diff"
+    diff_dir.mkdir(parents=True)
+    r = phase3_online._end_agent_not_removed_round(
+        ctx, 4, diff_dir=str(diff_dir), containers=["agent-1-x", "broker-1-2"])
+    assert r == (False, None, False)              # not accepted, not evidence
+    assert ops == [], "the tree was reset or committed under a live agent"
+    assert ctx.orphan_containers == ["agent-1-x", "broker-1-2"]
+    prov = json.loads((diff_dir.parent / "round_provenance.json").read_text())
+    assert prov["outcome"] == phase3_online.AGENT_NOT_REMOVED_OUTCOME
+    assert prov["agent_containers_still_present"] == ["agent-1-x", "broker-1-2"]
+    assert ctx.previous_best_bin == "/best"
+
+
+def test_the_next_round_waits_while_the_containers_are_still_there(monkeypatch, tmp_path):
+    import sandbox.session as session
+    ops = _no_tree_ops(monkeypatch)
+    ctx = _orphan_ctx(tmp_path)
+    ctx.orphan_containers = ["agent-1-x"]
+    tried = []
+    monkeypatch.setattr(session, "remove_container",
+                        lambda name, attempts=10: tried.append(name) or False)
+    from lib import cpu_ledger
+    try:
+        assert phase3_online.run_round(ctx, None, 5) == (False, None, False)
+    finally:
+        cpu_ledger.clear_thread_round()           # run_round tags this thread
+    assert tried == ["agent-1-x"] and ops == []      # no chown either while live
+    assert ctx.orphan_wait_rounds == 1
+    prov = json.loads((tmp_path / "trial_03" / "iter_05" / "round_provenance.json")
+                      .read_text())
+    assert prov["outcome"] == phase3_online.AGENT_NOT_REMOVED_WAIT_OUTCOME
+    assert not (tmp_path / "trial_03" / "iter_05" / "source_diff").exists()
+
+
+def _chown(monkeypatch, ops, ok=True):
+    import sandbox.broker as broker
+    monkeypatch.setattr(phase3_online, "prework_image_for", lambda entry: "img")
+    monkeypatch.setattr(broker, "chown_back", lambda image, paths, labels=None: (
+        ops.append(("chown", image, paths, labels)) or ok))
+
+
+def test_once_they_are_gone_the_tree_is_chowned_then_reset_before_the_round(monkeypatch, tmp_path):
+    """A leftover ARVO build leaves root-owned objects `git clean` cannot
+    remove: ownership comes back first, then the reset."""
+    import sandbox.session as session
+    from sandbox.launch import LABEL_ITER, LABEL_TRIAL
+    ops = _no_tree_ops(monkeypatch)
+    _chown(monkeypatch, ops)
+    ctx = _orphan_ctx(tmp_path)
+    ctx.orphan_containers = ["agent-1-x"]
+    monkeypatch.setattr(session, "remove_container", lambda name, attempts=10: True)
+    assert phase3_online._orphans_cleared(ctx, 6) is True
+    assert ops == [("chown", "img", [ctx.source_tree], {LABEL_TRIAL: 3, LABEL_ITER: 6}),
+                   ("revert", "iter_02")]
+    assert ctx.orphan_containers == [] and ctx.orphans_cleared == ["agent-1-x"]
+    assert ctx.orphan_wait_rounds == 0
+
+
+def test_a_tree_that_cannot_be_chowned_is_not_reset_and_the_round_waits(monkeypatch, tmp_path):
+    import sandbox.session as session
+    ops = _no_tree_ops(monkeypatch)
+    _chown(monkeypatch, ops, ok=False)
+    ctx = _orphan_ctx(tmp_path)
+    ctx.orphan_containers = ["agent-1-x"]
+    monkeypatch.setattr(session, "remove_container", lambda name, attempts=10: True)
+    assert phase3_online._orphans_cleared(ctx, 6) is False
+    assert [o[0] for o in ops] == ["chown"], "reset without ownership restored"
+    assert ctx.orphan_containers == ["agent-1-x"]     # checked again next round
+    assert ctx.orphan_wait_rounds == 1
+    prov = json.loads((tmp_path / "trial_03" / "iter_06" / "round_provenance.json")
+                      .read_text())
+    assert prov["outcome"] == phase3_online.AGENT_NOT_REMOVED_WAIT_OUTCOME
+    assert prov["ownership_restored"] is False
+
+
+def test_waiting_rounds_are_not_counted_as_attempts(tmp_path):
+    a, b = _orphan_ctx(tmp_path), _orphan_ctx(tmp_path)
+    b.trial = types.SimpleNamespace(trial_id=4)
+    a.iter_n, b.iter_n, b.orphan_wait_rounds = 6, 9, 3
+    assert phase3_online._rounds_record([a, b], per_trial=True) == {
+        "rounds_attempted": {3: 6, 4: 6}, "rounds_waiting_for_orphans": {3: 0, 4: 3}}
+    b.orphan_wait_rounds = 0
+    assert phase3_online._rounds_record([a, b], per_trial=True) == {
+        "rounds_attempted": {3: 6, 4: 9}}
+    a.orphan_wait_rounds = 2
+    assert phase3_online._rounds_record([a], per_trial=False) == {
+        "rounds_attempted": 4, "rounds_waiting_for_orphans": 2}

@@ -36,6 +36,20 @@ logger = logging.getLogger(__name__)
 BUILD_TIMEOUT_SECS = 5400
 
 
+def ownership_command(image: str, paths: list[str]) -> list[str] | None:
+    """The `docker run ... chown -R` restore_ownership runs, or None when the
+    benchmark runs as root and there is nothing to hand back. Separate so the
+    sandbox broker can run the same command named, labelled and timed."""
+    if os.geteuid() == 0:
+        return None
+    mounts: list[str] = []
+    for i, p in enumerate(paths):
+        mounts += ["-v", f"{Path(p).absolute()}:/fix{i}"]
+    return ["docker", "run", "--rm", *mounts, "--entrypoint", "chown", image,
+            "-R", f"{os.getuid()}:{os.getgid()}",
+            *[f"/fix{i}" for i in range(len(paths))]]
+
+
 def restore_ownership(image: str, paths: list[str]) -> None:
     """Give bind-mounted build output back to the user running the benchmark.
 
@@ -53,17 +67,10 @@ def restore_ownership(image: str, paths: list[str]) -> None:
     A no-op when the benchmark IS run as root, which is why none of this shows up
     on a machine that runs it that way.
     """
-    if os.geteuid() == 0:
+    cmd = ownership_command(image, paths)
+    if cmd is None:
         return
-    mounts: list[str] = []
-    for i, p in enumerate(paths):
-        mounts += ["-v", f"{Path(p).absolute()}:/fix{i}"]
-    r = subprocess.run(
-        ["docker", "run", "--rm", *mounts, "--entrypoint", "chown", image,
-         "-R", f"{os.getuid()}:{os.getgid()}",
-         *[f"/fix{i}" for i in range(len(paths))]],
-        capture_output=True, text=True, errors="replace",
-    )
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
         logger.warning("could not restore ownership of %s: %s",
                        paths, (r.stderr or "")[-200:])

@@ -187,3 +187,46 @@ def test_fixed_corpus_points_at_the_mounted_copy():
     # Outside the profile dir: the neutral default, never the host path.
     env = build_agent_env({**base, "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR": "/elsewhere/fixed"})
     assert env["FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR"] == "/work/corpus-fixed"
+
+
+# --- container identity ---------------------------------------------------------
+#
+# A timed-out `docker run` kills only the client; the container ran on for up to
+# 193 min. A name and labels are what let the session, the launcher's exit and
+# the next launcher's sweep find it again.
+
+def test_agent_container_is_named_labelled_and_runs_under_init():
+    from sandbox.launch import LABEL_LAUNCHER, LABEL_SESSION
+    cmd = build_agent_docker_command(
+        image="bench-sandbox/agent", src="/s", profile="/p", tools="/t",
+        sock="/k", network="n", env={}, name="agent-12-abc",
+        labels={LABEL_LAUNCHER: "12:345:boot", LABEL_SESSION: "abc", "empty": ""},
+    )
+    image_at = cmd.index("bench-sandbox/agent")
+    assert cmd[cmd.index("--name") + 1] == "agent-12-abc"
+    labels = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--label"]
+    assert labels == ["bench.sandbox.launcher=12:345:boot", "bench.sandbox.session=abc"]
+    assert "--init" in cmd
+    # docker options, so all before the image
+    assert max(cmd.index("--name"), cmd.index("--init"),
+               max(i for i, a in enumerate(cmd) if a == "--label")) < image_at
+
+
+def test_launcher_token_is_pid_start_time_and_boot():
+    import os
+    from sandbox import launch
+    pid, start, boot = launch.launcher_token().split(":")
+    assert int(pid) == os.getpid()
+    if os.path.exists("/proc/self/stat"):
+        assert start == launch.process_start_time(os.getpid()) and start.isdigit()
+        assert boot == launch.boot_id() and boot
+
+
+def test_launcher_labels_carry_the_experiment_once_set(monkeypatch):
+    from sandbox import launch
+    monkeypatch.setattr(launch, "_LAUNCHER_EXPERIMENT", "")
+    assert launch.LABEL_EXPERIMENT not in launch.launcher_labels()
+    launch.set_launcher_experiment("exp-1")
+    labels = launch.launcher_labels()
+    assert labels[launch.LABEL_EXPERIMENT] == "exp-1"
+    assert labels[launch.LABEL_LAUNCHER] == launch.launcher_token()

@@ -76,6 +76,34 @@ class PrebuildFailedError(RuntimeError):
         self.stage = stage
 
 
+class AgentNotRemovedError(RuntimeError):
+    """The sandboxed session could not confirm its containers are gone.
+
+    ``containers`` names them: the agent, or broker containers the stop could
+    not remove. Either may still be editing or building in the source tree, so
+    optimize_and_build raises this right after the session returns, before it
+    diffs, builds, resets or retries anything there. A leftover agent once
+    re-applied its edits after the harness reset the tree, and the next round
+    committed them as its baseline. The online loop records the round and holds
+    the trial's next round until the containers are confirmed gone; phase 2
+    fails the target's setup.
+    """
+
+    def __init__(self, containers):
+        self.containers = list(containers)
+        super().__init__("optimizer container(s) still present after the session: "
+                         + ", ".join(self.containers))
+
+
+def _containers_left(result: dict) -> list[str]:
+    """What a sandboxed session reports still running (sandbox/session.py);
+    an unconfined session reports nothing."""
+    left = list(result.get("broker_leftovers") or [])
+    if result.get("agent_removed") is False:
+        left.insert(0, result.get("agent_container") or "<agent>")
+    return left
+
+
 # Prebuild stages whose failure repeats identically every round: the same
 # binary, scripts and source layout give the same result. The others can be
 # transient -- profile-run (the perf container failed twice: docker, a busy
@@ -3043,6 +3071,14 @@ def optimize_and_build(
         # Saved unconditionally and before any early return below, so a timeout,
         # an auth failure and a silent "found nothing" are all reconstructable.
         _save_agent_session_output(diff_output_dir, attempt, codex_result)
+        _left = _containers_left(codex_result)
+        if _left:
+            # Before anything below touches the tree: diff, build, reset, retry.
+            logger.error(
+                "%s session for %s/%s left container(s) docker could not remove: "
+                "%s. Leaving the source tree as it is.", backend, project,
+                fuzz_target, ", ".join(_left))
+            raise AgentNotRemovedError(_left)
         if codex_result["timed_out"]:
             logger.error(
                 "%s optimization for %s/%s timed out", backend, project, fuzz_target,
@@ -4445,6 +4481,11 @@ def main():
 
     experiment_id = args.experiment_id or datetime.now().strftime("%Y%m%d_%H%M%S")
     logger.info("Experiment ID: %s", experiment_id)
+    # A standalone phase 2 is a launcher too: same container hygiene as
+    # run_benchmark (sandbox/session.install_launcher_cleanup).
+    if getattr(config, "PHASE2_SANDBOX", True):
+        from sandbox.session import install_launcher_cleanup
+        install_launcher_cleanup(experiment_id)
 
     manifest = load_manifest(args.manifest)
     logger.info("Loaded manifest with %d entries", len(manifest))

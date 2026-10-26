@@ -31,6 +31,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,7 +41,9 @@ import config
 from lib import cpu_ledger
 from lib.core_lock import core_lock
 from prework.fuzzbench_image import fuzzbench_build_command, is_fuzzbench_image
-from prework.prework_build import arvo_compile_args, restore_ownership
+from prework.prework_build import arvo_compile_args, ownership_command
+from sandbox import launch
+from sandbox.launch import LABEL_ROLE, label_args, launcher_labels
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,16 @@ REPLAY_TIMEOUT_SECS = 3600
 LOG_TAIL_CHARS = 40000
 # Crashing inputs re-run for a full sanitizer report, per smoke or gate check.
 MAX_CRASH_REPORTS = 3
+# How often serve() looks up from accept() to see whether its session ended.
+ACCEPT_POLL_SECS = 0.5
+# Returned by _run for a container the session's end refused or killed. Any
+# non-zero code fails the op; a distinct one keeps it from reading as a
+# timeout (124) or as the target's own exit status.
+SESSION_ENDED_RC = 143
+SESSION_ENDED_MSG = "[broker stopped: the optimizer session ended; container not run or killed]"
+LAUNCHER_STOPPING_MSG = "[broker refused: the launcher is shutting down]"
+# The chown that hands a build's root-owned output back (prework ownership_command).
+CHOWN_TIMEOUT_SECS = 900
 
 
 @dataclass
@@ -95,6 +108,21 @@ class BrokerContext:
     # anchor). One BrokerContext per session, so these persist across requests.
     ref_ready: bool = field(default=False, repr=False)
     ref_anchor_s: float = field(default=0.0, repr=False)
+    # Labels (sandbox.launch.LABEL_*) for every container started for this
+    # session -- session, trial, round -- on top of the launcher's own. Set by
+    # the orchestrator; nothing the agent sends reaches them.
+    labels: dict = field(default_factory=dict)
+    # Set when the session ends: serve() returns, _run starts nothing more, and
+    # stop_session() removes what is still running. A session that ended used
+    # to leave its broker serving the agent it had timed out -- an orphan that
+    # went on building and replaying for hours.
+    stop: threading.Event = field(default_factory=threading.Event, repr=False)
+    inflight: set = field(default_factory=set, repr=False)
+    inflight_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # A build has left root-owned output that is not handed back yet. Set when a
+    # build starts, cleared by a chown that succeeded; finish_ownership() runs
+    # the chown at session end for a build the stop cut short.
+    ownership_pending: bool = field(default=False, repr=False)
 
 
 def _audit(ctx: BrokerContext, op: str, blob: str) -> None:
@@ -108,16 +136,40 @@ def _audit(ctx: BrokerContext, op: str, blob: str) -> None:
         logger.warning("audit log write failed: %s", e)
 
 
-def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
+def _run(cmd: list[str], timeout: int, ctx: BrokerContext | None = None, *,
+         after_stop: bool = False, labels: dict | None = None) -> tuple[int, str]:
     # A timeout kills only the `docker run` CLIENT; the container keeps running.
     # On php a timed-out build went on compiling for hours on the optimizer's core,
     # after core_lock was released, so later replays were timed on a busy core and
     # the next build ran slower and timed out too. Name the container so a timeout
     # can kill it.
+    #
+    # Labelled with the launcher (and, given ``ctx``, its session) so the
+    # session's end, the launcher's exit and the next launcher's start-up sweep
+    # can find it too. The harness's own crash checks (lib/afl_replay) come
+    # through here without a session; they carry the launcher's labels only.
+    #
+    # ``after_stop``: the session's own teardown (finish_ownership) runs a
+    # container after the stop. It is not tracked as in flight, and the stop
+    # does not fail it. ``labels``: more labels, for a caller with no session.
     name = None
     if cmd[:2] == ["docker", "run"]:
+        if launch.SHUTTING_DOWN.is_set():
+            # The launcher has swept, or is sweeping, its containers: one
+            # started now would outlive it.
+            return SESSION_ENDED_RC, LAUNCHER_STOPPING_MSG
         name = f"broker-{os.getpid()}-{time.time_ns()}"
-        cmd = cmd[:2] + ["--name", name] + cmd[2:]
+        all_labels = {**launcher_labels(), LABEL_ROLE: "broker",
+                      **(ctx.labels if ctx is not None else {}), **(labels or {})}
+        cmd = cmd[:2] + ["--name", name, *label_args(all_labels)] + cmd[2:]
+    track = ctx is not None and bool(name) and not after_stop
+    if track:
+        # Checked and registered under one lock, so stop_session() either sees
+        # this container or this call sees the stop -- never neither.
+        with ctx.inflight_lock:
+            if ctx.stop.is_set():
+                return SESSION_ENDED_RC, SESSION_ENDED_MSG
+            ctx.inflight.add(name)
     try:
         r = subprocess.run(
             cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
@@ -130,7 +182,45 @@ def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
             except (OSError, subprocess.SubprocessError) as e:
                 logger.warning("could not kill timed-out container %s: %s", name, e)
         return 124, "timeout"
-    return r.returncode, (r.stdout or "") + (r.stderr or "")
+    finally:
+        if track:
+            with ctx.inflight_lock:
+                ctx.inflight.discard(name)
+    blob = (r.stdout or "") + (r.stderr or "")
+    if track and ctx.stop.is_set():
+        # Killed by stop_session(), or finished just as the session ended: either
+        # way nobody is left to use the result, and a half-run build or replay
+        # must not pass for a real failure, a reference binary or a timing.
+        return SESSION_ENDED_RC, f"{blob}\n{SESSION_ENDED_MSG}"
+    return r.returncode, blob
+
+
+def stop_session(ctx: BrokerContext, *, wait_s: float = 120.0) -> list[str]:
+    """End the broker side of a session: start no more containers, and
+    force-remove the ones still running until every _run has returned.
+
+    Re-issued until the in-flight set drains, because a name can be registered
+    a moment before its container exists -- one `docker rm -f` would miss it.
+    Returns the names still in flight after ``wait_s`` (logged as an error).
+    """
+    ctx.stop.set()
+    deadline = time.monotonic() + wait_s
+    while True:
+        with ctx.inflight_lock:
+            names = sorted(ctx.inflight)
+        if not names:
+            return []
+        if time.monotonic() >= deadline:
+            logger.error("broker containers still running %.0fs after their session "
+                         "ended: %s", wait_s, ", ".join(names))
+            return names
+        for n in names:
+            try:
+                subprocess.run(["docker", "rm", "-f", n], capture_output=True,
+                               timeout=120)
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning("could not remove broker container %s: %s", n, e)
+        time.sleep(1.0)
 
 
 def _build_command(ctx: BrokerContext) -> list[str]:
@@ -237,18 +327,66 @@ def _run_build(ctx: BrokerContext) -> tuple[bool, str]:
     if ctx.ccache_dir and is_fuzzbench_image(ctx.image):
         # Created here, not by docker (which would create it root-owned).
         os.makedirs(ctx.ccache_dir, exist_ok=True)
+    # Root-owned output appears the moment `compile` starts.
+    ctx.ownership_pending = True
     with core_lock(ctx.cpu):
-        rc, blob = _run(_build_command(ctx), BUILD_TIMEOUT_SECS)
+        rc, blob = _run(_build_command(ctx), BUILD_TIMEOUT_SECS, ctx)
     _audit(ctx, "build", blob)
     # `compile` runs as root through a bind mount, so it leaves root-owned objects
     # in the tree the AGENT (uid 1000) is editing and the orchestrator later has to
     # `git clean` when a round is rejected. Restored on failure too: a build that
     # died halfway leaves exactly the artifacts that have to be cleanable.
-    restore_ownership(ctx.image, [ctx.source_dir, ctx.out_dir]
-                      + ([ctx.ccache_dir] if ctx.ccache_dir else []))
+    #
+    # Not once the session has stopped: an untracked chown would then outlive
+    # the session it belongs to. The session's teardown runs it instead, after
+    # the stop (finish_ownership), so the tree is still handed back.
+    if not ctx.stop.is_set():
+        _restore_ownership(ctx)
     if rc == 0:
         _capture_reference(ctx)
     return rc == 0, blob
+
+
+def _restore_ownership(ctx: BrokerContext, *, after_stop: bool = False) -> bool:
+    """Hand the session's build output back to the benchmark user: the same
+    chown as prework's restore_ownership, run through _run so it is named,
+    labelled and timed. True when nothing is left root-owned."""
+    cmd = ownership_command(ctx.image, [ctx.source_dir, ctx.out_dir]
+                            + ([ctx.ccache_dir] if ctx.ccache_dir else []))
+    if cmd is None:                          # running as root: nothing to hand back
+        ctx.ownership_pending = False
+        return True
+    rc, blob = _run(cmd, CHOWN_TIMEOUT_SECS, ctx, after_stop=after_stop)
+    if rc != 0:
+        logger.warning("could not restore ownership of the session's build output "
+                       "(rc=%s): %s", rc, blob[-200:])
+        return False
+    ctx.ownership_pending = False
+    return True
+
+
+def chown_back(image: str, paths: list[str], *, labels: dict | None = None) -> bool:
+    """The same chown for a caller outside any session -- the online loop,
+    before it resets a tree a leftover container may have built in: named,
+    labelled, bounded by CHOWN_TIMEOUT_SECS. True when nothing is left
+    root-owned (or the benchmark runs as root)."""
+    cmd = ownership_command(image, list(paths))
+    if cmd is None:
+        return True
+    rc, blob = _run(cmd, CHOWN_TIMEOUT_SECS, labels=labels)
+    if rc != 0:
+        logger.warning("could not restore ownership of %s (rc=%s): %s",
+                       list(paths), rc, blob[-200:])
+    return rc == 0
+
+
+def finish_ownership(ctx: BrokerContext) -> bool:
+    """At session end, after stop_session(): run the chown a build the stop cut
+    short skipped, so the harness can still `git clean` the tree. True when
+    nothing is left root-owned."""
+    if not ctx.ownership_pending:
+        return True
+    return _restore_ownership(ctx, after_stop=True)
 
 
 def _capture_reference(ctx: BrokerContext) -> None:
@@ -346,7 +484,8 @@ def scan_for_crashers(ctx: BrokerContext, out_dir: str, corpus_dir: str) -> dict
     expected = sum(1 for p in Path(corpus_dir).iterdir()
                    if p.is_file() and p.stat().st_size > 0)
     t0 = time.monotonic()
-    rc, blob = _run(_crash_scan_command(ctx, out_dir, corpus_dir), REPLAY_TIMEOUT_SECS)
+    rc, blob = _run(_crash_scan_command(ctx, out_dir, corpus_dir),
+                     REPLAY_TIMEOUT_SECS, ctx)
     seconds = time.monotonic() - t0
     crashers, scanned = [], -1
     for line in blob.splitlines():
@@ -369,7 +508,7 @@ def crash_report(ctx: BrokerContext, out_dir: str, corpus_dir: str,
     if not names:
         return ""
     _, blob = _run(_crash_report_command(ctx, out_dir, corpus_dir, names),
-                   60 * len(names) + 120)
+                   60 * len(names) + 120, ctx)
     return blob
 
 
@@ -426,7 +565,7 @@ def _run_smoke(ctx: BrokerContext) -> tuple[bool, str]:
         f"timeout 120 /out/{ctx.fuzz_target} /tmp/e",
     ]
     with core_lock(ctx.cpu):
-        rc, blob = _run(cmd, 300)
+        rc, blob = _run(cmd, 300, ctx)
     _audit(ctx, "smoke", blob)
     return rc == 0, blob
 
@@ -437,10 +576,10 @@ def _timed_replay(ctx: BrokerContext, out_dir: str) -> float | None:
     failed before the forkserver and the elapsed time is pure start-up cost,
     indistinguishable from a very fast binary, so it must never be timed)."""
     t0 = time.monotonic()
-    rc, blob = _run(_replay_command(ctx, out_dir), REPLAY_TIMEOUT_SECS)
+    rc, blob = _run(_replay_command(ctx, out_dir), REPLAY_TIMEOUT_SECS, ctx)
     elapsed = time.monotonic() - t0
     _audit(ctx, "replay", f"dir={out_dir} rc={rc} elapsed={elapsed:.3f}\n{blob[-2000:]}")
-    if rc == 124:
+    if rc in (124, SESSION_ENDED_RC):
         return None
     if "coverage of" not in blob and "Captured" not in blob:
         logger.error("replay produced no coverage report; refusing to time it: %s",
@@ -527,6 +666,14 @@ def _ledger_tags(ctx: BrokerContext) -> dict:
             "cpus": str(ctx.cpu)}
 
 
+def _note_session_end(ctx: BrokerContext, info: dict) -> None:
+    """Tag a ledger row whose op the session's end cut short. Its wall time is
+    CPU really spent, so the row stays and stays charged; the tag says the op's
+    outcome is not one (_run already failed it)."""
+    if ctx.stop.is_set():
+        info["session_ended"] = True
+
+
 def handle_request(req, ctx: BrokerContext) -> dict:
     """Dispatch one request. Never raises -- a broker crash would kill the round.
 
@@ -546,12 +693,14 @@ def handle_request(req, ctx: BrokerContext) -> dict:
         with cpu_ledger.timed("broker_build", cores=1, **_ledger_tags(ctx)) as info:
             ok, blob = _run_build(ctx)
             info["ok"] = ok
+            _note_session_end(ctx, info)
         return {"ok": ok, "log": _tail(blob)}
 
     if op == "smoke":
         with cpu_ledger.timed("broker_smoke", cores=1, **_ledger_tags(ctx)) as info:
             ok, blob = _run_smoke(ctx)
             info["ok"] = ok
+            _note_session_end(ctx, info)
         return {"ok": ok, "log": _tail(blob)}
 
     if op == "replay_time":
@@ -562,6 +711,7 @@ def handle_request(req, ctx: BrokerContext) -> dict:
         with cpu_ledger.timed("broker_replay", cores=1, **_ledger_tags(ctx)) as info:
             result = _run_replay(ctx, repeats)
             info["repeats"] = repeats
+            _note_session_end(ctx, info)
         if result is None:
             return {"ok": False, "error": "replay did not complete"}
         # Agent-facing reply stays a single number; the bracketing detail
@@ -572,17 +722,31 @@ def handle_request(req, ctx: BrokerContext) -> dict:
 
 
 def serve(socket_path: str, ctx: BrokerContext) -> None:
-    """Serve requests until interrupted. One JSON object per connection."""
+    """Serve requests until ``ctx.stop`` is set. One JSON object per connection.
+
+    accept() wakes every ACCEPT_POLL_SECS to look at the flag. It used to block
+    forever on a daemon thread, so a session that ended -- a timed-out agent
+    included -- left its broker serving whoever still held the socket (the
+    bind-mounted inode stays reachable after the unlink) until the launcher
+    exited.
+    """
     if os.path.exists(socket_path):
         os.unlink(socket_path)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(socket_path)
     os.chmod(socket_path, 0o666)
     srv.listen(4)
+    srv.settimeout(ACCEPT_POLL_SECS)
     logger.info("broker listening on %s", socket_path)
     try:
-        while True:
-            conn, _ = srv.accept()
+        while not ctx.stop.is_set():
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            # The poll timeout is the listener's only; a request is read and
+            # answered blocking, as before.
+            conn.settimeout(None)
             with conn:
                 try:
                     chunks = []
@@ -600,6 +764,10 @@ def serve(socket_path: str, ctx: BrokerContext) -> None:
                     continue
                 try:
                     reply = handle_request(req, ctx)
+                    if ctx.stop.is_set():
+                        # The session ended mid-op: its agent is gone, and what
+                        # the op returned describes a killed container.
+                        break
                     conn.sendall(json.dumps(reply).encode() + b"\n")
                 except OSError as e:
                     # The CLIENT went away (BrokenPipeError/ECONNRESET) -- the

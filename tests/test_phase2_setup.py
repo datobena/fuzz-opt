@@ -1935,3 +1935,54 @@ def test_profile_failures_are_staged_transient_or_deterministic(
     transient = stage in phase2_setup.TRANSIENT_PREBUILD_STAGES
     assert transient != (stage in phase2_setup.DETERMINISTIC_PREBUILD_STAGES)
     assert transient == (stage in ("profile-run", "timeout", "corpus"))
+
+
+def test_a_session_that_left_its_agent_running_touches_the_tree_no_further(monkeypatch, tmp_path):
+    """docker could not confirm the agent gone: it may still be editing the
+    tree, so no diff, build, reset or retry may happen -- the round ends with
+    AgentNotRemovedError naming what is still there."""
+    src, diff, _ = _optimize_and_build_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(phase2_setup, "_prebuild_phase2_corpus_and_profile",
+                        lambda env, target: True)
+
+    def agent(*a, **k):
+        (src / "edit.c").write_text("/* still being written */\n")
+        return {"ok": False, "timed_out": True, "stdout": "", "stderr": "",
+                "agent_container": "agent-1-abc", "agent_removed": False,
+                "broker_leftovers": ["broker-1-2"]}
+    monkeypatch.setattr(phase2_setup, "_invoke_agent_capture", agent)
+    git = []
+    inner = subprocess.run
+    monkeypatch.setattr(phase2_setup.subprocess, "run", lambda cmd, **k: (
+        git.append(cmd) if "git" in str(cmd[:1]) else None) or inner(cmd, **k))
+    built = []
+    with pytest.raises(phase2_setup.AgentNotRemovedError) as ei:
+        phase2_setup.optimize_and_build(
+            str(src), "demo_fuzzer", str(diff), project="demo",
+            build_fn=lambda: built.append(1) or (True, ""),
+            codex_extra_env=_prebuild_env(tmp_path), use_wrapper_validation=True)
+    assert ei.value.containers == ["agent-1-abc", "broker-1-2"]
+    assert built == [] and not (diff / "optimization.diff").exists()
+    after_agent = git[[i for i, c in enumerate(git) if "commit" in c][-1] + 1:]
+    assert not any(op in c for c in after_agent for op in ("reset", "clean", "diff"))
+    assert (src / "edit.c").exists()
+
+
+def test_an_unconfined_or_clean_session_reports_no_leftover_containers():
+    assert phase2_setup._containers_left({"ok": True}) == []
+    assert phase2_setup._containers_left(
+        {"agent_container": "a", "agent_removed": True, "broker_leftovers": []}) == []
+
+
+def test_standalone_phase2_installs_launcher_cleanup(monkeypatch, tmp_path,
+                                                     launcher_cleanup_calls):
+    """phase2_setup.main() is a launcher too (tests/conftest.py records the call)."""
+    import sys
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("[]")
+    monkeypatch.setattr(phase2_setup.config, "PHASE2_SANDBOX", True)
+    monkeypatch.setattr(sys, "argv", ["phase2_setup.py", "--manifest", str(manifest),
+                                      "--experiment-id", "e2"])
+    with pytest.raises(SystemExit):          # an empty manifest builds nothing
+        phase2_setup.main()
+    assert launcher_cleanup_calls == ["e2"]

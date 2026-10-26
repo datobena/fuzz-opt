@@ -23,8 +23,11 @@ like a host path is rewritten under /work.
 """
 from __future__ import annotations
 
+import functools
 import logging
-from pathlib import PurePosixPath
+import os
+import threading
+from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,91 @@ _PATH_REWRITES = {
     "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR": f"{WORK_ROOT}/corpus-fixed",
     "FUZZ_SOURCE_FOLDS_PROFILE_ARTIFACT_DIR": PROFILE_MOUNT,
 }
+
+
+# Docker labels on every agent container and every container the broker starts.
+# A timed-out `docker run` kills only the docker CLIENT, and the container ran on
+# -- 56 of 56 timed-out rounds, 7-193 min past the timeout, still building
+# through the broker. The labels are how the session, the launcher's exit
+# handler and the next launcher's start-up sweep find such a container and tell
+# whose it is.
+#
+# Host-side metadata only: labels are not visible inside the container (no
+# docker socket; they are not put in its env or filesystem), so naming the
+# experiment here leaks nothing. Container NAMES are different -- the network's
+# DNS answers for them -- so names carry only a pid and a random id.
+LABEL_ROLE = "bench.sandbox.role"                  # "agent" | "broker"
+# <pid>:<start time>:<boot id>. The pid alone is not an identity -- pids are
+# reused -- but with the process's start time (clock ticks since boot) and the
+# boot it names exactly one process, so a live launcher's containers can never
+# be mistaken for a dead one's.
+LABEL_LAUNCHER = "bench.sandbox.launcher"
+LABEL_LAUNCHER_PID = "bench.sandbox.launcher-pid"  # readable copy of the pid
+LABEL_EXPERIMENT = "bench.sandbox.experiment"
+LABEL_PROJECT = "bench.sandbox.project"
+LABEL_SESSION = "bench.sandbox.session"            # one optimizer session
+LABEL_TRIAL = "bench.sandbox.trial"
+LABEL_ITER = "bench.sandbox.iter"
+
+# Set once by the launcher (session.install_launcher_cleanup); labels only.
+_LAUNCHER_EXPERIMENT = ""
+
+# Set once the launcher is going down (a signal, or exit): from then on no agent
+# session starts and the broker starts no container -- one started after the
+# launcher swept its containers would outlive it. Here rather than in session.py
+# because the broker reads it too, and session imports broker.
+SHUTTING_DOWN = threading.Event()
+
+
+def boot_id() -> str:
+    """This boot's id, or '' where the kernel does not expose one."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
+
+
+def process_start_time(pid: int) -> str:
+    """Start time of ``pid`` in clock ticks since boot (/proc/<pid>/stat field
+    22), or '' when it cannot be read. Fields are counted after the LAST ')':
+    the command name before it may itself contain spaces and parentheses."""
+    try:
+        return Path(f"/proc/{int(pid)}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError, ValueError):
+        return ""
+
+
+@functools.lru_cache(maxsize=None)
+def _token_for(pid: int) -> str:
+    return f"{pid}:{process_start_time(pid)}:{boot_id()}"
+
+
+def launcher_token() -> str:
+    """This process's LABEL_LAUNCHER value."""
+    return _token_for(os.getpid())
+
+
+def set_launcher_experiment(experiment_id: str) -> None:
+    global _LAUNCHER_EXPERIMENT
+    _LAUNCHER_EXPERIMENT = str(experiment_id or "")
+
+
+def launcher_labels() -> dict[str, str]:
+    """The labels naming this launcher, carried by every container it starts."""
+    labels = {LABEL_LAUNCHER: launcher_token(), LABEL_LAUNCHER_PID: str(os.getpid())}
+    if _LAUNCHER_EXPERIMENT:
+        labels[LABEL_EXPERIMENT] = _LAUNCHER_EXPERIMENT
+    return labels
+
+
+def label_args(labels: dict | None) -> list[str]:
+    """`--label k=v` for each label with a value, in a stable order."""
+    out: list[str] = []
+    for key, value in sorted((labels or {}).items()):
+        if value is None or value == "":
+            continue
+        out += ["--label", f"{key}={value}"]
+    return out
 
 
 def _relative_to(path, root) -> str:
@@ -131,8 +219,13 @@ def build_agent_docker_command(
     *, image: str, src: str, profile: str, tools: str, sock: str, network: str,
     env: dict, memory: str = "8g", cpus: str = "", skill: str = "",
     skill_name: str = "", harness: str = "", transcripts: str = "",
+    name: str = "", labels: dict | None = None,
 ) -> list[str]:
     """`docker run` for the agent container. No socket, no host filesystem.
+
+    ``name`` and ``labels`` (LABEL_*) are what let the session remove the
+    container when the `docker run` client is killed on a timeout -- the
+    container outlives its client otherwise.
 
     ``skill`` is the host path of the ONE optimizer skill directory to expose,
     read-only, under the agent's own skills dir. The prompt says "Use the <skill>
@@ -149,8 +242,16 @@ def build_agent_docker_command(
     That is a property of the tree being mounted, not of this function -- check it
     before pointing this at a new skill.
     """
-    cmd = [
-        "docker", "run", "--rm",
+    cmd = ["docker", "run", "--rm"]
+    if name:
+        cmd += ["--name", name]
+    cmd += label_args(labels)
+    cmd += [
+        # PID 1 is docker's init, not `claude`: PID 1 gets no default signal
+        # actions, so a `docker stop` SIGTERM is ignored unless the CLI handles
+        # it itself. The init forwards it, and reaps what the agent's shell
+        # commands leave behind.
+        "--init",
         "--network", network,
         # The agent compiles nothing and runs nothing privileged -- all docker
         # work happens broker-side, so it needs no capabilities at all.

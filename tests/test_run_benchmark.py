@@ -783,3 +783,35 @@ def test_phase4_on_24h_campaign_counts_late_finds(monkeypatch, tmp_path):
     assert results[0]["trial_duration"] == 86400
     assert results[0]["trial_duration_source"] == "trial metadata"
     assert results[0]["baseline_found_bug"] == 1
+
+
+# --- launcher container hygiene ---------------------------------------------------
+# tests/conftest.py stubs install_launcher_cleanup for every test and records the
+# experiment id of each call: main() must still install it whenever a phase that
+# runs sandboxed optimizer sessions (2 or 3) is about to run, and only then.
+
+def test_main_installs_launcher_cleanup_before_phase_3(monkeypatch, tmp_path,
+                                                       launcher_cleanup_calls):
+    _run_main(monkeypatch, tmp_path, ["--skip-setup"])
+    assert launcher_cleanup_calls == ["exp"]
+
+
+def test_main_installs_launcher_cleanup_before_online_phase_3(monkeypatch, tmp_path,
+                                                              launcher_cleanup_calls):
+    _run_main(monkeypatch, tmp_path, ["--online", "--phase", "3"])
+    assert launcher_cleanup_calls == ["exp"]
+
+
+def test_main_installs_launcher_cleanup_before_phase_2(monkeypatch, tmp_path,
+                                                       launcher_cleanup_calls):
+    ran = []
+    monkeypatch.setattr(run_benchmark, "run_phase_setup",
+                        lambda *a, **k: ran.append(2) or True)
+    _run_main(monkeypatch, tmp_path, ["--phase", "2"])
+    assert ran == [2] and launcher_cleanup_calls == ["exp"]
+
+
+def test_phase4_alone_installs_no_launcher_cleanup(monkeypatch, tmp_path,
+                                                   launcher_cleanup_calls):
+    _run_main(monkeypatch, tmp_path, ["--phase", "4"])
+    assert launcher_cleanup_calls == []

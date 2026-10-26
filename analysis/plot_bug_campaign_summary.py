@@ -94,6 +94,26 @@ def cov_series(csv: Path, grid: np.ndarray) -> tuple[np.ndarray, int]:
     return np.interp(grid, t, g, left=g[0]), g[-1]
 
 
+# A round that waited for a container an earlier session could not remove ran
+# nothing (phase3_online.AGENT_NOT_REMOVED_WAIT_OUTCOME): never an attempt.
+# The round that left it, outcome "agent-not-removed", did run its agent and is.
+WAIT_OUTCOME = "agent-not-removed-wait"
+
+
+def round_counts(rr: list[dict]) -> dict:
+    """rounds_attempted / rounds_kept / rounds_by_outcome, waiting rounds apart
+    (rounds_waiting_for_orphans, present only when there were any)."""
+    waits = [r for r in rr if r["outcome"] == WAIT_OUTCOME]
+    tried = [r for r in rr if r["outcome"] != WAIT_OUTCOME]
+    out = {"rounds_attempted": len(tried),
+           "rounds_kept": sum(r["outcome"] == "kept" for r in tried),
+           "rounds_by_outcome": {o: sum(r["outcome"] == o for r in tried)
+                                 for o in sorted({str(r["outcome"]) for r in tried})}}
+    if waits:
+        out["rounds_waiting_for_orphans"] = len(waits)
+    return out
+
+
 def rounds(tdir: Path) -> list[dict]:
     out = []
     for prov in sorted(tdir.glob("optimized/online/trials/trial_*/iter_*/round_provenance.json")):
@@ -177,7 +197,9 @@ def main() -> int:
     per_trial_h = core_s / 3600 / n["optimized"]
     raw = float(np.median(final_execs["optimized"]) / np.median(final_execs["baseline"]))
     cost_adj = raw * a.hours / (a.hours + per_trial_h)
-    rr = rounds(tdir)
+    all_rounds = rounds(tdir)
+    counts = round_counts(all_rounds)
+    rr = [r for r in all_rounds if r["outcome"] != WAIT_OUTCOME]
     kept = [r for r in rr if r["outcome"] == "kept"]
 
     ttb = {arm: sorted(bugs[target].get(arm, {}).values()) for arm in ARMS}
@@ -206,9 +228,7 @@ def main() -> int:
                            "first_h": (round(min(v[arm].values()), 2) if v.get(arm) else None)}
                      for arm in ARMS} for s, v in bugs.items()},
         "non_reproducing": {arm: dedup[arm]["non_reproducing"] for arm in ARMS},
-        "rounds_attempted": len(rr), "rounds_kept": len(kept),
-        "rounds_by_outcome": {o: sum(r["outcome"] == o for r in rr)
-                              for o in sorted({str(r["outcome"]) for r in rr})},
+        **counts,
         "kept_speedup_median": (float(np.median([r["speedup"] for r in kept]))
                                 if kept else None),
     }

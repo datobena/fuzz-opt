@@ -9,7 +9,7 @@ Answers, in order:
 The distinction between 2 and 3 is the point. b1..b6 could report only a single
 optimizer draw; this reports ten, so every number below carries a real spread.
 """
-import json, os, sys, statistics as st
+import json, os, re, sys, statistics as st
 
 # The pipeline modules (config, phase*, lib/, sandbox/) live at the repo root,
 # one level up; Python only puts THIS script's directory on sys.path.
@@ -23,6 +23,24 @@ EXP = "online-24h-c2-libxml2"
 KEY = 'libxml2-arvo-1972'
 R = f'/home/sefcom/fuzz-opt/results/{EXP}/{KEY}'
 TRIALS = f'{R}/optimized/online/trials'
+# A round that only waited for a container an earlier session could not remove
+# (phase3_online.AGENT_NOT_REMOVED_WAIT_OUTCOME) ran nothing: never an attempt.
+WAIT_OUTCOME = "agent-not-removed-wait"
+
+
+def round_provenances(trial_dir):
+    """[(iter, round_provenance)] for every round the optimizer recorded, in
+    order: whatever iter_NN dirs exist (a fixed range missed later rounds),
+    iter_00 -- the baseline copy, not a round -- left out."""
+    out = []
+    names = os.listdir(trial_dir) if os.path.isdir(trial_dir) else []
+    for name in names:
+        m = re.fullmatch(r"iter_(\d+)", name)
+        f = os.path.join(trial_dir, name, "round_provenance.json")
+        if m and int(m.group(1)) > 0 and os.path.exists(f):
+            with open(f) as fh:
+                out.append((int(m.group(1)), json.load(fh)))
+    return sorted(out, key=lambda x: x[0])
 
 
 def fuzzer_stats(arm, t):
@@ -72,14 +90,13 @@ print("=" * 86)
 
 # ---- 1. optimizer rounds -------------------------------------------------
 print("\n[1] OPTIMIZER ROUNDS (replay gate, threshold 1.02x)")
-per_round, cum = {}, {}
+per_round, cum, waiting = {}, {}, {}
 for t in range(10):
     c, n = 1.0, 0
-    for it in range(1, 12):
-        f = f'{TRIALS}/trial_{t:02d}/iter_{it:02d}/round_provenance.json'
-        if not os.path.exists(f):
+    for it, d in round_provenances(f'{TRIALS}/trial_{t:02d}'):
+        if d['outcome'] == WAIT_OUTCOME:
+            waiting[t] = waiting.get(t, 0) + 1
             continue
-        d = json.load(open(f))
         per_round.setdefault(it, []).append(d)
         if d['outcome'] == 'kept' and d['speedup']:
             c *= d['speedup']
@@ -95,6 +112,9 @@ for it in sorted(per_round):
         oc[r['outcome']] = oc.get(r['outcome'], 0) + 1
     med = f"{st.median(sp):.4f}x" if sp else "n/a"
     print(f"  round {it}: {len(rows):2d} reported | kept {len(kept):2d} | median {med:>9} | {oc}")
+if waiting:
+    print("  rounds that only waited for a leftover container (not attempts): "
+          + ", ".join(f"trial_{t:02d} x{k}" for t, k in sorted(waiting.items())))
 
 print("\n  cumulative speedup per optimizer (product of kept folds):")
 for t, (c, n) in sorted(cum.items(), key=lambda kv: kv[1][0]):

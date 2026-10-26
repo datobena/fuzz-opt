@@ -948,6 +948,14 @@ def main():
     logger.info("Phases to run: %s", phases)
     save_state(state, experiment_id)
 
+    if 2 in phases or 3 in phases:
+        # Phases 2 and 3 run sandboxed optimizer sessions. Remove agent/broker
+        # containers a dead launcher left behind, and this launcher's own at exit
+        # or on SIGTERM/SIGINT: a killed `docker run` client leaves its
+        # container running (sandbox/session.py).
+        from sandbox.session import install_launcher_cleanup
+        install_launcher_cleanup(experiment_id)
+
     overall_success = True
 
     for phase in phases:
