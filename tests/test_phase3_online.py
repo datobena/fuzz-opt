@@ -1497,3 +1497,81 @@ def test_waiting_rounds_are_not_counted_as_attempts(tmp_path):
     a.orphan_wait_rounds = 2
     assert phase3_online._rounds_record([a], per_trial=False) == {
         "rounds_attempted": 4, "rounds_waiting_for_orphans": 2}
+
+
+@pytest.mark.parametrize('repair', [False, True])
+def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(monkeypatch, tmp_path, repair):
+    """A corrected broker build may still reach the ordinary acceptance gate."""
+    from lib.source_scope import SourceScopeGuard, SourceScopeViolation
+    from sandbox import broker
+
+    ctx = _prebuild_round_ctx(tmp_path)
+    tree = tmp_path / 'source'; (tree / 'fuzz').mkdir(parents=True)
+    harness = tree / 'fuzz/target.c'; harness.write_text('int LLVMFuzzerTestOneInput(void) { return 0; }')
+    (tree / 'library.c').write_text('int original;')
+    ctx.source_tree = str(tree)
+    ctx.source_root = str(tree)
+    monkeypatch.setattr(phase3_online.config, 'ONLINE_FIXED_MUTATION_CORPUS', True)
+    rc = {key: 1 for key in ('harvested', 'checked_count', 'crashers_removed',
+                            'tuning_count', 'units_per_s', 'budget_secs', 'smoke_count')}
+    rc.update(tuning='tuning', smoke='smoke', checked='checked', gate='gate')
+    monkeypatch.setattr(phase3_online, 'prepare_round_corpus', lambda **kw: rc)
+    monkeypatch.setattr(phase3_online, 'prework_image_for', lambda entry: 'img')
+    monkeypatch.setattr(phase3_online, '_gate_replay_rate', lambda directory: None)
+    monkeypatch.setattr(phase3_online, 'build_round_env', lambda **kw: {})
+    monkeypatch.setattr(phase3_online, '_reassert_edit_mtimes', lambda tree: None)
+    monkeypatch.setattr(phase3_online, '_carry_forward_agent_memory', lambda *a: False)
+    monkeypatch.setattr(phase3_online, '_write_cpu_cost_summary', lambda c: None)
+    monkeypatch.setattr(phase3_online, '_write_cumulative_diff', lambda *a: None)
+    monkeypatch.setattr(phase2_setup, 'optimizer_provenance', lambda: {})
+    monkeypatch.setattr(broker, '_run_build_snapshot', lambda candidate: (True, 'built'))
+    accepted = []
+    monkeypatch.setattr(phase3_online, 'apply_round_outcome', lambda ready, **kw:
+        accepted.append(ready) or (kw['opt_bin_dir'] if ready else kw['previous_best_bin']))
+
+    def optimize(source, target, diff_dir, **kwargs):
+        report = Path(diff_dir) / 'source_scope_violation.json'
+        g = SourceScopeGuard(tree, harness='fuzz/target.c', report_path=report)
+        original = harness.read_bytes()
+        try:
+            (tree / 'library.c').write_text('int faster;')
+            harness.write_text('bad harness')
+            candidate = broker.BrokerContext(image='img', source_dir=str(tree), out_dir='/out',
+                corpus_dir='/corpus', fuzz_target='target', project='libxml2', cpu=0, source_guard=g)
+            assert not broker._run_build(candidate)[0]
+            if not repair:
+                with pytest.raises(SourceScopeViolation): g.validate()
+                g.restore()
+                return False
+            harness.write_bytes(original)
+            metadata = g.entries['fuzz/target.c']
+            os.utime(harness, ns=(harness.stat().st_atime_ns, metadata['mtime_ns']))
+            assert broker._run_build(candidate)[0]
+            g.validate()
+            (Path(diff_dir) / 'optimization.diff').write_text('diff --git a/library.c b/library.c\n')
+            assert not report.exists()
+            assert list(report.parent.glob('source_scope_violation.resolved-*.json'))
+            return True
+        finally:
+            g.close()
+    monkeypatch.setattr(phase2_setup, 'optimize_and_build', optimize)
+    monkeypatch.setattr(phase2_setup, '_reject_if_optimization_removed_bug', lambda **kw:
+        (kw['optimization_ready'], None))
+    monkeypatch.setattr(phase3_online.afl_replay, 'find_crashers', lambda **kw:
+        {'ok': True, 'scanned': 1, 'expected': 1, 'crashers': []})
+    gates = []
+    def speed_gate(**kwargs):
+        gates.append(True)
+        return {'replay_speedup': 1.25, 'partial': False,
+                'baseline': {'median_time_s': 10}, 'optimized': {'median_time_s': 8}}
+    monkeypatch.setattr(phase2_setup, 'run_replay_speedup', speed_gate)
+    monkeypatch.setattr(phase2_setup, '_reject_if_no_replay_speedup', lambda **kw:
+        (kw['optimization_ready'], None))
+
+    result = phase3_online.run_round(ctx, phase3_online.OnlineState(), 1)
+    assert result[0] is repair and accepted == [repair]
+    assert gates == ([True] if repair else [])
+    prov = json.loads((Path(ctx.online_dir) / 'iter_01/round_provenance.json').read_text())
+    assert prov['outcome'] == ('kept' if repair else 'rejected-source-scope')
+    history = Path(ctx.online_dir) / 'iter_01/source_diff/source_scope_history.jsonl'
+    assert history.exists()

@@ -81,7 +81,7 @@ fuzz-support directories and fuzz-named files, files defining fuzz entrypoints,
 conventional `config.h`/`config.hh`/`config.hpp`/`config.hxx` configuration headers,
 and targets of protected symlink aliases. New files, deleted/renamed paths,
 permission changes, hardlinks, symlink/type replacements, and modifications or
-timestamp changes to protected files reject the round. Pre-existing symlinks
+timestamp changes to protected files reject the current build. Pre-existing symlinks
 must remain unchanged; baseline hardlinks fail closed.
 
 For support code with unconventional names, add project-relative patterns to
@@ -97,9 +97,18 @@ Every sandbox broker build compiles a validated private snapshot instead of the
 live writable agent tree. The authoritative rebuild runs after agent/broker
 removal is confirmed and the tree is checked again. Its generated build files
 are discarded while preserving the validated source edits. The host policy and
-backup never appear in agent mounts. Violations are recorded in
-`source_scope_violation.json` and the complete pre-agent tree is restored,
-including ignored/untracked paths. Online provenance records
+backup never appear in agent mounts. A rejected build reports the offending
+paths and expected protected-file timestamps/modes so the agent can restore
+those files, keep valid library source edits, and retry within the same round.
+Every request and the final candidate are checked afresh; a past violation does
+not permanently reject a corrected candidate.
+
+`source_scope_violation.json` describes an actively invalid candidate. Successful
+fresh validation archives that report as `source_scope_violation.resolved-*.json`
+and clears the active rejection. `source_scope_history.jsonl` retains rejection
+and resolution events independently of acceptance. If the agent exits with an
+invalid tree, the host rejects the final candidate and restores the complete
+pre-agent tree, including ignored/untracked paths. Online provenance records
 `rejected-source-scope`; it is not optimization convergence evidence.
 
 If a previous container may still write, restoration is deferred. A sibling

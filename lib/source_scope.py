@@ -17,6 +17,8 @@ import re
 import shutil
 import stat
 import tempfile
+import time
+import uuid
 
 SOURCE_SUFFIXES = {'.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'}
 FUZZ_DIRS = {'fuzz', 'fuzzer', 'fuzzers', 'fuzzing', 'oss-fuzz', 'oss_fuzz',
@@ -47,7 +49,9 @@ def require_recovered(source_dir):
 class SourceScopeViolation(RuntimeError):
     def __init__(self, violations):
         self.violations = list(violations)
-        super().__init__('Source edit scope rejected: ' + '; '.join(self.violations[:25]))
+        super().__init__('Source edit scope rejected: ' + '; '.join(self.violations[:25])
+                         + '. Restore the listed protected paths and metadata, then retry the build; '
+                         'valid library source edits may be kept.')
 
 
 def _copy_and_inventory(root: Path, destination: Path | None = None):
@@ -244,61 +248,87 @@ class SourceScopeGuard:
             before, after = self.entries.get(name), entries.get(name)
             label = name or '.'
             if before is None:
-                problems.append(f'{label}: added path')
+                problems.append(f'{label}: added path; remove it')
             elif after is None:
-                problems.append(f'{label}: deleted path')
-            elif before['kind'] != after['kind'] or before['mode'] != after['mode']:
-                problems.append(f'{label}: file type or mode changed')
+                problems.append(f'{label}: deleted path; restore it')
+            elif before['kind'] != after['kind']:
+                problems.append(f"{label}: file type changed (expected {before['kind']})")
+            elif before['mode'] != after['mode']:
+                problems.append(f"{label}: mode changed (expected {before['mode']:#o})")
             elif before['kind'] == 'file':
                 if before['nlink'] != after['nlink']:
-                    problems.append(f'{label}: hardlink count changed')
-                elif name not in self.allowed and (before['sha256'] != after['sha256'] or before['mtime_ns'] != after['mtime_ns']):
-                    problems.append(f'{label}: protected file modified')
+                    problems.append(f"{label}: hardlink count changed (expected {before['nlink']})")
+                elif name not in self.allowed:
+                    metadata = f"mtime_ns={before['mtime_ns']}, mode={before['mode']:#o}"
+                    if before['sha256'] != after['sha256']:
+                        problems.append(f'{label}: protected file content modified; '
+                                        f'restore original bytes and {metadata}')
+                    elif before['mtime_ns'] != after['mtime_ns']:
+                        problems.append(f'{label}: protected timestamp changed '
+                                        f'(expected {metadata})')
             elif before != after:
                 problems.append(f'{label}: protected path modified')
         if problems:
-            self._reject(problems)
+            raise SourceScopeViolation(problems)
 
-    def _reject(self, problems):
-        self.violations.extend(x for x in problems if x not in self.violations)
+    def _record_event(self, event, violations):
         if self.report_path:
             self.report_path.parent.mkdir(parents=True, exist_ok=True)
-            self.report_path.write_text(json.dumps({'ok': False, 'violations': self.violations}, indent=2))
+            history = self.report_path.with_name('source_scope_history.jsonl')
+            with history.open('a') as output:
+                output.write(json.dumps({'event': event, 'timestamp': time.time(),
+                                         'violations': list(violations)}) + '\n')
+
+    def _reject(self, problems):
+        # This report describes the CURRENT candidate only. Earlier rejected
+        # builds remain in history, but cannot poison a corrected candidate.
+        self.violations = list(problems)
+        self._record_event('rejected', self.violations)
+        if self.report_path:
+            self.report_path.write_text(json.dumps({'ok': False,
+                'violations': self.violations}, indent=2))
         raise SourceScopeViolation(problems)
 
+    def _clear_rejection(self):
+        previous = self.violations
+        if self.report_path and self.report_path.exists():
+            # Preserve the forensic record separately from the active filename
+            # that the outer acceptance gate uses to identify invalid outputs.
+            self.report_path.replace(self.report_path.with_name(
+                'source_scope_violation.resolved-' + uuid.uuid4().hex + '.json'))
+        if previous:
+            self._record_event('resolved', previous)
+        self.violations = []
+
     def validate(self):
-        if self.violations:
-            self._reject(self.violations)
         try:
             if self._root_identity() != self._identity:
-                self._reject(['source root was replaced'])
+                raise SourceScopeViolation(['source root was replaced'])
             self._check(_copy_and_inventory(self.source))
         except SourceScopeViolation as exc:
             self._reject(exc.violations)
         except OSError as exc:
             self._reject([f'cannot safely inspect source ({type(exc).__name__})'])
+        self._clear_rejection()
 
     @contextmanager
     def snapshot(self):
         """Validated, private build input. Agent writes cannot race the build."""
-        if self.violations:
-            self._reject(self.violations)
         work = Path(tempfile.mkdtemp(prefix='candidate-', dir=self._private))
         candidate = work / self.source.name
         try:
             if self._root_identity() != self._identity:
-                self._reject(['source root was replaced'])
+                raise SourceScopeViolation(['source root was replaced'])
             entries = _copy_and_inventory(self.source, candidate)
             self._check(entries)
-            yield candidate
         except SourceScopeViolation as exc:
             self._reject(exc.violations)
         except OSError as exc:
             self._reject([f'cannot safely snapshot source ({type(exc).__name__})'])
-        finally:
-            # Kept until the complete optimizer session is confirmed stopped:
-            # a failed docker client can leave a builder using this snapshot.
-            pass
+        self._clear_rejection()
+        # Kept until the complete optimizer session is confirmed stopped:
+        # a failed docker client can leave a builder using this snapshot.
+        yield candidate
 
     def restore(self, snapshot=None):
         """Restore ignored/untracked paths too, only after all writers stopped."""
@@ -337,6 +367,19 @@ def _remove_tree(path):
     for child in path.iterdir():
         _remove_tree(child)
     path.rmdir()
+
+
+def active_rejection(report_path):
+    """Read only the active candidate report, never forensic history."""
+    try:
+        report = json.loads(Path(report_path).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {'ok': False, 'violations': ['active scope report could not be read']}
+    if not isinstance(report, dict) or not isinstance(report.get('ok'), bool):
+        return {'ok': False, 'violations': ['active scope report is malformed']}
+    return report if not report['ok'] else None
 
 
 def current_guard():

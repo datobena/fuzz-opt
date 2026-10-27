@@ -1759,8 +1759,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 image=prework_image_for(ctx.entry))
 
     scope_report = os.path.join(diff_dir, 'source_scope_violation.json')
+    active_scope_failure = phase2_setup.source_scope.active_rejection(scope_report)
     opt_rej = ({'stage': 'source_scope', 'reason': 'host rejected out-of-scope edits',
-                'report': scope_report} if os.path.exists(scope_report) else None)
+                'report': scope_report} if active_scope_failure else None)
     if opt_rej:
         optimization_ready = False
     replay = None

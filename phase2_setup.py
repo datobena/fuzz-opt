@@ -2466,7 +2466,9 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
         "The host enforces existing library source/header files only. Do not "
         "add, delete, rename or change permissions of files. Protected "
         "harness/support paths and non-source files are verified by the host "
-        "before every build; a violation rejects the entire round.",
+        "before every build. A violation rejects that build: restore the listed "
+        "protected paths and metadata, keep valid library edits, and retry. "
+        "The final candidate must pass the same check before acceptance.",
         "Do not edit the harness, shared fuzz-only support code, build "
         "scripts, Dockerfiles, or project metadata.",
     ]

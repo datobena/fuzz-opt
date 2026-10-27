@@ -53,9 +53,9 @@ def test_protected_files_rejected_and_full_baseline_restored(tree, guard, name):
         guard.validate()
     guard.restore()
     assert (tree / name).read_bytes() == original
-    # A repaired agent cannot erase a violation observed by the broker.
-    with pytest.raises(SourceScopeViolation):
-        guard.validate()
+    # A corrected tree can be retried within this same round.
+    guard.validate()
+    assert guard.violations == []
 
 
 @pytest.mark.parametrize('attack', ['added_source', 'ignored_file', 'deleted', 'rename',
@@ -343,3 +343,114 @@ def test_resuming_same_output_directory_archives_stale_violation(tree, tmp_path,
     assert _optimize(monkeypatch, tree, tmp_path, good_agent, lambda: (True, 'built'))
     assert not (tmp_path / 'diff/source_scope_violation.json').exists()
     assert list((tmp_path / 'diff').glob('source_scope_violation.previous-*.json'))
+
+
+def _restore_protected_file(tree, guard, name, content):
+    path = tree / name
+    path.write_bytes(content)
+    metadata = guard.entries[name]
+    path.chmod(metadata['mode'])
+    os.utime(path, ns=(path.stat().st_atime_ns, metadata['mtime_ns']))
+
+
+def test_repaired_broker_build_keeps_valid_library_edits_and_forensic_history(tree, tmp_path, monkeypatch):
+    from sandbox import broker
+    report = tmp_path / 'reports/source_scope_violation.json'
+    g = SourceScopeGuard(tree, harness='fuzz/target.c', report_path=report)
+    try:
+        original = (tree / 'fuzz/target.c').read_bytes()
+        (tree / 'library.c').write_text('int good_optimization;')
+        (tree / 'fuzz/target.c').write_text('bad harness')
+        ctx = broker.BrokerContext(image='img', source_dir=str(tree), out_dir='/out',
+            corpus_dir='/corpus', fuzz_target='target', project='project', cpu=0, source_guard=g)
+        built = []
+        def build(candidate):
+            built.append(Path(candidate.build_source_dir))
+            assert (built[-1] / 'library.c').read_text() == 'int good_optimization;'
+            assert (built[-1] / 'fuzz/target.c').read_bytes() == original
+            return True, 'built'
+        monkeypatch.setattr(broker, '_run_build_snapshot', build)
+        ok, message = broker._run_build(ctx)
+        assert not ok and not built and 'retry the build' in message
+        assert f"mtime_ns={g.entries['fuzz/target.c']['mtime_ns']}" in message
+        _restore_protected_file(tree, g, 'fuzz/target.c', original)
+        assert broker._run_build(ctx)[0] and len(built) == 1
+        assert (tree / 'library.c').read_text() == 'int good_optimization;'
+        assert not report.exists() and g.violations == []
+        events = [json.loads(line)['event'] for line in report.with_name('source_scope_history.jsonl').read_text().splitlines()]
+        assert events == ['rejected', 'resolved']
+        assert list(report.parent.glob('source_scope_violation.resolved-*.json'))
+    finally: g.close()
+
+
+def test_repeated_invalid_broker_build_still_rejects_and_keeps_tree_untouched(tree, tmp_path, monkeypatch):
+    from sandbox import broker
+    report = tmp_path / 'reports/source_scope_violation.json'
+    g = SourceScopeGuard(tree, harness='fuzz/target.c', report_path=report)
+    try:
+        (tree / 'library.c').write_text('int keep_this;')
+        (tree / 'fuzz/target.c').write_text('invalid')
+        ctx = broker.BrokerContext(image='img', source_dir=str(tree), out_dir='/out',
+            corpus_dir='/corpus', fuzz_target='target', project='project', cpu=0, source_guard=g)
+        monkeypatch.setattr(broker, '_run_build_snapshot', lambda c: pytest.fail('must not build'))
+        assert not broker._run_build(ctx)[0]
+        assert not broker._run_build(ctx)[0]
+        assert report.exists()
+        assert (tree / 'fuzz/target.c').read_text() == 'invalid'
+        assert (tree / 'library.c').read_text() == 'int keep_this;'
+        assert len(report.with_name('source_scope_history.jsonl').read_text().splitlines()) == 2
+    finally: g.close()
+
+
+def test_timestamp_only_feedback_explains_how_to_repair_without_reverting_library(tree, guard):
+    original = (tree / 'fuzz/target.c').read_bytes()
+    (tree / 'library.c').write_text('int keep_optimization;')
+    (tree / 'fuzz/target.c').write_bytes(original)
+    expected = guard.entries['fuzz/target.c']['mtime_ns']
+    os.utime(tree / 'fuzz/target.c', ns=(1, expected + 1000))
+    with pytest.raises(SourceScopeViolation, match=f'protected timestamp changed.*mtime_ns={expected}'):
+        guard.validate()
+    _restore_protected_file(tree, guard, 'fuzz/target.c', original)
+    guard.validate()
+    assert (tree / 'library.c').read_text() == 'int keep_optimization;'
+
+
+@pytest.mark.parametrize('retry_build', [False, True])
+def test_corrected_broker_violation_passes_authoritative_rebuild(tree, tmp_path, monkeypatch, retry_build):
+    from sandbox import broker
+    from lib import source_scope
+    original = (tree / 'fuzz/target.c').read_bytes()
+    checked = []
+    monkeypatch.setattr(broker, '_run_build_snapshot', lambda c: (True, 'broker built'))
+    def agent(*args, **kwargs):
+        g = source_scope.current_guard()
+        (tree / 'library.c').write_text('int good_optimization;')
+        (tree / 'fuzz/target.c').write_text('bad')
+        ctx = broker.BrokerContext(image='img', source_dir=str(tree), out_dir='/out',
+            corpus_dir='/corpus', fuzz_target='target', project='project', cpu=0, source_guard=g)
+        assert not broker._run_build(ctx)[0]
+        _restore_protected_file(tree, g, 'fuzz/target.c', original)
+        if retry_build: assert broker._run_build(ctx)[0]
+        return {'ok':True, 'timed_out':False, 'stdout':'done', 'stderr':''}
+    def build():
+        checked.append(True)
+        assert (tree / 'library.c').read_text() == 'int good_optimization;'
+        assert (tree / 'fuzz/target.c').read_bytes() == original
+        return True, 'authoritative build'
+    assert _optimize(monkeypatch, tree, tmp_path, agent, build)
+    assert checked == [True]
+    assert source_scope.active_rejection(tmp_path / 'diff/source_scope_violation.json') is None
+    assert (tmp_path / 'diff/source_scope_history.jsonl').exists()
+
+
+def test_active_scope_status_ignores_history_and_successful_report(tmp_path):
+    from lib.source_scope import active_rejection
+    report = tmp_path / 'source_scope_violation.json'
+    report.with_name('source_scope_history.jsonl').write_text('{"event":"rejected"}\n')
+    assert active_rejection(report) is None
+    report.write_text('{"ok":true}')
+    assert active_rejection(report) is None
+    report.write_text('{"ok":false,"violations":["bad"]}')
+    assert active_rejection(report)['violations'] == ['bad']
+    report.write_text('broken')
+    assert active_rejection(report)['ok'] is False
