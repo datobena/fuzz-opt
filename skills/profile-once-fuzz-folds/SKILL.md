@@ -18,10 +18,12 @@ you never do them yourself:
    corpus, and ranked into `hotspots.txt`.
 3. (you) Walk that single ranked hotspot list. For each candidate, apply a source fold, rebuild, and
    keep it only if a deterministic replay of the same frozen corpus is measurably faster than the
-   best time so far. Otherwise revert.
+   best time so far. Otherwise revert that implementation, diagnose it, and try a justified
+   revision within the bounded search below before abandoning the idea.
 
 Everything is measured on the same frozen input set, so **what you profiled is exactly what you
-measure**: the hotspot list and the keep/revert gate can never disagree, and every number is
+measure**: the profile and replay describe the same workload, but only replay establishes
+whether a particular implementation improves it. Every number is
 reproducible.
 
 **Never re-profile.** There is no refresh window, no evolving corpus, and no post-refresh clean pass
@@ -304,7 +306,8 @@ If `source_dir/.git` does not exist:
 
 1. Initialize a throwaway local git repo in `source_dir`.
 2. Commit a baseline snapshot with a local throwaway identity.
-3. Restore only the current cycle's changes from that local repo when needed.
+3. Before each cycle, save a fresh backup of the previous-best source state. Restore only that
+   cycle's changes from this backup when needed; the initial commit may predate accepted folds.
 
 ### 3. Use the fixed corpus (harness-built)
 
@@ -361,6 +364,8 @@ Persist a small `current_profile.json` recording the artifact dir plus the top `
 6. Record each candidate with: exact source location, its `hotspots.txt` row (rank, `caused%`, the
    dominant column), heuristic trigger if any, provenance audit and assigned Category, rewrite
    pattern, expected impact, coverage risk, and risk label (`Safe`, `Safe*`, `Aggressive`).
+   Assign a hypothesis ID to the proposed mechanism for removing cost, and a separate variant ID
+   to each concrete implementation. Record which cost each variant should remove.
 
 ### 6. Anchor the baseline replay time (once)
 
@@ -369,9 +374,15 @@ Persist a small `current_profile.json` recording the artifact dir plus the top `
    `--cpu` from `FUZZ_SOURCE_FOLDS_PROFILE_CPU`.
 2. Set `previous_best = baseline_median`. This is the value the first cycle must beat.
 
-### 7. Iterate the hotspots (one cycle per hotspot or tightly-related group)
+### 7. Iterate the hotspots (bounded implementation variants per hypothesis)
 
-For each ranked candidate, in order:
+For each ranked hypothesis, in order, try an initial implementation and up to **two meaningful
+revisions** when justified by a concrete diagnosis, within the existing session deadline. A cycle
+is one implementation variant, not the entire hypothesis. Build/smoke repair attempts share this
+revision budget. Carry the ledger and spent budget into follow-up sessions; retries do not reset it.
+There is no requirement to spend all attempts when no credible alternative remains.
+
+For each variant:
 
 1. Apply the source fold(s). Every function you **insert** must be named with the `fold_` prefix and
    carry both coverage-suppression attributes on its definition; existing functions whose body you
@@ -382,8 +393,9 @@ For each ranked candidate, in order:
 3. Validate build and smoke run through the selected gate: `FUZZ_SOURCE_FOLDS_VALIDATE_COMMAND` if
    set; otherwise `FUZZ_SOURCE_FOLDS_BUILD_COMMAND` then, only after it succeeds,
    `FUZZ_SOURCE_FOLDS_SMOKE_COMMAND`; otherwise `phase2_build_check.py <source_dir>` (build only,
-   no `--run-fuzzer`). If build or smoke fails, repair or revert this cycle's edits and continue to
-   the next hotspot.
+   no `--run-fuzzer`). A build or smoke failure rejects this implementation. Diagnose the error
+   and repair it within the revision budget, or restore the previous-best source state. Never
+   retain a crashing or contract-violating variant while exploring another implementation.
 4. **Acceptance gate (vs previous best).** First confirm the fold passed the provenance audit and is
    Category 1, 2, or 3 — the timing gate runs only on contract-compliant folds and cannot rescue one
    that fails the audit. Then run `replay_timing.py` on the fixed corpus for the optimized `/out`
@@ -392,13 +404,36 @@ For each ranked candidate, in order:
    On keep, set `previous_best = optimized_median`. On no improvement, revert this cycle and leave
    `previous_best` unchanged. Do not gate on coverage — but a coverage drop on an input-dependent
    path means the fold was not contract-compliant, so revert it and record why.
-5. **Never re-profile.** Continue to the next ranked hotspot from the same profile.
+5. **Diagnose before abandoning the hypothesis.** A disappointing replay measures this concrete
+   implementation; it does not by itself disprove the proposed optimization mechanism. Record:
+   - **measurement uncertainty:** the apparent delta is within observed jitter or timing failed.
+     Use only bounded confirmation with the same fixed corpus and measurement settings; never
+     keep repeating an unchanged binary until a favorable sample appears. Unresolved uncertainty
+     is not a win.
+   - **implementation unsuccessful:** identify a concrete cause, such as added allocation,
+     copying, dispatch, or bookkeeping that offsets the removed work, or a fast path that fails
+     to eliminate the intended work. Inspect source, existing call trees, and available compiler
+     output; do not invent new profiles. If a specific revision addresses the cause and enough
+     opportunity remains, restore the previous-best state and implement that revision.
+   - **hypothesis exhausted:** existing evidence shows insufficient removable cost to clear the
+     gate, no safe implementation is available, or no justified alternative remains. Record the
+     evidence; one slow variant alone is insufficient to establish this status.
+6. Move to the next ranked hypothesis when it is exhausted or its variant/time budget is reached.
+   Record unfinished ideas as **budget deferred**, including the best remaining revision and why
+   it was not tested; do not report them as disproved. Preserve every earlier accepted fold when
+   restoring a variant, using a fresh previous-best backup for each cycle (also in a throwaway
+   repo: do not restore the round-start snapshot over accepted work). A successful variant may
+   be refined within the same budget, but every revision must beat the new `previous_best`.
+7. **Never re-profile**, change the fixed corpus, loosen safety/scope rules, or lower the timing
+   threshold to rescue a hypothesis. Continue using the same single profile.
 
 ### 8. Stop
 
-Stop when the ranked hotspot list is exhausted — no untried row or group left whose `caused%`
-clears the keep bar — or when a conservative safety cap is hit (max cycles ≈ list length plus small
-slack, or a wall-clock budget).
+Stop when every eligible hypothesis is exhausted or has a retained implementation with no
+justified revision left, or when the session deadline or variant budget prevents further work.
+Allow at most three implementation variants per hypothesis (initial plus two revisions), rather
+than counting one failed cycle as an exhausted hotspot. Mark any untested or still-promising
+hypotheses as budget deferred when a cap is reached. The replay acceptance gate remains strict.
 
 ## Candidate Guardrails
 
@@ -436,7 +471,7 @@ Finish only when all are true:
 2. source-only verification succeeds on the accumulated final tree
 3. the selected final build succeeds
 4. the wrapper's smoke run, when one is provided, succeeds through the selected validation gate
-5. every skipped, narrowed, or reverted candidate is documented with the reason
+5. every skipped, narrowed, or reverted implementation and every hypothesis stop reason is documented
 
 ## Reporting
 
@@ -447,10 +482,12 @@ Report:
    and the top rows you worked from
 3. **headline cumulative speedup** — `baseline_median`, `final_optimized_median`, and
    `cumulative_speedup = baseline_median / final_optimized_median` as a multiplier and a percent
-4. **per-cycle table** — hotspot, kept or reverted, `previous_best → this_median`, and the delta
+4. **per-variant table** — hypothesis/variant IDs, hotspot, intended cost removed, kept or
+   reverted, `previous_best → this_median`, delta, diagnosis, and revision rationale
 5. **changed files** — with each applied candidate's Category (1/2/3) and risk label (`Safe`,
    `Safe*`, `Aggressive`)
-6. **skipped, narrowed, or reverted candidates** and why
+6. **hypothesis outcomes** — distinguish implementation unsuccessful, hypothesis exhausted,
+   and budget deferred; include evidence and any untested next revision
 7. source-only verification status, and `inserted_funcs_annotated: N/N`
 8. final build status, and whether it used wrapper-provided commands or the OSS-Fuzz helper path
 9. final harness smoke-run status

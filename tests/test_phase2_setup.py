@@ -403,6 +403,33 @@ def test_make_retry_prompt_references_codex_skill_and_build_errors():
     assert "outer phase 2 wrapper" in prompt
 
 
+@pytest.mark.parametrize("backend", ["codex", "claude"])
+@pytest.mark.parametrize("use_wrapper_validation", [False, True])
+@pytest.mark.parametrize("retry", [False, True])
+def test_optimizer_prompts_keep_bounded_variant_search_across_modes(
+    backend, use_wrapper_validation, retry,
+):
+    kwargs = {"backend": backend, "use_wrapper_validation": use_wrapper_validation}
+    if retry:
+        prompt = phase2_setup._make_retry_prompt("demo_fuzzer", "compile failed", **kwargs)
+        assert "same hypothesis/variant ledger" in prompt
+    else:
+        prompt = phase2_setup._make_apply_fuzz_source_folds_prompt_with_mode(
+            "fuzz/target.cc", **kwargs,
+        )
+
+    # Both backends and validation paths must retain the same exploration and
+    # acceptance policy, including when an outer build failure restarts the agent.
+    assert phase2_setup._IMPLEMENTATION_SEARCH_POLICY in prompt
+    assert "up to two meaningful revisions after the initial variant" in prompt
+    assert "do not reset it on retries" in prompt
+    assert "preserving earlier accepted changes" in prompt
+    assert "measurably faster than the previous best, beyond observed noise" in prompt
+    assert "Never repeat unchanged timing until it passes" in prompt
+    assert "budget deferred" in prompt
+    assert "never re-profile" in prompt.lower() or "Do not re-profile" in prompt
+
+
 def test_invoke_codex_uses_dangerous_bypass_and_model_env(monkeypatch):
     calls = []
 
@@ -1092,6 +1119,8 @@ def test_reject_no_replay_speedup_reverts_when_unmeasurable(tmp_path, monkeypatc
     assert ready is False
     assert failure["stage"] == "replay_no_speedup"
     assert "unmeasurable" in failure["reason"]
+    assert "Candidate implementation rejected" in failure["reason"]
+    assert "does not establish that the optimization hypothesis is exhausted" in failure["reason"]
     assert (optimized / "fuzzer").read_text() == "BASELINE"
 
 

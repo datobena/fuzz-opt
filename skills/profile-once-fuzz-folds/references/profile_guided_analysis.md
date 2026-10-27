@@ -158,7 +158,10 @@ Work down `hotspots.txt` in rank order (by `caused%`):
    rows sharing a cause (the same per-character helper family, the same buffer pattern, the same
    subsystem or file) — whose summed `caused%` reaches the bar.
 
-The list is exhausted when no untried row or group clears the bar.
+A failed implementation does not exhaust its row or group. Follow the skill's bounded
+hypothesis/variant search: diagnose the failure and try justified revisions before moving on.
+The list is exhausted only when no eligible hypothesis has a justified implementation left to
+try; ideas left unfinished by the variant or session budget are budget deferred.
 
 For each item capture: function or group, its `hotspots.txt` rank, `caused%` and dominant
 column(s), its source file:line, and a representative caller chain from `children.txt` /

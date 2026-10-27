@@ -2435,6 +2435,26 @@ def _make_apply_fuzz_source_folds_prompt(
     )
 
 
+_IMPLEMENTATION_SEARCH_POLICY = (
+    "A failed build, smoke test, or disappointing replay rejects the current "
+    "implementation, not automatically its optimization hypothesis or hotspot. "
+    "Keep a variant only if it passes all safety checks and deterministic replay "
+    "on the fixed corpus is measurably faster than the previous best, beyond "
+    "observed noise; otherwise restore the previous-best source state, preserving "
+    "earlier accepted changes. Diagnose measurement uncertainty, implementation "
+    "overhead, or insufficient opportunity using the existing profile and source. "
+    "When a concrete diagnosis supports another implementation, try up to two "
+    "meaningful revisions after the initial variant per hypothesis, within the "
+    "remaining session budget. Build/smoke repairs share that revision budget; "
+    "do not reset it on retries. Never repeat unchanged timing until it passes "
+    "or relax the acceptance threshold. Move on when no justified variant remains, "
+    "the opportunity is insufficient, safety cannot be preserved, or the budget "
+    "is reached. Report hypothesis and variant IDs, diagnosis, measurements, and "
+    "stop reason; distinguish implementation unsuccessful, hypothesis exhausted, "
+    "and budget deferred. A failed variant alone does not exhaust a hypothesis."
+)
+
+
 def _make_apply_fuzz_source_folds_prompt_with_mode(
     harness_path: str, use_wrapper_validation: bool = False,
     backend: str = "codex",
@@ -2459,10 +2479,8 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
         "(target-source functions ranked by the cost they cause, sanitizer and "
         "allocator work included); use children.txt and callgraph.txt only to "
         "drill into a candidate's call tree. Do not re-profile.",
-        "Iterate those ranked hotspots from that single profile; for each, apply "
-        "source folds and keep the change only if deterministic replay timing "
-        "on the fixed corpus is measurably faster than the previous best, else "
-        "revert it. Report the cumulative speedup at the end.",
+        _IMPLEMENTATION_SEARCH_POLICY,
+        "Report the cumulative speedup at the end.",
         "The host enforces existing library source/header files only. Do not "
         "add, delete, rename or change permissions of files. Protected "
         "harness/support paths and non-source files are verified by the host "
@@ -2555,9 +2573,7 @@ def _make_retry_prompt(
             "commands in parallel. Reuse the single fixed corpus "
             "(FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR) and the harness-built "
             "profile (profile_once/hotspots.txt); never re-profile, build a "
-            "corpus, or run the fuzzer. Keep each fold only if deterministic "
-            "replay timing on the fixed corpus beats the previous best, else "
-            "revert it."
+            "corpus, or run the fuzzer."
         )
     else:
         validation_text = (
@@ -2567,19 +2583,16 @@ def _make_retry_prompt(
             "relying on static-only heuristics. Reuse the single fixed corpus "
             "(FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR) and the harness-built "
             "profile (profile_once/hotspots.txt); never re-profile, build a "
-            "corpus, or run the fuzzer. Keep each fold only if deterministic "
-            "replay timing on the fixed corpus beats the previous best, else "
-            "revert it."
+            "corpus, or run the fuzzer."
         )
     prompt = (
         f"You are optimizing the fuzz target '{fuzz_target}' in the current "
         f"source tree using {_skill_mention(backend)}. The previous "
         "session ended before phase 2 completed successfully.\n\n"
         f"Build errors:\n```\n{error_excerpt}\n```\n\n"
-        "Fix all remaining compilation or smoke-test issues. If a specific "
-        "optimization cannot be made to work, revert only that change. Then "
-        "continue applying any remaining source-only candidates from that "
-        "skill. "
+        "Diagnose and repair remaining compilation or smoke-test issues using "
+        "the same hypothesis/variant ledger from the previous session. "
+        f"{_IMPLEMENTATION_SEARCH_POLICY} "
         f"{validation_text} Keep harness code, fuzz-only support files, "
         "build scripts, Dockerfiles, and project metadata unchanged.\n"
         + _HEADLESS_SYNC_DIRECTIVE
@@ -4484,8 +4497,8 @@ def _reject_if_no_replay_speedup(
     ``config.PHASE2_MIN_REPLAY_SPEEDUP`` (default 1.0 = any real speedup). A fold
     whose replay speedup does not exceed that — INCLUDING one whose replay could
     not be measured at all (``replay`` is None / has no ``replay_speedup``) — is
-    "not worth keeping": discard the optimized binary, fall back to baseline, and
-    return a failure record. This runs after the bug-preservation gate, so a fold
+    rejected as an implementation: discard the optimized binary, fall back to
+    baseline, and return a failure record. This runs after the bug-preservation gate, so a fold
     only reaches here if it built and still reproduces the PoC.
 
     Returns ``(optimization_ready, failure_or_None)``. Like the bug-removal gate,
@@ -4518,7 +4531,7 @@ def _reject_if_no_replay_speedup(
     if partial:
         measured += " (partial)"
     logger.warning(
-        "Optimization for %s (%s) is NOT worth keeping: replay speedup %s does not "
+        "Candidate implementation for %s (%s) failed the replay gate: speedup %s does not "
         "exceed required %.4fx. Reverting the fold to baseline.",
         project, cve, measured, min_speedup,
     )
@@ -4528,8 +4541,9 @@ def _reject_if_no_replay_speedup(
     return False, {
         "stage": "replay_no_speedup",
         "reason": (
-            f"Optimization not worth keeping: replay speedup {measured} did not "
-            f"exceed required {min_speedup:.4f}x; fold reverted to baseline"
+            f"Candidate implementation rejected: replay speedup {measured} did not "
+            f"exceed required {min_speedup:.4f}x; fold reverted to baseline. "
+            "This result does not establish that the optimization hypothesis is exhausted."
         ),
     }
 
