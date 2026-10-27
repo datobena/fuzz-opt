@@ -46,3 +46,28 @@ writes. Everything else is sorted by what it is *for*.
 binaries and therefore different instrumentation, so an edge-count ratio
 between them means nothing until both corpora are replayed on one common
 binary. `analysis/coverage_growth.py` says the same thing at more length.
+
+## Plot historical libFuzzer runs
+
+The coverage/throughput plotter also accepts older static A/B runs with
+`fuzzer.log`, `metadata.json`, and retained `corpus/` files:
+
+```sh
+python3 analysis/plot_coverage_growth.py --engine libfuzzer \
+  --experiment-id static-final-24h --target libxml2-arvo-1972 \
+  --results-dir /path/to/benchmark/results --jobs 4 \
+  --covdir /path/to/plot-data --outdir /path/to/plots
+```
+
+This replays each trial's retained inputs in discovery order on the same
+baseline binary, using Docker's `gcr.io/oss-fuzz-base/base-runner` image
+(`--runner-image` overrides it). Discovery times use preserved corpus mtimes
+relative to the trial's recorded start. Replay CSVs and provenance are cached;
+repeating the command reuses matching results. Incomplete replays fail instead
+of producing a partial curve. Source experiment files remain read-only.
+
+The throughput panel shows libFuzzer's cumulative average, with elapsed times
+estimated from execution counts and integer `exec/s` reports. Both panels use
+mean and 95% confidence intervals across the available trials. PNG and PDF
+outputs are named by experiment and target. This mode does not charge optimizer
+CPU time: these historical trials ran fixed binaries.

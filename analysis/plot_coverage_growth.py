@@ -1051,10 +1051,15 @@ def band(series, gridded=False, hold_right=False):
 
     m = (np.vstack(series) if gridded else
          np.vstack([_row(xs, ys) for xs, ys in series]))
-    mean = np.nanmean(m, axis=0)
     n = np.sum(~np.isnan(m), axis=0)
-    with np.errstate(invalid="ignore"):
-        sd = np.nanstd(m, axis=0, ddof=1)
+    # Some grid points precede every trial's first observation. Preserve those
+    # as unknown without nanmean/nanstd's empty-slice warnings; one-trial points
+    # have no estimable CI and keep the existing zero-width interval.
+    mean = np.divide(np.nansum(m, axis=0), n,
+                     out=np.full(n.shape, np.nan), where=n > 0)
+    variance = np.divide(np.nansum((m - mean) ** 2, axis=0), n - 1,
+                         out=np.zeros(n.shape, dtype=float), where=n > 1)
+    sd = np.sqrt(variance)
     half = np.zeros_like(mean); ok = n > 1
     half[ok] = sd[ok] / np.sqrt(n[ok]) * stats.t.ppf(0.975, n[ok] - 1)
     return mean, mean - half, mean + half, m.shape[0]
@@ -1276,6 +1281,14 @@ def main() -> int:
     ap.add_argument("--experiment-id", required=True)
     ap.add_argument("--covdir", default="coverage_growth")
     ap.add_argument("--outdir", default="plots")
+    ap.add_argument("--results-dir", default=config.RESULTS_DIR,
+                    help="results root (can be outside this checkout)")
+    ap.add_argument("--engine", choices=("afl", "libfuzzer"), default="afl")
+    ap.add_argument("--target", help="plot only this target directory")
+    ap.add_argument("--jobs", type=int, default=4,
+                    help="parallel libFuzzer baseline corpus replays")
+    ap.add_argument("--runner-image", default="gcr.io/oss-fuzz-base/base-runner",
+                    help="Docker image for libFuzzer baseline replay")
     ap.add_argument("--no-charge-cpu", dest="charge_cpu", action="store_false",
                     help="show only the stopped-for-swap gaps, without charging "
                          "the optimizer's CPU as lost fuzzing time")
@@ -1292,13 +1305,19 @@ def main() -> int:
                          "across a stopped interval. 0 disables.")
     args = ap.parse_args()
 
-    root = Path(config.RESULTS_DIR) / args.experiment_id
+    if args.engine == "libfuzzer":
+        from libfuzzer_growth import plot_experiment
+        return plot_experiment(args, GRID, band)
+
+    root = Path(args.results_dir) / args.experiment_id
     project = args.experiment_id.rsplit("-", 1)[-1]
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
     by_trial = swap_windows_by_trial(args.experiment_id)
     swaps = swap_windows(args.experiment_id)          # union, for CPU bookkeeping
 
     for exp_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        if args.target and exp_dir.name != args.target:
+            continue
         # Optimizer CPU, charged to the online arm. Unlike a swap stop this is
         # campaign-wide (the optimizer's core could have been fuzzing at that
         # instant for ANY trial), so it stays on one shared timeline.
