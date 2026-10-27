@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 from prework.prework_build import prework_image_for, rebuild_with_prework_image
-from lib import tracked_git
+from lib import tracked_git, source_scope
 from lib import corpus as corpus_util
 from lib import cpu_ledger
 from lib import docker_util
@@ -2463,6 +2463,10 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
         "source folds and keep the change only if deterministic replay timing "
         "on the fixed corpus is measurably faster than the previous best, else "
         "revert it. Report the cumulative speedup at the end.",
+        "The host enforces existing library source/header files only. Do not "
+        "add, delete, rename or change permissions of files. Protected "
+        "harness/support paths and non-source files are verified by the host "
+        "before every build; a violation rejects the entire round.",
         "Do not edit the harness, shared fuzz-only support code, build "
         "scripts, Dockerfiles, or project metadata.",
     ]
@@ -2887,6 +2891,7 @@ def _invoke_agent_sandboxed(
         # Host-side only, like the ccache dir.
         smoke_corpus_dir=env.get("FUZZ_SOURCE_FOLDS_SMOKE_CORPUS_DIR", ""),
         agent_cpus=agent_cpus,
+        source_guard=source_scope.current_guard(),
     )
 
 
@@ -2923,6 +2928,62 @@ def profile_layout_env(source_dir: str | Path, fuzz_target: str,
 
 
 def optimize_and_build(
+    source_dir: str, fuzz_target: str, diff_output_dir: str,
+    project: str, build_fn, max_attempts: int = 10,
+    codex_extra_env: dict[str, str] | None = None,
+    use_wrapper_validation: bool = False,
+    extra_prompt_directives: str | None = None,
+    deadline: float | None = None,
+) -> bool:
+    """Keep the host-owned edit boundary for the complete optimize/build round."""
+    # A quarantined tree must not be staged, Git-committed or profiled again.
+    source_scope.require_recovered(source_dir)
+    # A resumed/re-run output directory must not reject a fresh valid round
+    # based on an old report; retain that record under a unique audit name.
+    old_report = Path(diff_output_dir) / 'source_scope_violation.json'
+    if old_report.exists():
+        old_report.replace(old_report.with_name(
+            'source_scope_violation.previous-' + uuid.uuid4().hex + '.json'))
+    with source_scope.scope_session():
+        try:
+            result = _optimize_and_build(
+                source_dir, fuzz_target, diff_output_dir, project, build_fn,
+                max_attempts=max_attempts, codex_extra_env=codex_extra_env,
+                use_wrapper_validation=use_wrapper_validation,
+                extra_prompt_directives=extra_prompt_directives, deadline=deadline)
+            guard = source_scope.current_guard()
+            if guard is not None:
+                guard.validate()     # final check before any caller can accept
+            return result
+        except AgentNotRemovedError as exc:
+            guard = source_scope.current_guard()
+            if guard is not None:
+                guard.defer_recovery(exc.containers)   # never restore underneath a live writer
+            raise
+        except source_scope.SourceScopeViolation as exc:
+            report = Path(diff_output_dir) / 'source_scope_violation.json'
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(json.dumps({'ok': False, 'stage': 'source_scope',
+                                          'violations': exc.violations}, indent=2))
+            guard = source_scope.current_guard()
+            if guard is not None:
+                try:
+                    guard.restore()
+                except Exception:
+                    guard.defer_recovery()
+                    raise
+            logger.error('%s', exc)
+            return False
+        except BaseException:
+            guard = source_scope.current_guard()
+            if guard is not None:
+                # A failed launcher can leave teardown uncertain. Preserve the
+                # trusted baseline and fail closed on the next attempt.
+                guard.defer_recovery()
+            raise
+
+
+def _optimize_and_build(
     source_dir: str, fuzz_target: str, diff_output_dir: str,
     project: str, build_fn, max_attempts: int = 10,
     codex_extra_env: dict[str, str] | None = None,
@@ -3022,6 +3083,14 @@ def optimize_and_build(
         raise PrebuildFailedError(reason,
                                   stage=codex_extra_env.get(PREBUILD_STAGE_KEY, ""))
 
+    # Capture AFTER trusted staging/profiling, before the first agent. The
+    # policy lives outside all agent mounts and survives retries unchanged.
+    excludes = getattr(config, "SOURCE_SCOPE_EXCLUDE_GLOBS", {}).get(project, ())
+    guard = source_scope.start_guard(
+        source_dir, harness=harness_host or (Path(source_dir) / _find_harness_source(source_dir, fuzz_target)),
+        exclude_globs=excludes,
+        report_path=Path(diff_output_dir) / 'source_scope_violation.json')
+
     for attempt in range(max_attempts):
         # Choose prompt based on whether we have a previous build failure
         if build_log is None:
@@ -3086,6 +3155,9 @@ def optimize_and_build(
                 "%s. Leaving the source tree as it is.", backend, project,
                 fuzz_target, ", ".join(_left))
             raise AgentNotRemovedError(_left)
+        # Before timeout/auth/no-op paths too: a forbidden edit cannot escape
+        # inspection just because the agent did not produce a successful diff.
+        guard.validate()
         if codex_result["timed_out"]:
             logger.error(
                 "%s optimization for %s/%s timed out", backend, project, fuzz_target,
@@ -3231,10 +3303,17 @@ def optimize_and_build(
         with open(os.path.join(diff_output_dir, "changes_summary.txt"), "w") as f:
             f.write(stat_result.stdout)
 
-        _clean_build_artifacts(source_dir)
-
-        # Try building
-        success, build_log = build_fn()
+        # All agent and broker writers are gone here. Preserve the validated
+        # candidate while the authoritative legacy build mutates this path
+        # (configure/objects/generated files); those host build artifacts are
+        # not agent edits and must not become the next round's edit policy.
+        with guard.snapshot() as candidate:
+            try:
+                _clean_build_artifacts(source_dir)
+                success, build_log = build_fn()
+            finally:
+                guard.restore(candidate)
+        guard.validate()
 
         log_path = os.path.join(diff_output_dir, f"build_log_{attempt}.txt")
         with open(log_path, "w") as lf:

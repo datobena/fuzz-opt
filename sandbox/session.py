@@ -502,7 +502,7 @@ def run_sandboxed_optimizer(
     cpu: int = 0, timeout: int | None = None, audit_log: str = "",
     base_env: dict | None = None, harness: str = "", model: str = "",
     effort: str = "", ccache_dir: str = "", smoke_corpus_dir: str = "",
-    agent_cpus: str | None = None,
+    agent_cpus: str | None = None, source_guard=None,
 ) -> dict:
     """Run one optimizer session confined to a container.
 
@@ -579,6 +579,7 @@ def run_sandboxed_optimizer(
         # Every broker_* ledger row is charged to this optimizer and round.
         ledger_trial_id=_tags["trial_id"], ledger_iter=_tags["iter"],
         labels=session_labels,
+        source_guard=source_guard,
     )
 
     def _serve():

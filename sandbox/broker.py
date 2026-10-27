@@ -80,6 +80,10 @@ class BrokerContext:
     project: str
     cpu: int
     audit_log: str = ""
+    # Host-owned policy, never selected by a broker request. Every build uses
+    # an independently validated private snapshot, not the live writable mount.
+    source_guard: object | None = field(default=None, repr=False)
+    build_source_dir: str = field(default="", repr=False)
     # Drift-corrected ("bracketed") replay timing. When ``baseline_ref_dir`` is set
     # the broker snapshots the FIRST successfully built /out there -- the round's
     # pristine "beat-this" binary -- and every later replay interleaves that
@@ -232,7 +236,7 @@ def _build_command(ctx: BrokerContext) -> list[str]:
     """
     if is_fuzzbench_image(ctx.image):
         return fuzzbench_build_command(
-            image=ctx.image, source_dir=ctx.source_dir, out_dir=ctx.out_dir,
+            image=ctx.image, source_dir=(ctx.build_source_dir or ctx.source_dir), out_dir=ctx.out_dir,
             cpu=ctx.cpu,
             # No core dumps, same reason as below.
             extra_docker_args=["--ulimit", "core=0"],
@@ -251,7 +255,7 @@ def _build_command(ctx: BrokerContext) -> list[str]:
         # measures and the trials run. Hand-copied here before, it silently
         # dropped BUILD_OPT_LEVEL: the agent optimised -O1 builds while -O3 builds
         # were gated and deployed.
-        *arvo_compile_args(image=ctx.image, source_dir=ctx.source_dir,
+        *arvo_compile_args(image=ctx.image, source_dir=(ctx.build_source_dir or ctx.source_dir),
                            out_dir=ctx.out_dir, project=ctx.project),
     ]
 
@@ -322,6 +326,19 @@ def _map_size_prefix(ctx: BrokerContext) -> str:
 
 
 def _run_build(ctx: BrokerContext) -> tuple[bool, str]:
+    from lib.source_scope import SourceScopeViolation
+    if ctx.source_guard is None:
+        return False, "Source edit scope rejected: missing host-owned policy"
+    try:
+        with ctx.source_guard.snapshot() as candidate:
+            ctx.build_source_dir = str(candidate)
+            return _run_build_snapshot(ctx)
+    except SourceScopeViolation as exc:
+        _audit(ctx, "source_scope", str(exc))
+        return False, str(exc)
+
+
+def _run_build_snapshot(ctx: BrokerContext) -> tuple[bool, str]:
     # Serialize against any replay/smoke on this optimizer's core (incl. the
     # harness-side rebuild in another process): never measure a core mid-build.
     if ctx.ccache_dir and is_fuzzbench_image(ctx.image):
@@ -351,7 +368,7 @@ def _restore_ownership(ctx: BrokerContext, *, after_stop: bool = False) -> bool:
     """Hand the session's build output back to the benchmark user: the same
     chown as prework's restore_ownership, run through _run so it is named,
     labelled and timed. True when nothing is left root-owned."""
-    cmd = ownership_command(ctx.image, [ctx.source_dir, ctx.out_dir]
+    cmd = ownership_command(ctx.image, [ctx.build_source_dir or ctx.source_dir, ctx.out_dir]
                             + ([ctx.ccache_dir] if ctx.ccache_dir else []))
     if cmd is None:                          # running as root: nothing to hand back
         ctx.ownership_pending = False

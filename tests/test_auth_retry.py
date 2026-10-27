@@ -104,7 +104,7 @@ def test_a_missing_store_is_not_usable(tmp_path, monkeypatch):
 def test_the_auth_retry_is_bounded_to_one():
     """A dead login must not burn all ten attempts."""
     import inspect
-    src = inspect.getsource(ps.optimize_and_build)
+    src = inspect.getsource(ps._optimize_and_build)
     assert "_auth_retried = False" in src
     assert "and not _auth_retried" in src
     assert "_auth_retried = True" in src
@@ -170,7 +170,7 @@ def test_rotating_login_only_is_per_thread(tmp_path, monkeypatch):
 
 def test_the_rotating_fallback_is_wired_and_bounded():
     import inspect
-    src = inspect.getsource(ps.optimize_and_build)
+    src = inspect.getsource(ps._optimize_and_build)
     assert "_rotating_login_context(_rotating_fallback)" in src
     i = src.index("if used in _LONG_LIVED_TOKEN_MODES and not _auth_retried:")
     branch = src[i:src.index("continue", i)]

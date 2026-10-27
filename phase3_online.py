@@ -1382,6 +1382,9 @@ def _orphans_cleared(ctx: RoundContext, iter_n: int) -> bool:
     logger.warning("online round %d: container(s) %s from an earlier session are "
                    "gone; ownership restored, resetting the source tree to %s before "
                    "the round", iter_n, ", ".join(ctx.orphan_containers), ctx.prev_tag)
+    # Git alone cannot remove ignored or type-replaced paths from a live writer.
+    from lib import source_scope
+    source_scope.recover_pending(ctx.source_tree, writers_stopped=True)
     _revert_source_tree(ctx.source_tree, ctx.prev_tag)
     ctx.orphans_cleared, ctx.orphan_containers = list(ctx.orphan_containers), []
     return True
@@ -1718,6 +1721,14 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             previous_best_bin=ctx.previous_best_bin, prev_tag=ctx.prev_tag)
         _record_ledger(ctx, iter_n, diff_dir, "augmentation-failed", None)
         return (False, None, False)      # nothing was measured
+    except phase2_setup.source_scope.SourceScopeRecoveryRequired as exc:
+        # No source-tree operation: a previous writer may still be alive.
+        provenance.write_json(os.path.join(iter_dir, 'round_provenance.json'), {
+            'iter': iter_n, 'outcome': 'source-scope-quarantined',
+            'applied': False, 'built': False, 'reason': str(exc)})
+        _record_ledger(ctx, iter_n, diff_dir, 'source-scope-quarantined', None)
+        logger.error('online iter %d: %s; stopping this optimizer', iter_n, exc)
+        return (False, None, False, True)
     except phase2_setup.AgentNotRemovedError as exc:
         return _end_agent_not_removed_round(ctx, iter_n, diff_dir=diff_dir,
                                             containers=exc.containers)
@@ -1747,7 +1758,11 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 opt_bin_dir, ctx.fuzz_target, ctx.poc_path, cpu=ctx.profile_cpu,
                 image=prework_image_for(ctx.entry))
 
-    opt_rej = None
+    scope_report = os.path.join(diff_dir, 'source_scope_violation.json')
+    opt_rej = ({'stage': 'source_scope', 'reason': 'host rejected out-of-scope edits',
+                'report': scope_report} if os.path.exists(scope_report) else None)
+    if opt_rej:
+        optimization_ready = False
     replay = None
     if optimization_ready:
         with cpu_ledger.timed("bug_survival_check", cores=1):
@@ -1818,6 +1833,8 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
 
     if optimization_ready:
         outcome = "kept"
+    elif opt_rej and opt_rej.get("stage") == "source_scope":
+        outcome = "rejected-source-scope"
     elif opt_rej and opt_rej.get("stage") == "optimized_poc_verify":
         outcome = "rejected-removed-bug"
     elif opt_rej and opt_rej.get("stage") == "new_crashes":
@@ -1922,7 +1939,8 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     # _round_produced_evidence reads the agent report the round just saved, so
     # the distinction is drawn from what actually happened rather than from a
     # boolean that conflates the two.
-    return (False, None, _round_produced_evidence(diff_dir, build_ok))
+    return (False, None, False if outcome == 'rejected-source-scope'
+            else _round_produced_evidence(diff_dir, build_ok))
 
 
 _STATE_FIELDS = ("run_time", "execs_done", "corpus_count", "cycles_done",

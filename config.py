@@ -663,3 +663,9 @@ FUZZBENCH_SHIM_CC = os.environ.get("FUZZBENCH_SHIM_CC", "clang")
 # BUILD_OPT_LEVEL never applies to FuzzBench builds; provenance records this.
 FUZZBENCH_OPT_LEVEL = {"bug": "-O1", "coverage": "-O3"}
 # --- end FuzzBench run parity ---
+
+# Host-only edit-scope exclusions, relative to each project source root. The
+# generated policy already protects the resolved harness, fuzz directories,
+# fuzz-named files and source files defining fuzz entrypoints. Add project
+# helpers with unconventional names here; never accept these from agent input.
+SOURCE_SCOPE_EXCLUDE_GLOBS = {}

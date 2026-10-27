@@ -71,3 +71,46 @@ estimated from execution counts and integer `exec/s` reports. Both panels use
 mean and 95% confidence intervals across the available trials. PNG and PDF
 outputs are named by experiment and target. This mode does not charge optimizer
 CPU time: these historical trials ran fixed binaries.
+
+## Source edit boundary
+
+Optimizer rounds enforce a host-owned edit policy after trusted corpus/profile
+preparation and before the agent starts. The policy permits content changes to
+existing C/C++ source and header files only. It excludes the resolved harness,
+fuzz-support directories and fuzz-named files, files defining fuzz entrypoints,
+conventional `config.h`/`config.hh`/`config.hpp`/`config.hxx` configuration headers,
+and targets of protected symlink aliases. New files, deleted/renamed paths,
+permission changes, hardlinks, symlink/type replacements, and modifications or
+timestamp changes to protected files reject the round. Pre-existing symlinks
+must remain unchanged; baseline hardlinks fail closed.
+
+For support code with unconventional names, add project-relative patterns to
+`config.SOURCE_SCOPE_EXCLUDE_GLOBS`, for example
+`{"project": ("src/shared_driver.c", "test_support/*")}`. These exclusions are
+host configuration, never agent input. A source extension alone cannot identify
+arbitrarily named shared harness helpers; project owners must identify those.
+Configuration headers with unconventional names also require explicit exclusions.
+An exclusion beneath a directory symlink conservatively protects its target
+subtree, including further aliases. An unresolved harness fails closed.
+
+Every sandbox broker build compiles a validated private snapshot instead of the
+live writable agent tree. The authoritative rebuild runs after agent/broker
+removal is confirmed and the tree is checked again. Its generated build files
+are discarded while preserving the validated source edits. The host policy and
+backup never appear in agent mounts. Violations are recorded in
+`source_scope_violation.json` and the complete pre-agent tree is restored,
+including ignored/untracked paths. Online provenance records
+`rejected-source-scope`; it is not optimization convergence evidence.
+
+If a previous container may still write, restoration is deferred. A sibling
+`.source-scope-recovery-<project>.json` marker retains the private backup and
+prevents staging, profiling or establishing a fresh baseline. The online orphan
+cleanup restores it only after all recorded writers are gone and ownership is
+recovered. For manual recovery, stop **all** old agent/build containers first,
+then call `lib.source_scope.recover_pending(source_dir, writers_stopped=True)`.
+Never remove the marker just to continue a run.
+
+This enforces edit scope, not behavioral equivalence: permitted source edits
+still need the existing crash and replay checks. The unconfined debug optimizer
+can access host state and therefore does not provide the sandbox's security
+boundary; use the default sandbox for enforcement against an untrusted agent.

@@ -13,13 +13,13 @@ import phase2_setup as ps
 
 
 def test_optimization_diff_is_written_regardless_of_attempt():
-    src = inspect.getsource(ps.optimize_and_build)
+    src = inspect.getsource(ps._optimize_and_build)
     assert '"optimization.diff" if attempt == 0 else' not in src
     assert 'os.path.join(diff_output_dir, "optimization.diff")' in src
 
 
 def test_per_attempt_copy_is_still_kept_for_forensics():
-    src = inspect.getsource(ps.optimize_and_build)
+    src = inspect.getsource(ps._optimize_and_build)
     assert 'f"attempt_{attempt}.diff"' in src
     assert "if attempt > 0:" in src
 
@@ -36,7 +36,7 @@ def test_retry_resets_the_tree_to_the_profiled_state():
     attempt's half-finished edits is optimizing a tree the profile no longer
     describes -- the agent reported wasting three cycles re-folding code that had
     already been folded."""
-    src = inspect.getsource(ps.optimize_and_build)
+    src = inspect.getsource(ps._optimize_and_build)
     i = src.index("credential refreshed")
     window = src[max(0, i - 900):i + 200]
     assert '"reset", "--hard", "HEAD"' in window

@@ -7,9 +7,14 @@ from sandbox.broker import BrokerContext, handle_request
 
 
 def _ctx(tmp_path):
+    # These tests isolate broker lifecycle/ownership; scope enforcement has its
+    # own real-tree adversarial tests in test_source_scope.py.
+    from contextlib import nullcontext
+    from types import SimpleNamespace
     return BrokerContext(
         image="bench-aflpp/x-arvo-1", source_dir=str(tmp_path), out_dir=str(tmp_path),
         corpus_dir=str(tmp_path), fuzz_target="t", project="x", cpu=3,
+        source_guard=SimpleNamespace(snapshot=lambda: nullcontext(tmp_path)),
     )
 
 
