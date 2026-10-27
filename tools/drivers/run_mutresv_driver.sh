@@ -21,7 +21,7 @@ export PHASE2_OPTIMIZER_SKILL=profile-once-fuzz-folds
 export PHASE2_MUTATION_ENABLED=1
 export PHASE2_MUTATION_REQUIRED=1
 # fixed capture: reservoir + guaranteed queue-pass + run-for-max(duration,one-queue)
-export PHASE2_MUTATION_CAP=20000
+export PHASE2_MUTATION_CAP=30000
 export PHASE2_MUTATION_DURATION_SECS=600
 # "wait as much as needed": generous optimizer + per-agent-bash timeouts
 export PHASE2_OPTIMIZER_TIMEOUT_SECS=86400      # 24h per project

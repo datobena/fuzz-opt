@@ -292,41 +292,30 @@ def _gate_replay_rate(experiment_dir) -> float | None:
 def prepare_round_corpus(*, mutations_dir, out_root, previous_best_bin, fuzz_target,
                          image, cpu, seed, replay_rate=None,
                          find_crashers_fn=None) -> dict | None:
-    """Turn a round's harvested mutations into the sets the round uses.
+    """Prepare a reproducible 75/25 tuning/held-out split of one snapshot.
 
-    Only the inputs the round USES are crash-filtered -- a full pass over every
-    harvested mutation costs ~7 min at 50 inputs/s for inputs nobody replays.
+    Partition the seeded permutation BEFORE any filtering: crash removals cannot
+    move inputs between partitions. The tuning prefix drives profiling, internal
+    replay and smoke tests. Only the held-out suffix drives final replay timing.
+    Slow targets use the same sampling fraction of each partition (rounded to
+    whole inputs, with at least one in each); no gate input is exposed to smoke.
+    Only used inputs are crash-filtered, except the legacy full-set option may
+    expand the host's crash check. It never expands the replay timing gate.
 
-    1. smoke   -- ONLINE_SMOKE_FRACTION of the harvest: what the agent's smoke
-                  runs. Filtered first; with no gate rate yet (round 1) that
-                  pass also measures the replay speed used for sizing.
-    2. tuning  -- capped to what one replay pass runs in PHASE2_REPLAY_BUDGET_SECS
-                  at this target's speed. Used by the profile and every agent
-                  replay. Speed is ``replay_rate`` (what the gate last measured)
-                  when known, else the smoke filter pass's rate, which runs ~2x
-                  faster than a timing pass (bloaty: 617 vs 308 inputs/s), so
-                  round 1 may overshoot the budget.
-    3. gate    -- what the final gate times: tuning-sized, a different sample
-                  (overlaps tuning only when the harvest is too small for two
-                  disjoint samples). Equal to tuning when nothing needs shrinking.
-    4. checked -- tuning + gate + smoke: every input filtered, and what the
-                  gate's crash check runs on the new build. With
-                  ONLINE_GATE_FULL_SET=1 it is the whole harvest.
-
-    Filtering drops every input that crashes the previous-best binary: the
-    fuzzer runs a vulnerable binary and its sampled stream includes inputs that
-    crash it; dropping them is what makes a later crash on the new build the
-    agent's own doing. Samples are deterministic per round (``seed``). Returns
-    None when a filter pass did not run over every input or nothing survived --
-    the round must not go on to blame the agent for crashes the round-start
-    binary already has.
+    Return None on an incomplete filter, a snapshot smaller than two inputs, or
+    an empty surviving partition: a round without a real holdout cannot proceed.
     """
     find = find_crashers_fn or afl_replay.find_crashers
     mutations_dir, out_root = Path(mutations_dir), Path(out_root)
     harvest = sorted(p for p in mutations_dir.iterdir()
                      if p.is_file() and p.stat().st_size > 0)
-    if not harvest:
+    if len(harvest) < 2:
+        logger.warning("snapshot needs at least two inputs for a disjoint tuning/holdout split")
         return None
+    permutation = list(harvest)
+    random.Random(seed).shuffle(permutation)
+    split_at = min(len(permutation) - 1, max(1, 3 * len(permutation) // 4))
+    tuning_partition, gate_partition = permutation[:split_at], permutation[split_at:]
 
     def stage(name, files):
         d = out_root / name
@@ -357,8 +346,8 @@ def prepare_round_corpus(*, mutations_dir, out_root, previous_best_bin, fuzz_tar
         return (r["scanned"] / r["seconds"]) if r.get("seconds") else 0.0
 
     frac = float(getattr(config, "ONLINE_SMOKE_FRACTION", 0.05))
-    n_smoke = min(len(harvest), max(1, int(round(frac * len(harvest)))))
-    smoke_files = random.Random(seed + 1).sample(harvest, n_smoke)
+    n_smoke = min(len(tuning_partition), max(1, int(round(frac * len(tuning_partition)))))
+    smoke_files = random.Random(seed + 1).sample(tuning_partition, n_smoke)
     filter_rate = scan(smoke_files, "scan_smoke")
     if filter_rate is None:
         return None
@@ -366,22 +355,15 @@ def prepare_round_corpus(*, mutations_dir, out_root, previous_best_bin, fuzz_tar
     rate = replay_rate or filter_rate
     budget = int(getattr(config, "PHASE2_REPLAY_BUDGET_SECS", 0))
     manual = int(getattr(config, "PHASE2_REPLAY_MAX_UNITS", 0))
-    n_tune = len(harvest)
+    n_tune = len(tuning_partition)
     if budget > 0 and rate > 0:
         n_tune = min(n_tune, max(1, int(budget * rate)))
     if manual > 0:
         n_tune = min(n_tune, manual)
-    if n_tune < len(harvest):
-        tuning_files = random.Random(seed).sample(harvest, n_tune)
-        tuned = set(tuning_files)
-        rest = [f for f in harvest if f not in tuned]
-        pick = random.Random(seed + 2)
-        if len(rest) >= n_tune:
-            gate_files = pick.sample(rest, n_tune)
-        else:
-            gate_files = rest + pick.sample(tuning_files, n_tune - len(rest))
-    else:
-        tuning_files = gate_files = list(harvest)
+    sample_fraction = n_tune / len(tuning_partition)
+    n_gate = min(len(gate_partition), max(1, int(round(sample_fraction * len(gate_partition)))))
+    tuning_files = tuning_partition[:n_tune]
+    gate_files = gate_partition[:n_gate]
 
     full_set = getattr(config, "ONLINE_GATE_FULL_SET", False)
     used = list(harvest) if full_set else list(
@@ -392,25 +374,41 @@ def prepare_round_corpus(*, mutations_dir, out_root, previous_best_bin, fuzz_tar
     keep = lambda fs: [f for f in fs if f.name not in crashers]
     tuning_files, gate_files = keep(tuning_files), keep(gate_files)
     smoke_files, used = keep(smoke_files), keep(used)
-    if not used or not tuning_files:
+    if not tuning_files or not gate_files:
+        logger.warning("crash filtering left no tuning or held-out inputs; skipping round")
         return None
 
     checked = stage("checked", used)
-    if tuning_files == gate_files and len(tuning_files) == len(used):
-        tuning = gate = checked          # nothing shrunk: one set for everything
-    else:
-        tuning, gate = stage("tuning", tuning_files), stage("gate", gate_files)
-    smoke = stage("smoke", smoke_files) if smoke_files else checked
+    tuning, gate = stage("tuning", tuning_files), stage("gate", gate_files)
+    # If every probe input crashed, smoke still uses only safe tuning inputs.
+    smoke = stage("smoke", smoke_files) if smoke_files else tuning
+    manifest = {
+        "seed": seed, "partition_rule": "seeded-shuffle-75-prefix-25-suffix",
+        "tuning_partition": [f.name for f in tuning_partition],
+        "gate_partition": [f.name for f in gate_partition],
+        "sample_fraction": sample_fraction,
+        "tuning_selected_count": n_tune, "gate_selected_count": n_gate,
+        "tuning_inputs": [f.name for f in tuning_files],
+        "gate_inputs": [f.name for f in gate_files],
+        "smoke_inputs": sorted(f.name for f in smoke_files) if smoke_files else
+                        [f.name for f in tuning_files],
+        "crashers_removed": sorted(crashers),
+    }
+    manifest_path = out_root / "split_manifest.json"
+    _write_json(str(manifest_path), manifest)
     gate_overlap = len({f.name for f in tuning_files} & {f.name for f in gate_files})
 
     return {
         "checked": str(checked), "tuning": str(tuning), "gate": str(gate),
-        "smoke": str(smoke),
+        "smoke": str(smoke), "split_manifest": str(manifest_path), "split_seed": seed,
+        "tuning_partition_count": len(tuning_partition),
+        "gate_partition_count": len(gate_partition), "sample_fraction": sample_fraction,
+        "tuning_selected_count": n_tune, "gate_selected_count": n_gate,
         "harvested": len(harvest), "crashers_removed": len(crashers),
         "crashers": sorted(crashers)[:50],
         "checked_count": len(used), "tuning_count": len(tuning_files),
         "gate_count": len(gate_files), "gate_overlap_with_tuning": gate_overlap,
-        "smoke_count": len(smoke_files),
+        "smoke_count": len(smoke_files) if smoke_files else len(tuning_files),
         "units_per_s": round(rate, 2),
         "rate_source": "gate" if replay_rate else "smoke-filter",
         "filter_units_per_s": round(filter_rate, 2), "budget_secs": budget,
@@ -441,9 +439,9 @@ def build_round_env(*, experiment_dir, diff_dir, opt_bin_dir, corpus_dir,
     """Env for one online round.
 
     Reuse phase-2's env builder but override the profiling corpus with
-    ``corpus_dir`` -- the round's harvested mutations, or (re-fuzz fallback only)
-    the live queue snapshot the re-fuzz seeds from, never the bundled seeds -- and
-    anchor the replay-timing gate on the previous-best binary, giving cumulative
+    ``corpus_dir`` -- only the tuning prefix of the round's harvested mutations,
+    never the held-out suffix or bundled seeds -- and anchor internal replay
+    on the previous-best binary, giving cumulative
     "each fold must beat the previous best" semantics.
 
     Sampling: online rounds use PURE RESERVOIR sampling of the fuzzer's real (weighted)
@@ -1495,12 +1493,12 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     # would otherwise spend PHASE2_MUTATION_DURATION_SECS regenerating mutations
     # these trials had already produced.
     #
-    # If the harvest comes back empty the round FALLS BACK to phase 2's own
-    # capture rather than profiling seeds alone -- seeds-only measures the wrong
-    # workload, which is why mutation augmentation is mandatory.
+    # If the harvest comes back empty, skip the round: no usable snapshot means
+    # no disjoint holdout. Neither seed-only profiling nor phase-2 re-capture may
+    # silently bypass the host's partitioning boundary.
     live_mutations = None
     # Optimizer i always profiles trial i's OWN mutations. Default
-    # (ONLINE_FIXED_MUTATION_CORPUS=0): a fresh harvest every round, i.e. what the
+    # Fresh mode (ONLINE_FIXED_MUTATION_CORPUS=0): a new harvest every round, what the
     # current best binary executed since the last dump/restart. FIXED=1 pins the
     # first harvest for every later round (stationary workload, stale profile).
     if (ctx.trial is not None
@@ -1535,7 +1533,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             ready = request_mutation_dump(dump_dirs)
             n = collect_round_mutations(
                 ready, harvest_dir,
-                cap=int(getattr(config, "PHASE2_MUTATION_CAP", 20000)),
+                cap=int(getattr(config, "PHASE2_MUTATION_CAP", 30000)),
                 seed=config.BASE_SEED + iter_n)
             _info["trials_ready"] = len(ready)
             _info["mutations"] = n
@@ -1561,7 +1559,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             ready = request_mutation_dump(dump_dirs)
             n = collect_round_mutations(
                 ready, harvest_dir,
-                cap=int(getattr(config, "PHASE2_MUTATION_CAP", 20000)),
+                cap=int(getattr(config, "PHASE2_MUTATION_CAP", 30000)),
                 seed=config.BASE_SEED + iter_n)
             logger.info("online round %d: retry delivered %d mutations", iter_n, n)
         if n:
@@ -1586,13 +1584,12 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             return (False, None, False)
         else:
             logger.warning(
-                "online round %d: no completed mutation batch yet; falling back "
-                "to phase-2 capture for this round", iter_n)
+                "online round %d: no completed mutation batch available for "
+                "a held-out split", iter_n)
 
     # 2. The profiling corpus: the harvested mutations ALONE. The trial's queue
     # is not read at all -- see _augment_corpus_with_mutations for why it was
-    # dropped. Only the fallback below (no harvest, so phase 2 re-fuzzes) still
-    # snapshots the queue, and only as the seed that re-fuzz starts from.
+    # dropped. Without a harvest the round is skipped, preserving the holdout.
     round_corpus = None
     if live_mutations:
         # Filter against the previous best, then size (see prepare_round_corpus).
@@ -1601,7 +1598,9 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 mutations_dir=live_mutations, out_root=os.path.join(iter_dir, "corpus"),
                 previous_best_bin=ctx.previous_best_bin, fuzz_target=ctx.fuzz_target,
                 image=prework_image_for(ctx.entry), cpu=ctx.profile_cpu,
-                seed=config.BASE_SEED + iter_n,
+                seed=(config.BASE_SEED if ctx.fixed_mutations and getattr(
+                    config, "ONLINE_FIXED_MUTATION_CORPUS", True)
+                    else config.BASE_SEED + iter_n),
                 replay_rate=_gate_replay_rate(ctx.experiment_dir))
             _info["ok"] = round_corpus is not None
         if round_corpus is None:
@@ -1620,31 +1619,13 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         live_mutations = round_corpus["tuning"]
         corpus_dir = live_mutations
     else:
-        # Per-trial mode: always THIS optimizer's own trial. The old
-        # select_snapshot_trial("largest") existed only because one optimizer
-        # served ten trials and had to pick one; profiling trial 8's corpus and
-        # then swapping the result into trials 0..9 meant nine trials ran a
-        # binary tuned for a workload they never executed.
-        if ctx.trial is not None:
-            chosen = ctx.trial
-        else:
-            chosen = select_snapshot_trial(
-                ctx.online_trials, lambda t: _corpus_file_count(ctx.experiment_id, t))
-        src_corpus = phase3_runner.get_live_corpus_dir(ctx.experiment_id, chosen)
-        corpus_dir = os.path.join(iter_dir, "corpus_snapshot")
-        with cpu_ledger.timed("corpus_snapshot", cores=1) as _info:
-            meta = snapshot_live_corpus(src_corpus, corpus_dir, now=time.time())
-            _info["files"] = meta["file_count"]
-        meta["trial_id"] = chosen.trial_id
-        _write_json(os.path.join(iter_dir, "corpus_snapshot_meta.json"), meta)
-        logger.info("online round %d: snapshot trial_%02d -> %d files (%d skipped "
-                    "in-flight) as the re-fuzz seed", iter_n, chosen.trial_id,
-                    meta["file_count"], meta["skipped_in_flight"])
-        if meta["file_count"] == 0:
-            logger.warning("online iter %d: empty corpus snapshot; skipping round",
-                           iter_n)
-            _record_ledger(ctx, iter_n, diff_dir, "no-corpus", None)
-            return (False, None, False)      # nothing was measured
+        # The legacy phase-2 re-capture fallback cannot provide a host-held-out
+        # partition before the agent starts. Fail closed instead of tuning and
+        # accepting on the same inputs.
+        logger.warning("online round %d: no mutation snapshot available for a "
+                       "disjoint tuning/holdout split; skipping round", iter_n)
+        _record_ledger(ctx, iter_n, diff_dir, "no-holdout-snapshot", None)
+        return (False, None, False)
 
     # 3. env: profile the corpus; anchor the replay gate on the previous best
     env = build_round_env(
@@ -1812,13 +1793,12 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         # run sequentially -- so its core-seconds are its wall-seconds.
         #
         # Online rounds already sized their corpus, so the gate never shrinks it
-        # again (cap=False). It times the round's gate sample -- same size as
-        # the set the agent tuned on, different inputs -- or, with
-        # ONLINE_GATE_FULL_SET=1, the full filtered set.
+        # again (cap=False). It times only the held-out suffix, sampled by
+        # the same fraction as the tuning prefix. ONLINE_GATE_FULL_SET affects
+        # crash checking only; it cannot expose tuning inputs to this gate.
         gate_corpus = None
         if round_corpus:
-            gate_corpus = round_corpus[
-                "checked" if getattr(config, "ONLINE_GATE_FULL_SET", False) else "gate"]
+            gate_corpus = round_corpus["gate"]
         with cpu_ledger.timed("replay_gate", cores=1):
             replay = phase2_setup.run_replay_speedup(
                 diff_output_dir=diff_dir, baseline_bin_dir=ctx.previous_best_bin,

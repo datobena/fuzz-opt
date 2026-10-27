@@ -29,7 +29,7 @@ from lib import afl_launch
 logger = logging.getLogger(__name__)
 
 SHIM_SRC = Path(__file__).resolve().parent.parent / "mutation_dump_afl.c"
-DEFAULT_CAP = 20000
+DEFAULT_CAP = 30000
 DEFAULT_DURATION = 600
 
 

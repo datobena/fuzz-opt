@@ -1113,7 +1113,7 @@ def _project_workdir_from_dockerfile(project: str) -> str:
 
 
 def _phase2_fixed_corpus_dir(diff_output_dir: str | Path) -> Path:
-    """Path of the fixed corpus snapshot built once and replayed everywhere."""
+    """Path of the fixed tuning snapshot used for profiling and internal replay."""
     return Path(diff_output_dir) / "profiles" / "fixed_corpus"
 
 
@@ -1202,8 +1202,9 @@ def _make_phase2_profile_env(
     env = {
         "FUZZ_SOURCE_FOLDS_CORPUS_DIR": str(corpus_dir),
         # Fixed corpus: the harness prebuild freezes a flat snapshot here once
-        # (build_corpus.py, or the round's live mutations). The single profile and every replay-timing
-        # gate use this exact set, so what is profiled is what is measured.
+        # (build_corpus.py, or the round's tuning mutations). The single profile
+        # and internal replay use this exact set. Online final replay uses a
+        # separate host-held-out partition, never this tuning directory.
         "FUZZ_SOURCE_FOLDS_FIXED_CORPUS_DIR": str(
             _phase2_fixed_corpus_dir(diff_output_dir)
         ),
@@ -1221,9 +1222,8 @@ def _make_phase2_profile_env(
         ),
     }
     # Baseline binary: used to grow the corpus, take the one profile, anchor the
-    # baseline replay time, and as the reference in the replay-timing gate (a fold
-    # is kept only if the optimized binary replays the same frozen corpus faster;
-    # coverage is allowed to drop).
+    # baseline internal replay time. Online rounds pass only their tuning
+    # partition here; final replay on held-out inputs is a separate host gate.
     if baseline_out_dir is not None:
         env["FUZZ_SOURCE_FOLDS_BASELINE_OUT_DIR"] = str(Path(baseline_out_dir))
 
@@ -1238,7 +1238,7 @@ def _make_phase2_profile_env(
             env["FUZZ_SOURCE_FOLDS_MUTATION_COMPILE_CMD"] = mut_compile
             env["FUZZ_SOURCE_FOLDS_MUTATION_SANITIZER"] = "address"
             env["FUZZ_SOURCE_FOLDS_MUTATION_CAP"] = str(
-                int(getattr(config, "PHASE2_MUTATION_CAP", 50000)))
+                int(getattr(config, "PHASE2_MUTATION_CAP", 30000)))
             env["FUZZ_SOURCE_FOLDS_MUTATION_DURATION"] = str(
                 int(getattr(config, "PHASE2_MUTATION_DURATION_SECS", 120)))
             env["FUZZ_SOURCE_FOLDS_MUTATION_EVERY"] = str(
@@ -1305,7 +1305,7 @@ def _augment_corpus_with_mutations(env: dict[str, str], fuzz_target: str) -> str
         return _fail(f"mutation_capture import failed ({exc})", exc)
 
     profiles = Path(profile_root)
-    cap = int(env.get("FUZZ_SOURCE_FOLDS_MUTATION_CAP", "20000"))
+    cap = int(env.get("FUZZ_SOURCE_FOLDS_MUTATION_CAP", "30000"))
     duration = int(env.get("FUZZ_SOURCE_FOLDS_MUTATION_DURATION", "600"))
     every = int(env.get("FUZZ_SOURCE_FOLDS_MUTATION_EVERY", "1"))
     # Reservoir-sample the whole run (uniform) by default; set to 0 for the legacy
@@ -1353,11 +1353,11 @@ def _augment_corpus_with_mutations(env: dict[str, str], fuzz_target: str) -> str
 
 def _combine_seed_and_mutations(env: dict[str, str], mutations_dir: Path,
                                 *, include_seeds: bool = True) -> str | None:
-    """Flatten seeds + mutations into the one corpus that is profiled AND gated.
+    """Flatten supplied seeds + mutations for profiling and internal replay.
 
-    Shared by phase 2's own capture and by the online loop's live capture, so both
-    produce an identically-shaped corpus -- what gets profiled is exactly what the
-    replay-timing gate measures.
+    The online loop supplies only its tuning partition. Its final host replay
+    gate uses a separate held-out partition that never enters this directory.
+    Standalone phase 2 retains its existing single-corpus behavior.
 
     ``include_seeds=False`` (the online loop's live capture) leaves the seed dir
     out, so the corpus is the mutations alone.
@@ -1761,7 +1761,7 @@ def run_replay_speedup(
     """Headline throughput metric: deterministic corpus-replay speedup.
 
     ``corpus_dir`` replaces the fixed corpus as the replayed set (online rounds
-    pass their full crash-filtered mutation set). ``cap=False`` replays it whole
+    pass their crash-filtered held-out partition). ``cap=False`` replays it whole
     instead of shrinking it to PHASE2_REPLAY_BUDGET_SECS -- online rounds size
     their corpus before the agent runs, so the gate does not shrink it again.
 
@@ -2436,6 +2436,10 @@ def _make_apply_fuzz_source_folds_prompt(
 
 
 _IMPLEMENTATION_SEARCH_POLICY = (
+    "For online rounds the provided fixed corpus is the tuning partition only: "
+    "use it for profiling and internal replay. The final held-out replay gate is "
+    "host-owned and unavailable to you; do not request its inputs or results "
+    "inside the optimization loop or attempt to optimize the final gate. "
     "A failed build, smoke test, or disappointing replay rejects the current "
     "implementation, not automatically its optimization hypothesis or hotspot. "
     "Keep a variant only if it passes all safety checks and deterministic replay "

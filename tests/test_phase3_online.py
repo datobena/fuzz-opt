@@ -663,7 +663,9 @@ def test_round_corpus_drops_inputs_that_crash_the_previous_best(tmp_path, monkey
     r = _round(tmp_path, 100, {"mut_00000003", "mut_00000050"})
     checked = _names(r["checked"])
     assert len(checked) == 98 and "mut_00000003" not in checked
-    assert r["crashers_removed"] == 2 and r["tuning"] == r["checked"]
+    assert r["crashers_removed"] == 2
+    assert not _names(r["tuning"]) & _names(r["gate"])
+    assert _names(r["tuning"]) | _names(r["gate"]) == checked
 
 
 def test_round_corpus_caps_the_tuning_set_by_measured_speed(tmp_path, monkeypatch):
@@ -706,11 +708,12 @@ def test_round_corpus_full_set_gate_filters_the_whole_harvest(tmp_path, monkeypa
     assert len(_names(r["checked"])) == 99 and 29 <= len(_names(r["tuning"])) <= 30
 
 
-def test_round_corpus_smoke_is_five_percent_of_the_harvest(tmp_path, monkeypatch):
+def test_round_corpus_smoke_is_five_percent_of_tuning_partition(tmp_path, monkeypatch):
     monkeypatch.setattr(phase3_online.config, "ONLINE_SMOKE_FRACTION", 0.05)
     a = _round(tmp_path, 200, out="a")
     b = _round(tmp_path, 200, out="b")
-    assert len(_names(a["smoke"])) == 10
+    assert len(_names(a["smoke"])) == round(0.05 * 150)
+    assert not _names(a["smoke"]) & _names(a["gate"])
     assert _names(a["smoke"]) == _names(b["smoke"])      # deterministic
 
 
@@ -735,29 +738,76 @@ def test_round_corpus_sizes_by_the_gate_rate_when_known(tmp_path, monkeypatch):
     assert r["tuning_count"] == 20 and r["rate_source"] == "gate"
 
 
-def test_gate_sample_is_tuning_sized_but_different_inputs(tmp_path, monkeypatch):
+def test_gate_sample_uses_same_fraction_of_heldout_partition(tmp_path, monkeypatch):
     # 10 inputs/s x 3s = 30 of 100: room for two disjoint samples.
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 3)
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
     r = _round(tmp_path, 100)
     tuning, gate = _names(r["tuning"]), _names(r["gate"])
-    assert len(gate) == len(tuning) == 30
+    assert len(tuning) == 30 and len(gate) == 10
+    assert r["sample_fraction"] == 0.4
     assert not gate & tuning and r["gate_overlap_with_tuning"] == 0
 
 
-def test_gate_sample_overlaps_only_when_the_set_is_too_small(tmp_path, monkeypatch):
-    # 70 of 100 each: only 30 untimed inputs exist, so 40 must be shared.
+def test_gate_sample_never_overlaps_even_when_most_inputs_are_used(tmp_path, monkeypatch):
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 7)
     monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
     r = _round(tmp_path, 100)
     tuning, gate = _names(r["tuning"]), _names(r["gate"])
-    assert len(gate) == 70 and len(gate & tuning) == 40
+    assert len(tuning) == 70 and len(gate) == 23
+    assert not gate & tuning
 
 
-def test_gate_is_the_full_set_when_nothing_needs_shrinking(tmp_path, monkeypatch):
-    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 180)
-    r = _round(tmp_path, 50, rate=1.0)
-    assert r["gate"] == r["tuning"] == r["checked"]
+def test_gate_is_heldout_quarter_when_nothing_needs_shrinking(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 0)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    r = _round(tmp_path, 100)
+    tuning, gate = _names(r["tuning"]), _names(r["gate"])
+    assert len(tuning) == 75 and len(gate) == 25
+    assert not gate & tuning and tuning | gate == _names(r["checked"])
+
+
+@pytest.mark.parametrize("n", [2, 3, 4, 7, 101])
+def test_round_split_manifest_matches_seeded_permutation_and_manual_scaling(tmp_path, monkeypatch, n):
+    import random
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 0)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 2)
+    r = _round(tmp_path, n)
+    manifest = json.loads(Path(r["split_manifest"]).read_text())
+    permutation = sorted(p.name for p in (tmp_path / "muts").iterdir())
+    random.Random(7).shuffle(permutation)
+    split = min(n - 1, max(1, 3 * n // 4))
+    assert manifest["seed"] == 7
+    assert manifest["tuning_partition"] == permutation[:split]
+    assert manifest["gate_partition"] == permutation[split:]
+    assert r["tuning_count"] == min(2, split)
+    assert r["gate_count"] == max(1, round((n - split) * r["sample_fraction"]))
+    assert _names(r["tuning"]) == set(manifest["tuning_inputs"])
+    assert _names(r["gate"]) == set(manifest["gate_inputs"])
+    assert not set(manifest["tuning_partition"]) & set(manifest["gate_partition"])
+
+
+def test_round_split_refuses_single_input(tmp_path):
+    assert _round(tmp_path, 1) is None
+
+
+def test_crash_removal_never_moves_inputs_between_partitions(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 0)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    a = _round(tmp_path, 100, out="a")
+    ma = json.loads(Path(a["split_manifest"]).read_text())
+    b = _round(tmp_path, 100, {ma["tuning_inputs"][0], ma["gate_inputs"][0]}, out="b")
+    mb = json.loads(Path(b["split_manifest"]).read_text())
+    assert ma["tuning_partition"] == mb["tuning_partition"]
+    assert ma["gate_partition"] == mb["gate_partition"]
+    assert b["tuning_count"] == 74 and b["gate_count"] == 24
+
+
+def test_round_refuses_empty_heldout_after_crash_filter(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 0)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    a = _round(tmp_path, 10, out="a")
+    assert _round(tmp_path, 10, _names(a["gate"]), out="b") is None
 
 
 # ===========================================================================
@@ -1500,11 +1550,13 @@ def test_waiting_rounds_are_not_counted_as_attempts(tmp_path):
 
 
 @pytest.mark.parametrize('repair', [False, True])
-def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(monkeypatch, tmp_path, repair):
+@pytest.mark.parametrize('full_set', [False, True])
+def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(monkeypatch, tmp_path, repair, full_set):
     """A corrected broker build may still reach the ordinary acceptance gate."""
     from lib.source_scope import SourceScopeGuard, SourceScopeViolation
     from sandbox import broker
 
+    monkeypatch.setattr(phase3_online.config, 'ONLINE_GATE_FULL_SET', full_set)
     ctx = _prebuild_round_ctx(tmp_path)
     tree = tmp_path / 'source'; (tree / 'fuzz').mkdir(parents=True)
     harness = tree / 'fuzz/target.c'; harness.write_text('int LLVMFuzzerTestOneInput(void) { return 0; }')
@@ -1518,7 +1570,10 @@ def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(mo
     monkeypatch.setattr(phase3_online, 'prepare_round_corpus', lambda **kw: rc)
     monkeypatch.setattr(phase3_online, 'prework_image_for', lambda entry: 'img')
     monkeypatch.setattr(phase3_online, '_gate_replay_rate', lambda directory: None)
-    monkeypatch.setattr(phase3_online, 'build_round_env', lambda **kw: {})
+    def profile_env(**kwargs):
+        assert kwargs['corpus_dir'] == 'tuning'
+        return {'PROFILE_CORPUS': kwargs['corpus_dir']}
+    monkeypatch.setattr(phase3_online, 'build_round_env', profile_env)
     monkeypatch.setattr(phase3_online, '_reassert_edit_mtimes', lambda tree: None)
     monkeypatch.setattr(phase3_online, '_carry_forward_agent_memory', lambda *a: False)
     monkeypatch.setattr(phase3_online, '_write_cpu_cost_summary', lambda c: None)
@@ -1530,6 +1585,11 @@ def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(mo
         accepted.append(ready) or (kw['opt_bin_dir'] if ready else kw['previous_best_bin']))
 
     def optimize(source, target, diff_dir, **kwargs):
+        env = kwargs['codex_extra_env']
+        assert env['PROFILE_CORPUS'] == 'tuning'
+        assert env['FUZZ_SOURCE_FOLDS_PREBUILT_MUTATIONS'] == 'tuning'
+        assert env['FUZZ_SOURCE_FOLDS_SMOKE_CORPUS_DIR'] == 'smoke'
+        assert 'gate' not in env.values() and 'checked' not in env.values()
         report = Path(diff_dir) / 'source_scope_violation.json'
         g = SourceScopeGuard(tree, harness='fuzz/target.c', report_path=report)
         original = harness.read_bytes()
@@ -1561,6 +1621,8 @@ def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(mo
         {'ok': True, 'scanned': 1, 'expected': 1, 'crashers': []})
     gates = []
     def speed_gate(**kwargs):
+        assert kwargs['corpus_dir'] == 'gate'
+        assert kwargs['cap'] is False
         gates.append(True)
         return {'replay_speedup': 1.25, 'partial': False,
                 'baseline': {'median_time_s': 10}, 'optimized': {'median_time_s': 8}}
@@ -1575,3 +1637,36 @@ def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(mo
     assert prov['outcome'] == ('kept' if repair else 'rejected-source-scope')
     history = Path(ctx.online_dir) / 'iter_01/source_diff/source_scope_history.jsonl'
     assert history.exists()
+
+
+def test_30k_snapshot_reserves_7500_inputs_for_final_gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_BUDGET_SECS", 0)
+    monkeypatch.setattr(phase3_online.config, "PHASE2_REPLAY_MAX_UNITS", 0)
+    r = _round(tmp_path, 30000)
+    assert r["tuning_count"] == 22500
+    assert r["gate_count"] == 7500
+    assert not _names(r["tuning"]) & _names(r["gate"])
+    assert not _names(r["smoke"]) & _names(r["gate"])
+
+
+def test_fixed_snapshot_keeps_split_seed_across_rounds(monkeypatch, tmp_path):
+    ctx = _prebuild_failing_round(monkeypatch, tmp_path, "profile")
+    prepare = phase3_online.prepare_round_corpus
+    seeds = []
+    def remember(**kwargs):
+        seeds.append(kwargs["seed"])
+        return prepare(**kwargs)
+    monkeypatch.setattr(phase3_online, "prepare_round_corpus", remember)
+    phase3_online.run_round(ctx, phase3_online.OnlineState(), 1)
+    phase3_online.run_round(ctx, phase3_online.OnlineState(), 2)
+    assert seeds == [phase3_online.config.BASE_SEED] * 2
+
+
+def test_online_round_without_snapshot_skips_before_agent(monkeypatch, tmp_path):
+    ctx = _prebuild_round_ctx(tmp_path)
+    ctx.fixed_mutations = None
+    monkeypatch.setattr(phase3_online.config, "ONLINE_LIVE_MUTATION_CAPTURE", False)
+    monkeypatch.setattr(phase2_setup, "optimize_and_build", lambda *a, **kw:
+                        pytest.fail("agent cannot start without a held-out split"))
+    assert phase3_online.run_round(ctx, phase3_online.OnlineState(), 1) == (False, None, False)
+    assert ctx.ledger[-1]["outcome"] == "no-holdout-snapshot"

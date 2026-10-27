@@ -123,3 +123,19 @@ This enforces edit scope, not behavioral equivalence: permitted source edits
 still need the existing crash and replay checks. The unconfined debug optimizer
 can access host state and therefore does not provide the sandbox's security
 boundary; use the default sandbox for enforcement against an untrusted agent.
+
+Online optimization collects up to 30,000 mutation inputs by default
+(`PHASE2_MUTATION_CAP`). A seeded shuffle splits each snapshot into a 75% tuning
+prefix and a 25% held-out suffix. Profiling, agent replay, and smoke tests use
+only tuning inputs; the final host replay compares both binaries on held-out
+inputs. A fixed snapshot keeps the same partition across later rounds. If time
+or unit limits shrink tuning to x% of its partition, final replay uses x% of the
+held-out partition too, rounded to whole inputs with at least one per partition.
+Crash filtering drops inputs in place without moving them between partitions;
+an empty surviving partition skips the round. `corpus/split_manifest.json`
+records the seed, original partitions, sampling fraction, and surviving input
+membership. It and the held-out corpus stay outside the optimizer mounts.
+`ONLINE_GATE_FULL_SET=1` expands only the host crash check, never final replay
+timing. Online rounds without a usable snapshot skip instead of falling back to
+single-corpus tuning and acceptance. Standalone phase 2 retains its existing
+single-corpus workflow.

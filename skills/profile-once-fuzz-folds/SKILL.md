@@ -21,10 +21,13 @@ you never do them yourself:
    best time so far. Otherwise revert that implementation, diagnose it, and try a justified
    revision within the bounded search below before abandoning the idea.
 
-Everything is measured on the same frozen input set, so **what you profiled is exactly what you
-measure**: the profile and replay describe the same workload, but only replay establishes
-whether a particular implementation improves it. Every number is
-reproducible.
+Profiling and internal replay use the same frozen **tuning** input set, so their measurements
+are comparable and reproducible. In online rounds this is the 75% tuning partition (possibly
+proportionally sampled), not the full snapshot. A separate 25% held-out partition is reserved for
+the host's final replay gate and is unavailable to you. Never request its inputs or results inside
+the optimization loop, tune against it, or attempt to optimize the gate. An internal tuning win
+must still pass the final held-out gate; it does not guarantee acceptance. Standalone phase 2
+retains its existing single-corpus behavior.
 
 **Never re-profile.** There is no refresh window, no evolving corpus, and no post-refresh clean pass
 in this skill.

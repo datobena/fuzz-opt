@@ -94,9 +94,9 @@ for row in "${ROWS[@]}"; do
   PHASE2_OPTIMIZER_TIMEOUT_SECS="$OPT_TIMEOUT" \
   ONLINE_LIVE_MUTATION_CAPTURE=1 \
   ONLINE_MUTATION_MODE=reservoir \
-  PHASE2_MUTATION_CAP=20000 \
+  PHASE2_MUTATION_CAP=30000 \
   PHASE2_CORPUS_BUILD_DURATION_SECS=600 \
-  FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES=20000 \
+  FUZZ_SOURCE_FOLDS_MAX_CORPUS_FILES=30000 \
   ONLINE_TRIAL_CORES="$cores" ONLINE_PROFILE_CPU="$pcpu" \
   nohup python3 run_benchmark.py --online --phase 3 --project "$proj" \
     --duration "$DURATION" --experiment-id "$exp" > "$log" 2>&1 &

@@ -515,7 +515,7 @@ def _launch_container(
     if capture:
         cmd += [
             "-e", f"MUTATION_DUMP_DIR=/mutations",
-            "-e", f"MUTATION_DUMP_CAP={int(getattr(config, 'PHASE2_MUTATION_CAP', 20000))}",
+            "-e", f"MUTATION_DUMP_CAP={int(getattr(config, 'PHASE2_MUTATION_CAP', 30000))}",
             "-e", f"MUTATION_DUMP_MODE={getattr(config, 'ONLINE_MUTATION_MODE', 'reservoir')}",
             "-e", f"MUTATION_DUMP_SEED={seed}",
             "-v", f"{mutations_dir}:/mutations",

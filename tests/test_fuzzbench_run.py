@@ -306,7 +306,7 @@ def _old_runner_cmd(t, duration, capture, shim_src):
     if capture:
         cmd += [
             "-e", "MUTATION_DUMP_DIR=/mutations",
-            "-e", f"MUTATION_DUMP_CAP={int(getattr(config, 'PHASE2_MUTATION_CAP', 20000))}",
+            "-e", f"MUTATION_DUMP_CAP={int(getattr(config, 'PHASE2_MUTATION_CAP', 30000))}",
             "-e", f"MUTATION_DUMP_MODE={getattr(config, 'ONLINE_MUTATION_MODE', 'reservoir')}",
             "-e", f"MUTATION_DUMP_SEED={t.seed}",
             "-v", f"{t._dirs['mutations']}:/mutations",
@@ -372,7 +372,7 @@ def test_arvo_capture_command_is_byte_identical(tmp_path):
         "export AFL_NO_AFFINITY=1 AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1; "
         f"export ASAN_OPTIONS={config.FUZZ_ASAN_OPTIONS} UBSAN_OPTIONS={config.FUZZ_UBSAN_OPTIONS}; "
         "export AFL_CUSTOM_MUTATOR_LIBRARY=/work/mutdump.so; "
-        "export MUTATION_DUMP_DIR=/work/dump MUTATION_DUMP_CAP=20000 "
+        "export MUTATION_DUMP_DIR=/work/dump MUTATION_DUMP_CAP=30000 "
         "MUTATION_DUMP_EVERY=1 MUTATION_DUMP_SEED=7; "
         "mkdir -p /work/dump /work/aflout; "
         f"/out/afl-fuzz -V 33 -s 7 -m none -t {config.AFL_TIMEOUT_FLAG} "

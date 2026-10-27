@@ -102,11 +102,11 @@ PHASE2_MUTATION_ENABLED = os.environ.get("PHASE2_MUTATION_ENABLED", "1") == "1"
 # failure and not a reason to retry seed-only. Set 0 ONLY to restore the old
 # best-effort seed-only degradation (legacy / OSV runs).
 PHASE2_MUTATION_REQUIRED = os.environ.get("PHASE2_MUTATION_REQUIRED", "1") == "1"
-PHASE2_MUTATION_CAP = int(os.environ.get("PHASE2_MUTATION_CAP", "20000"))
+PHASE2_MUTATION_CAP = int(os.environ.get("PHASE2_MUTATION_CAP", "30000"))
 # Reservoir-sample the mutation stream over max(DURATION, time_for_one_queue) so the
 # saved corpus is a UNIFORM sample of the whole run (not the opening prefix), plus a
 # guaranteed one-pass over the seed queue. DURATION is the time-cap floor (10 min);
-# ensure_one_queue_pass extends it when one queue traversal takes longer. Cap 20k
+# ensure_one_queue_pass extends it when one queue traversal takes longer. Cap 30k
 # keeps the reservoir representative while bounding the replay-gate cost.
 PHASE2_MUTATION_DURATION_SECS = int(os.environ.get("PHASE2_MUTATION_DURATION_SECS", "600"))
 PHASE2_MUTATION_EVERY = int(os.environ.get("PHASE2_MUTATION_EVERY", "1"))
@@ -162,22 +162,17 @@ BASELINE_RESTART_MIRROR_SWAPS = os.environ.get(
 # for nothing or leave the slow one unbounded. _replay_unit_cap converts this
 # budget into units using the target's own measured replay rate.
 PHASE2_REPLAY_BUDGET_SECS = int(os.environ.get("PHASE2_REPLAY_BUDGET_SECS", "180"))
-# Online rounds apply this budget ONCE, to the round's mutation set before the
-# agent starts (phase3_online.prepare_round_corpus): the profile, every agent
-# replay and the agent's smoke sample all use the same speed-capped subset. The
-# gate does not shrink it again.
+# Online snapshots are shuffled once into a 75% tuning prefix and a 25%
+# held-out suffix. This budget caps one tuning pass; the identical sampling
+# fraction caps the held-out suffix. Profiling and agent replay see tuning only;
+# the final host replay gate sees held-out inputs only. Neither gate resizes again.
 
-# Online rounds: share of the round's crash-filtered mutations the agent's smoke
-# command runs on the new build (20k mutations -> 1,000 inputs). A crash there is
-# reported to the agent with its sanitizer report.
+# Share of the TUNING partition used for the agent's smoke command. A crash is
+# reported to the agent with its sanitizer report. Held-out inputs never enter it.
 ONLINE_SMOKE_FRACTION = float(os.environ.get("ONLINE_SMOKE_FRACTION", "0.05"))
-# Online rounds: what the final gate TIMES. 0 (default): a sample of the
-# crash-filtered mutations the same size as the speed-capped set the agent tuned
-# on, but different inputs -- so one pass fits PHASE2_REPLAY_BUDGET_SECS and the
-# gate partly tests on inputs the agent never timed. When nothing needed
-# shrinking, all three are the full set. 1: time the full set -- 6 passes of it,
-# ~40 min at 50 exec/s for 20k inputs. The gate's crash check always runs the
-# full set (one pass), whatever this says.
+# Compatibility option: expand the HOST CRASH CHECK to the whole harvest.
+# Final replay TIMING always uses only the proportionally sampled held-out set,
+# regardless of this flag; it cannot revert to timing the full/tuning corpus.
 ONLINE_GATE_FULL_SET = os.environ.get("ONLINE_GATE_FULL_SET", "0") == "1"
 
 # Hard upper bound on units the replay gate times, per pass. 0 = no manual cap

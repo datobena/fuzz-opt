@@ -32,7 +32,7 @@
  *
  * Env:
  *   MUTATION_DUMP_DIR        output directory (unset -> capture disabled)
- *   MUTATION_DUMP_CAP        mutations per batch (default 20000)
+ *   MUTATION_DUMP_CAP        mutations per batch (default 30000)
  *   MUTATION_DUMP_MODE       reservoir (default) | prefix
  *   MUTATION_DUMP_MAX_BYTES  memory ceiling for the held sample (default 512 MiB)
  *   MUTATION_DUMP_EVERY      pre-filter: consider 1 of every N (default 1)
@@ -160,7 +160,7 @@ void *afl_custom_init(void *afl, unsigned int seed) {
     dump_state_t *st = (dump_state_t *)calloc(1, sizeof(dump_state_t));
     if (!st) return NULL;
     st->dir       = getenv("MUTATION_DUMP_DIR");
-    st->cap       = env_ul("MUTATION_DUMP_CAP", 20000);
+    st->cap       = env_ul("MUTATION_DUMP_CAP", 30000);
     st->every     = env_ul("MUTATION_DUMP_EVERY", 1);
     st->max_bytes = (size_t)env_ul("MUTATION_DUMP_MAX_BYTES", 512UL * 1024 * 1024);
     st->rng       = (uint64_t)env_ul("MUTATION_DUMP_SEED", seed ? seed : 0x243F6A88ULL);
