@@ -36,7 +36,7 @@ import config
 from prework.prework_build import prework_image_for, rebuild_with_prework_image
 from lib import tracked_git, source_scope
 from lib import corpus as corpus_util
-from lib import cpu_ledger
+from lib import cpu_ledger, online_resources
 from lib import docker_util
 
 logging.basicConfig(
@@ -1625,9 +1625,10 @@ def run_baseline_profile(*, replay_profile, out_dir, corpus_dir, profile_dir,
         cmd += ["--source-tree", env["PHASE2_PROFILE_SOURCE_TREE"]]
     if env.get("PHASE2_PROFILE_HARNESS"):
         cmd += ["--harness", env["PHASE2_PROFILE_HARNESS"]]
-    rp = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
-                        env=proc_env if proc_env is not None else dict(os.environ),
-                        timeout=int(min_sample_seconds) + 1800)
+    with online_resources.operation("baseline_profile"):
+        rp = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                            env=proc_env if proc_env is not None else dict(os.environ),
+                            timeout=int(min_sample_seconds) + 1800)
     err = rp.stderr or ""
     if rp.returncode != 0:
         if "HOTSPOT TABLE FAILED" in err:
@@ -2895,7 +2896,8 @@ def _invoke_agent_sandboxed(
     # from broker_cpu above: off every trial and profile core, never unpinned
     # (raises when no core is free). Same resolution optimizer_provenance()
     # records, so the provenance names the cpuset that was actually used.
-    agent_cpus = resolve_agent_cpus()
+    resource_policy = online_resources.current()
+    agent_cpus = str(resource_policy.cpu) if resource_policy else resolve_agent_cpus()
 
     return run_sandboxed_optimizer(
         source_dir=source_dir, profile_dir=profile_dir, out_dir=out_dir,
@@ -4340,6 +4342,9 @@ def optimizer_provenance() -> dict:
 
 
 def _agent_cpus_provenance() -> str | None:
+    resource_policy = online_resources.current()
+    if resource_policy is not None:
+        return str(resource_policy.cpu)
     if not getattr(config, "PHASE2_SANDBOX", True):
         return None
     from sandbox.session import resolve_agent_cpus

@@ -27,7 +27,7 @@ def test_per_attempt_copy_is_still_kept_for_forensics():
 def test_the_round_reads_optimization_diff():
     """Pin the coupling that made the mismatch silent."""
     import phase3_online
-    src = inspect.getsource(phase3_online.run_round)
+    src = inspect.getsource(phase3_online._run_round)
     assert '"optimization.diff"' in src
 
 

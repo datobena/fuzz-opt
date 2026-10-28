@@ -36,7 +36,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from lib import cpu_ledger
+from lib import cpu_ledger, online_resources
 from sandbox import broker as broker_mod
 from sandbox import egress
 from sandbox import launch
@@ -510,8 +510,9 @@ def run_sandboxed_optimizer(
     agent runs in, which is AGENT_IMAGE and contains no project source at all.
 
     ``agent_cpus`` pins the agent container (--cpuset-cpus); None resolves it here
-    (resolve_agent_cpus), so no caller can launch the agent unpinned. ``cpu`` is
-    the broker's core, a different thing: where the agent's builds/replays run.
+    (resolve_agent_cpus), so no caller can launch the agent unpinned. Shared-core
+    online sessions instead enforce agent_cpus == cpu == the owning trial CPU;
+    the host-side resource policy quiesces the agent during measured replay.
 
     The agent container must not outlive this call. On a timeout, on any
     exception, and on a normal return alike it is force-removed and confirmed
@@ -532,7 +533,13 @@ def run_sandboxed_optimizer(
                            "optimizer session")
     assert_sandbox_available()
     # Before the broker or proxy start: a bad cpuset fails the round up front.
-    agent_cpus = agent_cpus or resolve_agent_cpus()
+    resource_policy = online_resources.current()
+    if resource_policy is not None:
+        if cpu != resource_policy.cpu or (agent_cpus and agent_cpus != str(cpu)):
+            raise RuntimeError("shared-core agent and broker must use their owning trial CPU")
+        agent_cpus = str(cpu)
+    else:
+        agent_cpus = agent_cpus or resolve_agent_cpus()
     network = ensure_network()
 
     session_dir = Path(out_dir).parent / "sandbox"
@@ -570,7 +577,8 @@ def run_sandboxed_optimizer(
     ctx = broker_mod.BrokerContext(
         image=image, source_dir=source_dir, out_dir=out_dir,
         corpus_dir=corpus_dir, fuzz_target=fuzz_target, project=project,
-        cpu=cpu, audit_log=audit_log or str(session_dir / "broker_audit.log"),
+        cpu=cpu, resource_policy=resource_policy,
+        audit_log=audit_log or str(session_dir / "broker_audit.log"),
         baseline_ref_dir=baseline_ref_dir,
         # Host-side only: the trial's ccache (FuzzBench, verified targets).
         ccache_dir=ccache_dir,
@@ -627,6 +635,13 @@ def run_sandboxed_optimizer(
         )
 
         env = build_agent_env({**(base_env or {}), **build_sandbox_validation_env()})
+        if resource_policy is not None:
+            # The CLI is quiescent during long broker replays. Its Bash-tool
+            # deadline must allow the same long operations as unconfined runs.
+            import config
+            bash_ms = str(getattr(config, "PHASE2_AGENT_BASH_TIMEOUT_MS", 5400000))
+            env["BASH_DEFAULT_TIMEOUT_MS"] = bash_ms
+            env["BASH_MAX_TIMEOUT_MS"] = bash_ms
         # Proxy settings are not part of the FUZZ_SOURCE_FOLDS allowlist -- they are
         # sandbox plumbing, added after scrubbing. NO_PROXY keeps the broker socket
         # and loopback off the proxy path.
@@ -716,6 +731,8 @@ def run_sandboxed_optimizer(
                                "optimizer session")
         logger.info("launching sandboxed optimizer for %s (container %s)",
                     project, agent_name)
+        if resource_policy is not None:
+            resource_policy.agent_container = agent_name
         agent_live = True
         timed_out = False
         try:
@@ -769,6 +786,8 @@ def run_sandboxed_optimizer(
             **teardown,
         }
     finally:
+        if resource_policy is not None:
+            resource_policy.agent_container = None
         # Order matters. Until the agent is gone it can still write the tree, its
         # transcripts and its credential copy, and the broker can still build
         # for it; harvesting, removing the secret or redacting before that races

@@ -992,6 +992,7 @@ def test_run_online_refuses_an_experiment_with_afl_state(monkeypatch, tmp_path, 
 # optimizers while the trials fuzzed on: two baseline arms posing as a campaign.
 # ===========================================================================
 def _online_entry(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "ONLINE_SHARED_TRIAL_CPU", False)
     monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
     monkeypatch.setattr(config, "NUM_TRIALS", 2)
     monkeypatch.setattr(config, "ONLINE_PER_TRIAL_OPTIMIZER", True)
@@ -1418,7 +1419,7 @@ def test_hot_swap_deploys_new_shared_libraries_and_drops_stale_ones(tmp_path):
 def test_run_online_checks_the_profile_before_any_trial_starts():
     import inspect
     src = inspect.getsource(phase3_online.run_online)
-    assert src.index("_preflight_profile(") < src.index("_build_online_trials(entry, experiment_dir)\n    state")
+    assert src.index("_preflight_profile(") < src.index("phase3_runner.start_trial(")
 
 
 def test_both_swap_paths_deploy_the_runtime_libraries():

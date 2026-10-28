@@ -39,7 +39,7 @@ from lib import afl
 from lib import afl_launch
 from lib import corpus as corpus_util
 from lib import tracked_git
-from lib import cpu_ledger, crash_classify, docker_util
+from lib import cpu_ledger, crash_classify, docker_util, online_resources
 from lib import afl_replay
 from lib.live_binary import live_binary as _live_binary
 
@@ -1033,6 +1033,7 @@ class RoundContext:
     ledger_path: str
     swap_timeline_path: str
     profile_cpu: int
+    shared_cpu: bool = False
     rebuild_fn: object = None       # (source_root, out_bin_dir) -> bool|(bool, log)
     wrapper_env_fn: object = None   # (source_root, state_dir) -> dict[str,str]
     ledger: list = field(default_factory=list)
@@ -1457,6 +1458,19 @@ def _end_prebuild_failed_round(ctx: RoundContext, iter_n: int, *, diff_dir: str,
 
 
 def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
+    if not ctx.shared_cpu:
+        return _run_round(ctx, state, iter_n)
+    if ctx.profile_cpu != ctx.trial.cpu:
+        raise RuntimeError("shared optimizer CPU differs from its trial CPU")
+    policy = getattr(ctx.trial, "resource_policy", None)
+    if policy is None:
+        policy = online_resources.TrialResources(ctx.trial, deadline=ctx.deadline)
+        ctx.trial.resource_policy = policy
+    with online_resources.bind(policy):
+        return _run_round(ctx, state, iter_n)
+
+
+def _run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     """One online optimization round on the persistent cumulative source tree.
 
     Returns (accepted, iter_bin_dir). Mirrors setup_cve_arvo_image's gate wiring, but
@@ -2734,9 +2748,8 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # would silently resume the old campaign's queues (and setup below would
     # first rmtree the old run's source tree). The trial list is pure; the real
     # one is built again below. start_trial re-checks per trial as a backstop.
-    _stale = phase3_runner.stale_afl_state(
-        experiment_id, [t for arm in _build_online_trials(entry, experiment_dir)
-                        for t in arm])
+    layout = [t for arm in _build_online_trials(entry, experiment_dir) for t in arm]
+    _stale = phase3_runner.stale_afl_state(experiment_id, layout)
     if _stale:
         logger.error("online: experiment %r already has AFL state in %d trial "
                      "dir(s) (first: %s); refusing to start a fresh campaign on "
@@ -2750,8 +2763,19 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # becomes two baseline arms. Pinned into config afterwards so every later
     # resolve_agent_cpus() (each round's launch and its optimizer_provenance())
     # takes the explicit path and returns this same set instead of re-deriving it.
+    shared_cpu = bool(getattr(config, "ONLINE_SHARED_TRIAL_CPU", False))
+    if shared_cpu and (not getattr(config, "ONLINE_PER_TRIAL_OPTIMIZER", False)
+                       or not getattr(config, "PHASE2_SANDBOX", True)):
+        logger.error("shared trial CPU requires per-trial optimizers and the sandbox")
+        return False
+    if shared_cpu:
+        try:
+            online_resources.validate_trial_cpus(layout)
+        except RuntimeError as exc:
+            logger.error("invalid shared trial CPU layout: %s", exc)
+            return False
     agent_cpus = None
-    if getattr(config, "PHASE2_SANDBOX", True):
+    if getattr(config, "PHASE2_SANDBOX", True) and not shared_cpu:
         from sandbox.session import resolve_agent_cpus
         try:
             agent_cpus = resolve_agent_cpus()
@@ -2780,7 +2804,7 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # both inherit it. Set before the baseline build rather than beside the
     # RoundContext below, because recording starts at the first thing worth
     # recording -- a ledger that only opens after setup silently drops it.
-    cpu_ledger.set_ledger_path(os.path.join(online_dir, "cpu_ledger.jsonl"))
+    cpu_ledger.set_ledger_path("" if shared_cpu else os.path.join(online_dir, "cpu_ledger.jsonl"))
     cpu_ledger.set_round(project=project, iter_n=0)
 
     # 1. extract baseline bin + editable source + poc (n132 image OR classic gcr-ARVO)
@@ -2899,6 +2923,8 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # 2. build the two arms first -- per-trial mode needs each trial's identity
     #    (and its own bin dir) before any context can be constructed.
     baseline_trials, online_trials = _build_online_trials(entry, experiment_dir)
+    if shared_cpu:
+        online_resources.validate_trial_cpus(baseline_trials + online_trials)
     state = OnlineState()
     per_trial = bool(getattr(config, "ONLINE_PER_TRIAL_OPTIMIZER", False))
 
@@ -2929,10 +2955,11 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
             os.makedirs(t_iter0, exist_ok=True)
             shutil.copytree(baseline_bin_dir, t_iter0, dirs_exist_ok=True)
 
-            # One profiling core per optimizer, round-robin over the optimizer
-            # pool. Kept off the trial cores so profiling never steals CPU from
-            # the fuzzing it is measured against.
-            t_cpu = opt_cores[t.trial_id % len(opt_cores)]
+            # Shared mode uses this trial's CPU for every local operation and
+            # agent. The legacy mode instead round-robins the dedicated pool.
+            t_cpu = t.cpu if shared_cpu else opt_cores[t.trial_id % len(opt_cores)]
+            if shared_cpu:
+                t.pause_control_dir = os.path.join(tdir, "pause_control")
             # Own ccache per optimizer, copied from the template (never the
             # template itself): its builds compile this trial's agent-edited code.
             t_cache = (fb_ccache.seed_cache(_ccache_template, fb_ccache.trial_cache_dir(tdir))
@@ -2947,7 +2974,8 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
                 prev_tag="iter_00", optimized_bin_dir=live_bin,
                 ledger_path=os.path.join(tdir, "ledger.json"),
                 swap_timeline_path=os.path.join(tdir, "swap_timeline.json"),
-                profile_cpu=t_cpu, rebuild_fn=t_rebuild, wrapper_env_fn=t_wrapper,
+                profile_cpu=t_cpu, shared_cpu=shared_cpu,
+                rebuild_fn=t_rebuild, wrapper_env_fn=t_wrapper,
                 trial=t)
             tctx.online_trials = [t]
             contexts.append(tctx)
@@ -3000,6 +3028,12 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
         # The cpuset every agent container in this campaign runs on, resolved
         # once at the top of run_online (None: unsandboxed, no container).
         "agent_cpus": agent_cpus,
+        "resource_policy": "shared-trial-core" if shared_cpu else "dedicated-optimizer-cores",
+        "cpu_cost_adjustment": False if shared_cpu else True,
+        "trial_resources": [{"trial_id": c.trial.trial_id, "trial_cpu": c.trial.cpu,
+                             "optimizer_cpu": c.profile_cpu,
+                             "agent_cpus": str(c.profile_cpu) if shared_cpu else agent_cpus}
+                            for c in contexts if c.trial is not None],
         "host": provenance.host_environment(),
         "optimizer": phase2_setup.optimizer_provenance(),
         "seed_corpus": _seed_corpus_provenance(experiment_dir),
@@ -3044,6 +3078,8 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
                 config, "TRIAL_RELAUNCH_MAX_QUICK_DEATHS", 3)) > 0,
         },
     }
+    if shared_cpu:
+        _campaign["optimizer"]["agent_cpus"] = "per-trial; see trial_resources"
     provenance.write_json(os.path.join(online_dir, "campaign_provenance.json"),
                           _campaign)
     logger.info("campaign provenance: host core_pattern=%s, cxx_dynamic=%s, optimizer=%s",
@@ -3071,6 +3107,10 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
             # so a genuine swap would be misread as the trial having died.
             **({"swap_barrier": threading.Event(),
                 "relaunch_ready": threading.Event()} if per_trial else {})}
+        if shared_cpu:
+            _write_json(os.path.join(t.pause_control_dir, "trial.json"), {
+                "trial_id": t.trial_id, "cpu": t.cpu,
+                "wall_start": state.trials[t.trial_id]["overall_start"]})
         futures.append(executor.submit(_monitor_online_trial, t, experiment_id, duration, state))
 
     # 5. optimizer loops (fuzzing continues to budget regardless).
@@ -3097,10 +3137,12 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     _opt_deadline = (min(_starts) if _starts else time.time()) + float(duration)
     for _c in contexts:
         _c.deadline = _opt_deadline
+        if _c.shared_cpu and _c.trial.trial_id in state.trials:
+            _c.deadline = state.trials[_c.trial.trial_id]["overall_start"] + float(duration)
     logger.info("optimizer budget deadline in %.1fh; no new round within %.0fm of it",
                 max(_opt_deadline - time.time(), 0.0) / 3600.0, _min_lead / 60.0)
 
-    def _drive(c: RoundContext) -> int:
+    def _drive_loop(c: RoundContext) -> int:
         tid = c.trial.trial_id if c.trial is not None else -1
         # Offset this optimizer from its siblings before its first round. See
         # ONLINE_OPTIMIZER_STAGGER_SECS: ten simultaneous agent sessions against
@@ -3134,6 +3176,16 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
                              "fuzzing its current binary", tid)
             return c.iter_n
 
+    def _drive(c):
+        if not c.shared_cpu:
+            return _drive_loop(c)
+        if getattr(c.trial, "pause_controller", None) is None:
+            logger.error("trial_%02d did not start a pause-capable container", c.trial.trial_id)
+            return 0
+        c.trial.resource_policy = online_resources.TrialResources(c.trial, deadline=c.deadline)
+        with online_resources.bind(c.trial.resource_policy):
+            return _drive_loop(c)
+
     if per_trial:
         opt_pool = ThreadPoolExecutor(max_workers=len(contexts),
                                       thread_name_prefix="opt")
@@ -3154,7 +3206,7 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # cost -- but _write_cpu_cost_summary writes it into each optimizer's OWN
     # dir, and analysis/plot_coverage_growth.py reads optimized/online/cpu_cost.json.
     # Without this the coverage plots silently lose CPU charging entirely.
-    if per_trial:
+    if per_trial and not shared_cpu:
         try:
             _agg = cpu_ledger.summarize(
                 cpu_ledger.load(cpu_ledger.ledger_path()),
@@ -3190,6 +3242,8 @@ def _write_cpu_cost_summary(ctx: RoundContext) -> dict | None:
     online arm's core count, which is what converts core-seconds into the
     fuzzing wall-clock a coverage plot needs.
     """
+    if ctx.shared_cpu:
+        return None
     path = cpu_ledger.ledger_path()
     if not path or not os.path.exists(path):
         return None

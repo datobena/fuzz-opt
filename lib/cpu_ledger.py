@@ -151,6 +151,9 @@ def record(
     Never raises: a failure to record must not take down an optimization round
     that is otherwise fine.
     """
+    from lib import online_resources
+    if online_resources.current() is not None:
+        return None
     path = ledger_path()
     if not path:
         return None
@@ -198,6 +201,15 @@ def timed(stage: str, *, cores: float = 1, counts: bool = True,
     ``error``, because failed work consumes CPU exactly like successful work --
     dropping it would understate the cost of a round that failed late.
     """
+    from lib import online_resources
+    policy = online_resources.current()
+    if policy is not None:
+        with policy.operation(stage):
+            yield {}
+        return
+    if not ledger_path():
+        yield {}
+        return
     t0 = time.time()
     info: dict = {}
     try:

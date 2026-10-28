@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
-from lib import cpu_ledger
+from lib import cpu_ledger, online_resources
 from lib.core_lock import core_lock
 from prework.fuzzbench_image import fuzzbench_build_command, is_fuzzbench_image
 from prework.prework_build import arvo_compile_args, ownership_command
@@ -79,6 +79,7 @@ class BrokerContext:
     fuzz_target: str
     project: str
     cpu: int
+    resource_policy: object | None = field(default=None, repr=False)
     audit_log: str = ""
     # Host-owned policy, never selected by a broker request. Every build uses
     # an independently validated private snapshot, not the live writable mount.
@@ -692,6 +693,17 @@ def _note_session_end(ctx: BrokerContext, info: dict) -> None:
 
 
 def handle_request(req, ctx: BrokerContext) -> dict:
+    if ctx.resource_policy is not None:
+        if ctx.stop.is_set():
+            return {"ok": False, "error": SESSION_ENDED_MSG}
+        if ctx.cpu != ctx.resource_policy.cpu:
+            return {"ok": False, "error": "broker CPU differs from its owning trial"}
+        with online_resources.bind(ctx.resource_policy):
+            return _handle_request(req, ctx)
+    return _handle_request(req, ctx)
+
+
+def _handle_request(req, ctx: BrokerContext) -> dict:
     """Dispatch one request. Never raises -- a broker crash would kill the round.
 
     Every op here is real CPU work the optimizer causes, so each is timed into

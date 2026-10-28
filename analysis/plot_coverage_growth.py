@@ -9,7 +9,8 @@ Two corrections that matter for an honest comparison:
 
 2. Wall-clock, not run_time. AFL's clock (plot_data relative_time, and the
    queue/crash `time:` fields) is run_time -- it does not advance while the
-   process is stopped. The online arm is stopped at every hot swap, so plotting
+   process has exited for a swap. Cooperative measurement pauses keep this
+   clock advancing; their recorded gaps are shown without adding time. The online arm is stopped at every hot swap, so plotting
    against AFL's clock silently DELETES that downtime and makes the arm look as
    though it fuzzed for the full wall-clock window. Each trial's samples are
    therefore shifted by the wall-clock it lost before them -- MEASURED per
@@ -489,6 +490,14 @@ def attribute_ledger(rows: list, *, optimizers, finishes: dict,
             "untagged_core_s": untagged}
 
 
+def shared_trial_cpu(exp_dir: Path) -> bool:
+    try:
+        metadata = json.loads((exp_dir / "optimized/online/campaign_provenance.json").read_text())
+        return metadata.get("resource_policy") == "shared-trial-core"
+    except (OSError, ValueError):
+        return False
+
+
 def per_trial_charge_windows(exp_dir: Path, stops_by_trial: dict,
                              report: bool = True,
                              info: dict | None = None) -> dict:
@@ -537,6 +546,8 @@ def per_trial_charge_windows(exp_dir: Path, stops_by_trial: dict,
     ``info``, when given, is filled with the attribution summary the caption
     needs ("setup_core_s", "optimizers").
     """
+    if shared_trial_cpu(exp_dir):
+        return {}  # Real contention already consumed this trial's wall time.
     online = exp_dir / "optimized" / "online"
     rows = cpu_ledger.load(online / "cpu_ledger.jsonl")
     if not rows:
@@ -629,6 +640,8 @@ def cpu_charge_windows(exp_dir: Path, project: str, swaps):
 
     Returned in run_time coordinates so it composes with the swap downtime.
     """
+    if shared_trial_cpu(exp_dir):
+        return []
     try:
         cost = json.loads((exp_dir / "optimized" / "online" / "cpu_cost.json").read_text())
     except (OSError, json.JSONDecodeError):
@@ -813,7 +826,7 @@ def axis_windows(exp_dir: Path, experiment_id: str, logged: dict,
                  report: bool = True) -> dict:
     """run_time -> wall-clock windows for every trial of both arms, MEASURED.
 
-    AFL's clock (run_time) stops whenever the trial is not fuzzing, and the
+    AFL's run_time omits container restart/start-up intervals, and the
     logged swap downtime (HOT-SWAP -> swap complete, ~10-20 s) is only part of
     that: the relaunched AFL re-calibrates its whole queue before its clock
     resumes (afl-fuzz.c resets start_time after the dry run). Adding only the
@@ -1145,7 +1158,60 @@ def _trial_id(path) -> int:
     return int(m.group(1)) if m else -1
 
 
-def load_coverage(d: Path, windows, baseline=None):
+def pause_intervals(exp_dir: Path) -> dict:
+    """Actual wall-clock intervals, already included in AFL run_time.
+
+    Read the hook's events rather than timing CPU operations. These annotate
+    missing samples; unlike hot-swap downtime they MUST NOT shift later x's.
+    """
+    out = {}
+    for control in exp_dir.glob("optimized/online/trials/trial_*/pause_control"):
+        try:
+            start = float(json.loads((control / "trial.json").read_text())["wall_start"])
+            rows = (control / "events.jsonl").read_text().splitlines()
+        except (OSError, ValueError, KeyError):
+            continue
+        pending, intervals = {}, []
+        for line in rows:
+            try:
+                row = json.loads(line)
+                token, wall = row["token"], float(row["wall_ts"]) - start
+                if row["event"] == "pause":
+                    pending[token] = wall
+                elif row["event"] == "resume" and token in pending:
+                    a = pending.pop(token)
+                    if wall >= a:
+                        intervals.append((max(0, a), max(0, wall)))
+            except (ValueError, KeyError, TypeError):
+                continue
+        out[_trial_id(control)] = sorted(intervals)
+    return out
+
+
+def mark_pauses(series, intervals, *, zero=False):
+    """Insert flat/zero segments on an existing wall axis, never add time.
+
+    Coverage holds the last observed common-instrument value. Its resolution
+    remains that of the original coverage samples; a pause cannot recover
+    discoveries that were never sampled before its boundary.
+    """
+    xs, ys = series
+    points = list(zip(xs, ys))
+    for a, b in intervals:
+        if b <= a:
+            continue
+        before = [(x, y) for x, y in points if x < a]
+        value = 0.0 if zero else (before[-1][1] if before else 0.0)
+        points = [(x, y) for x, y in points if not a <= x <= b]
+        step = min(float(GRID[1] - GRID[0]) / 2, max(b - a, 1e-6))
+        for x in np.arange(a, b, step):
+            points.append((float(x), value))
+        points.append((b, value))
+        points.sort()
+    return np.array([x for x, y in points]), np.array([y for x, y in points])
+
+
+def load_coverage(d: Path, windows, baseline=None, pauses=None):
     out = {}
     for arm in ARMS:
         series = []
@@ -1156,7 +1222,9 @@ def load_coverage(d: Path, windows, baseline=None):
                     xs.append(float(row["time_s"])); ys.append(int(row["cumulative_edges"]))
             if xs:
                 w = _windows_for(windows, arm, _trial_id(f), baseline)
-                series.append(with_gaps(xs, ys, w, hold="flat"))
+                values = with_gaps(xs, ys, w, hold="flat")
+                series.append(mark_pauses(values, (pauses or {}).get(_trial_id(f), []))
+                              if arm == "optimized" else values)
         if series:
             out[arm] = series
     return out
@@ -1164,6 +1232,7 @@ def load_coverage(d: Path, windows, baseline=None):
 
 def load_execs(exp_dir: Path, windows, baseline=None):
     out = {}
+    pauses = pause_intervals(exp_dir)
     for arm in ARMS:
         series = []
         for pd in sorted(exp_dir.glob(f"{arm}/trial_*/afl_out/default/plot_data")):
@@ -1180,7 +1249,9 @@ def load_execs(exp_dir: Path, windows, baseline=None):
                     continue
             if xs:
                 w = _windows_for(windows, arm, _trial_id(pd), baseline)
-                series.append(with_gaps(xs, ys, w, hold="zero"))
+                values = with_gaps(xs, ys, w, hold="zero")
+                series.append(mark_pauses(values, pauses.get(_trial_id(pd), []), zero=True)
+                              if arm == "optimized" else values)
         if series:
             out[arm] = series
     return out
@@ -1206,6 +1277,8 @@ def _charge_caption(exp_dir: Path, per_trial: bool = False,
     the caption says so only when there was setup, so a campaign without ccache
     template builds does not mention it at all.
     """
+    if shared_trial_cpu(exp_dir):
+        return "actual shared trial CPU; no synthetic charge"
     for f in [exp_dir / "optimized" / "online" / "cpu_cost.json"]:
         if not f.exists():
             continue
@@ -1301,7 +1374,7 @@ def main() -> int:
                          "without overwriting the data.")
     ap.add_argument("--smooth", type=int, default=9,
                     help="throughput smoothing window in 30 s bins (default 9 = "
-                         "4.5 min); applied within fuzzing segments only, never "
+                         "4.5 min; shared-core runs use 0); applied within fuzzing segments only, never "
                          "across a stopped interval. 0 disables.")
     args = ap.parse_args()
 
@@ -1321,8 +1394,11 @@ def main() -> int:
         # Optimizer CPU, charged to the online arm. Unlike a swap stop this is
         # campaign-wide (the optimizer's core could have been fuzzing at that
         # instant for ANY trial), so it stays on one shared timeline.
+        physical_cpu = shared_trial_cpu(exp_dir)
+        charge_cpu = args.charge_cpu and not physical_cpu
+        smoothing = 0 if physical_cpu else args.smooth
         charge = (cpu_charge_windows(exp_dir, project, swaps)
-                  if args.charge_cpu else [])
+                  if charge_cpu else [])
         per_trial_charged = False
         pt_info: dict = {}
         stops, lead, base_axis = {}, {}, {}
@@ -1339,7 +1415,7 @@ def main() -> int:
                    for t in set(by_trial) | set(axis["optimized"])}
             # Each trial charged ITS OWN optimizer, not a share of the campaign.
             pt = (per_trial_charge_windows(exp_dir, own, info=pt_info)
-                  if args.charge_cpu else {})
+                  if charge_cpu else {})
             per_trial_charged = bool(pt)
             if pt:
                 # Union of both key sets: by_trial lists only trials with at
@@ -1386,7 +1462,7 @@ def main() -> int:
         covdir = Path(args.covdir) / args.experiment_id / exp_dir.name
         if not covdir.is_dir():
             covdir = Path(args.covdir) / exp_dir.name
-        cov = load_coverage(covdir, windows, base_axis)
+        cov = load_coverage(covdir, windows, base_axis, pause_intervals(exp_dir))
         exe = load_execs(exp_dir, windows, base_axis)
         if not cov and not exe:
             continue
@@ -1424,9 +1500,9 @@ def main() -> int:
                     # baseline's data; this withholds them from its rendering.
                     amask = (gmask if arm == "optimized"
                              else np.zeros_like(gmask, dtype=bool))
-                    mean, lo, hi = (smooth(mean, amask, args.smooth),
-                                    smooth(lo, amask, args.smooth),
-                                    smooth(hi, amask, args.smooth))
+                    mean, lo, hi = (smooth(mean, amask, smoothing),
+                                    smooth(lo, amask, smoothing),
+                                    smooth(hi, amask, smoothing))
                 else:
                     # Cumulative coverage: hold the last value to the grid end.
                     mean, lo, hi, n = band(data[arm], hold_right=True)
@@ -1486,12 +1562,15 @@ def main() -> int:
             # per-replicate number is a lie about the very quantity plotted.
             + (f" + {cpu_s/60:.1f} min optimizer CPU (profile / rebuild / replay), "
                f"charged {_charge_caption(exp_dir, per_trial_charged, **pt_info)}"
-               if args.charge_cpu else "")
+               if charge_cpu else "")
             # Both tails stay short: the suptitle is one line and
             # bbox_inches="tight" widens the whole figure to fit it.
             + (".  Grey bands = median trial not fuzzing."
                if args.bands else ".  Green = where that cost is paid."),
             fontsize=9)
+        if physical_cpu:
+            fig.suptitle(f"{exp_dir.name} — one shared CPU per trial; actual wall-clock cost; "
+                         "profile/replay pauses included, no CPU charging", fontsize=9)
         fig.tight_layout()
         # Same reason as the CSV path: name by experiment so a second campaign
         # on one target cannot overwrite the first's figure.

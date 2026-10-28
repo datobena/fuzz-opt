@@ -139,3 +139,11 @@ membership. It and the held-out corpus stay outside the optimizer mounts.
 timing. Online rounds without a usable snapshot skip instead of falling back to
 single-corpus tuning and acceptance. Standalone phase 2 retains its existing
 single-corpus workflow.
+
+On `experiment/aflpp-pause-resume`, online optimization defaults to
+`ONLINE_SHARED_TRIAL_CPU=1`: each optimizer and all of its local CPU work share
+the corresponding trial's core. Profiling and replay pause the fuzzer and agent;
+other work competes with fuzzing. CPU-cost charging is disabled. AFL's clock
+already includes these pauses; recorded boundary events make plots show flat
+coverage and zero throughput without adding that time twice. See the
+[implementation and live validation](docs/experiments/shared-trial-cpu.md).

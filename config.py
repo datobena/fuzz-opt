@@ -375,13 +375,16 @@ ONLINE_PREBUILD_FAIL_STOP = int(os.environ.get("ONLINE_PREBUILD_FAIL_STOP", "3")
 ONLINE_PREFLIGHT_PROFILE_SECS = int(os.environ.get("ONLINE_PREFLIGHT_PROFILE_SECS", "30"))
 ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES = int(
     os.environ.get("ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES", "100"))
-# Cores pinned to the 20 fuzzing trials vs the disjoint pool reserved for the
-# optimizer's docker work, so optimization does not steal (and bias) trial cycles.
+# Trial cores. The optimizer pool is used only in legacy dedicated-core mode;
+# shared mode places every round operation and agent on its owning trial CPU.
 ONLINE_TRIAL_CORES = os.environ.get("ONLINE_TRIAL_CORES", "4-23")
 ONLINE_OPTIMIZER_CORES = os.environ.get("ONLINE_OPTIMIZER_CORES", "24-39")
+# Experimental branch default: each optimizer shares its own trial CPU, with
+# physical contention paid directly in wall time. 0 restores the legacy pool.
+ONLINE_SHARED_TRIAL_CPU = os.environ.get("ONLINE_SHARED_TRIAL_CPU", "1") == "1"
 # Which live trial's corpus feeds a round: "largest" live corpus (tie -> lowest id).
 ONLINE_SNAPSHOT_TRIAL_SELECTOR = os.environ.get("ONLINE_SNAPSHOT_TRIAL_SELECTOR", "largest")
-# Core the optimizer pins profiling / mutation-capture / replay-timing to. Distinct
+# Setup profiling/replay core in shared mode; legacy optimizer core otherwise. Distinct
 # per project in a parallel multi-project run so the timing gates don't collide on one
 # core. Default: the top reserved core. Empty -> RESERVED_CORES-1.
 ONLINE_PROFILE_CPU = os.environ.get("ONLINE_PROFILE_CPU", "")
@@ -392,6 +395,7 @@ ONLINE_PROFILE_CPU = os.environ.get("ONLINE_PROFILE_CPU", "")
 # ONLINE_PROFILE_CPU. A setup build that fails multi-core is retried once on
 # ONLINE_PROFILE_CPU (parallel-make races, e.g. woff2). Empty -> ONLINE_PROFILE_CPU.
 ONLINE_SETUP_BUILD_CPUS = os.environ.get("ONLINE_SETUP_BUILD_CPUS", "")
+# Legacy/standalone AGENT cpuset, ignored for shared-core online rounds.
 # Cpuset for the sandboxed AGENT container (the Claude CLI, plus whatever it runs
 # in there -- the image has gcc). The broker already pins the agent's builds,
 # smokes and replays to its profile core; the container itself was unpinned, so

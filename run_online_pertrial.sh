@@ -34,15 +34,11 @@
 #   (setup, before any trial starts: builds use all of 2-39, SETUP_BUILD_CPUS)
 #   cores 40-79  idle (HT siblings) -- never allocated
 #
-# Each optimizer's profile core carries ALL of that optimizer's CPU work:
-# profiling prebuild, rebuild, replay gate, PoC check, and every build/smoke/
-# replay its sandboxed agent requests through the broker. That is what keeps
-# optimization from stealing cycles from the trials it is measured against.
-# The agent container itself runs on AGENT_CPUS, not on those cores: it was
-# unpinned before, so the CLI (and any gcc/script the agent ran in it) could
-# land on a trial core or on a profile core mid-replay. Empty AGENT_CPUS derives
-# the set (physical cores minus trial and profile cores and their HT siblings,
-# here 0-1,32-39); an empty derived set aborts the run rather than go unpinned.
+# Shared-core mode (default on this branch): trial i, its optimizer agent, and
+# all round CPU work share trial i's core. Builds/smoke contend naturally;
+# profiling/replay pause the fuzzer and agent. No CPU-cost charging is needed.
+# ONLINE_SHARED_TRIAL_CPU=0 restores the dedicated optimizer/agent pools above.
+# SETUP_CPU and SETUP_BUILD_CPUS apply before trials start in either mode.
 #
 #   ./run_online_pertrial.sh libxml2
 #   BUILD_OPT_LEVEL=O3 ./run_online_pertrial.sh libxml2    # ARVO override, see below
@@ -161,11 +157,12 @@ if grep -q "FAIL . refresh token outlives the campaign" <<< "$PREFLIGHT"; then
 fi
 
 echo "launching ${PROJ}: ${TRIALS}+${TRIALS} trials on ${TRIAL_CORES}, "\
-"${TRIALS} optimizers on ${OPT_CORES}, -O level '$( [ "$FB_KIND" = fuzzbench ] && echo 'fuzzbench (-O1 bug / -O3 coverage)' || echo "${BUILD_OPT_LEVEL:-default}")', exp=${exp}"
+"${TRIALS} optimizers (shared trial CPU=${ONLINE_SHARED_TRIAL_CPU:-1}), -O level '$( [ "$FB_KIND" = fuzzbench ] && echo 'fuzzbench (-O1 bug / -O3 coverage)' || echo "${BUILD_OPT_LEVEL:-default}")', exp=${exp}"
 
 NUM_TRIALS="$TRIALS" \
 ONLINE_ENABLED=1 PHASE3_BACKEND=local \
 ONLINE_PER_TRIAL_OPTIMIZER=1 \
+ONLINE_SHARED_TRIAL_CPU="${ONLINE_SHARED_TRIAL_CPU:-1}" \
 ONLINE_FIXED_MUTATION_CORPUS=0 \
 ONLINE_SWAP_INTERVAL_SECS="$INTERVAL" ONLINE_CONVERGENCE_K="$CONVERGENCE_K" \
 PHASE2_OPTIMIZER_TIMEOUT_SECS="$OPT_TIMEOUT" \

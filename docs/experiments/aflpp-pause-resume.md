@@ -77,10 +77,10 @@ with trial.pause_controller.paused(timeout=10, max_pause=120):
 The controller inherits the launched segment's wall-clock deadline. The caller
 must discard a measurement if the context raises `PauseError`.
 
-Ordinary trials do not enable the pause hook. This branch supplies and tests the
-pause primitive and lifecycle handling. It does not yet migrate all optimizer
-operations onto trial cores, wire pause scopes around all profiling/replay
-operations, or remove CPU-cost charging.
+The initial prototype (`68c20c7`) supplied this opt-in pause primitive. The branch
+now also includes [shared-core online optimization](shared-trial-cpu.md), which
+enables it for online trials, places their optimization work on their CPU, and
+replaces estimated CPU charging with actual contention.
 
 ## Reproduce
 

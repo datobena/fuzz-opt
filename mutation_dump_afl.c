@@ -46,6 +46,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #define MODE_RESERVOIR 0
 #define MODE_PREFIX 1
@@ -118,6 +119,22 @@ static int pause_read(const char *path, char token[65], uint64_t *until) {
     return ok;
 }
 
+/* Actual pause boundaries, not CPU-cost estimates. AFL's wall clock advances
+ * during a cooperative pause, but it cannot write plot_data while waiting.
+ * Record two events so plots can hold coverage flat and exec/s at zero without
+ * adding the already-accounted-for wall time to their x axis a second time. */
+static int pause_event(dump_state_t *st, const char *token, const char *event) {
+    char path[4096];
+    if (snprintf(path, sizeof(path), "%s/events.jsonl", st->pause_dir) >= (int)sizeof(path)) return 0;
+    struct timespec wall;
+    clock_gettime(CLOCK_REALTIME, &wall);
+    FILE *f = fopen(path, "a");
+    if (!f) return 0;
+    int ok = fprintf(f, "{\"token\":\"%s\",\"event\":\"%s\",\"pid\":%d,\"wall_ts\":%.9f}\n",
+                     token, event, st->pid, (double)wall.tv_sec + wall.tv_nsec / 1e9) > 0;
+    return fclose(f) == 0 && ok;
+}
+
 static void pause_before_testcase(dump_state_t *st) {
     if (!st->pause_dir) return;
     uint64_t now = now_ms();
@@ -130,6 +147,9 @@ static void pause_before_testcase(dump_state_t *st) {
         snprintf(tmp, sizeof(tmp), "%s/ack.%d", st->pause_dir, st->pid) >= (int)sizeof(tmp)) return;
     if (!pause_read(request, token, &until) || until <= now ||
         !strcmp(token, st->expired_pause)) return;
+    for (const char *p = token; *p; p++)
+        if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-') return;
+    if (!pause_event(st, token, "pause")) return;
     FILE *f = fopen(tmp, "w");
     if (!f) return;  /* No acknowledgement means the host must not proceed. */
     int written = fprintf(f, "%s %d\n", token, st->pid) > 0;
@@ -143,7 +163,9 @@ static void pause_before_testcase(dump_state_t *st) {
         struct timespec delay = {0, 20000000};
         nanosleep(&delay, NULL);
     }
-    unlink(ack);
+    /* Leave an unreleased ack on a logging failure: the host rejects the
+     * measurement rather than reporting an interval it cannot reconstruct. */
+    if (pause_event(st, token, "resume")) unlink(ack);
 }
 
 static unsigned long env_ul(const char *name, unsigned long dflt) {
