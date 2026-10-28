@@ -1,0 +1,104 @@
+{
+  "recorded_utc": "2026-10-28T21:56:28.967415+00:00",
+  "kernel": "6.8.0-147-generic",
+  "image": "bench-aflpp/libxml2-arvo-1972",
+  "image_id": "sha256:5385198173748446a46958ef9af310ac55189815e3323094d944a5cb6aebd3b3",
+  "cpu": 2,
+  "synthetic_cases": [
+    {
+      "mode": "raw",
+      "persistent": false,
+      "pause_seconds": 0.8,
+      "cycles": 5,
+      "testcase_timeout_ms": 300,
+      "stats": {
+        "execs_done": "23",
+        "saved_hangs": "0",
+        "total_tmout": "3",
+        "saved_crashes": "0",
+        "run_time": "4",
+        "slowest_exec_ms": "41"
+      }
+    },
+    {
+      "mode": "cooperative",
+      "persistent": false,
+      "pause_seconds": 0.8,
+      "cycles": 5,
+      "testcase_timeout_ms": 300,
+      "exception_resumed": true,
+      "same_core_cpu_work": true,
+      "owner_death_resume_seconds": 0.444,
+      "deadline_invalidated_measurement": true,
+      "swap_invalidated_measurement": true,
+      "stats": {
+        "execs_done": "50",
+        "saved_hangs": "0",
+        "total_tmout": "0",
+        "saved_crashes": "0",
+        "run_time": "6",
+        "slowest_exec_ms": "41"
+      },
+      "replacement_ignores_old_cleanup": true,
+      "shutdown_invalidated_measurement": true
+    },
+    {
+      "mode": "raw",
+      "persistent": true,
+      "pause_seconds": 0.8,
+      "cycles": 5,
+      "testcase_timeout_ms": 300,
+      "stats": {
+        "execs_done": "23",
+        "saved_hangs": "0",
+        "total_tmout": "1",
+        "saved_crashes": "0",
+        "run_time": "4",
+        "slowest_exec_ms": "40"
+      }
+    },
+    {
+      "mode": "cooperative",
+      "persistent": true,
+      "pause_seconds": 0.8,
+      "cycles": 5,
+      "testcase_timeout_ms": 300,
+      "exception_resumed": true,
+      "same_core_cpu_work": true,
+      "owner_death_resume_seconds": 0.439,
+      "deadline_invalidated_measurement": true,
+      "swap_invalidated_measurement": true,
+      "stats": {
+        "execs_done": "46",
+        "saved_hangs": "0",
+        "total_tmout": "0",
+        "saved_crashes": "0",
+        "run_time": "6",
+        "slowest_exec_ms": "40"
+      },
+      "replacement_ignores_old_cleanup": true,
+      "shutdown_invalidated_measurement": true
+    }
+  ],
+  "real_libxml2": {
+    "mode": "cooperative-real-libxml2",
+    "cycles": 10,
+    "cmplog": true,
+    "same_container_after_pauses": true,
+    "process_states_while_paused": "PID                 STAT                COMMAND\n167928              Ss                  bash\n167955              S                   afl-fuzz\n167956              S                   tee\n167957              Ss                  xml\n167958              Ss                  xml\n167959              T                   xml",
+    "stats": {
+      "execs_done": "8760",
+      "stability": "100.00%",
+      "saved_crashes": "0",
+      "saved_hangs": "0",
+      "total_tmout": "0",
+      "afl_version": "++5.02c",
+      "target_mode": "persistent shmem_testcase deferred",
+      "command_line": "/out/afl-fuzz -i /corpus -o /afl_out -m none -t 1000 -d -x /out/afl++.dict -c /out/cmplog/xml -x /out/xml.dict -s 1337 -V 90 -- /out/xml 2147483647"
+    }
+  },
+  "real_target_sha256": {
+    "xml": "7642426eb91e4378f3a10e18b1dd2378e267bf47874fc14a98ffe866a695d481",
+    "cmplog/xml": "0c2ba04f366b876a6f04354047f1381f16401c8480fef77e376f994118fc1c25"
+  }
+}

@@ -2141,8 +2141,18 @@ def _monitor_online_trial(trial, experiment_id, duration, state: OnlineState):
 
     while True:
         while docker_util.container_is_running(trial.container_id):
+            # A cooperative pause is still a running container. Enforce the
+            # wall-clock trial budget even if AFL is waiting in the hook and
+            # has not returned to its own -V deadline check yet.
+            if (getattr(trial, "pause_controller", None) is not None
+                    and time.time() - overall_start >= duration):
+                docker_util.stop_container(trial.container_id)
+                break
             scan()
-            time.sleep(2 if time.time() - overall_start < 30 else 10)
+            delay = 2 if time.time() - overall_start < 30 else 10
+            if getattr(trial, "pause_controller", None) is not None:
+                delay = min(delay, max(0, duration - (time.time() - overall_start)))
+            time.sleep(delay)
         scan()
         found_bug = crash_classify.trial_found_bug(crash_times, duration)
         elapsed = time.time() - overall_start

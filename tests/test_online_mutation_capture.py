@@ -57,6 +57,19 @@ def test_non_capture_trials_are_untouched(monkeypatch, tmp_path):
     assert "/mutations" not in joined
 
 
+def test_pause_opt_in_loads_hook_even_without_mutation_capture(monkeypatch, tmp_path):
+    t = _trial(capture=False)
+    t.pause_control_dir = str(tmp_path / "pause")
+    command = _launch(monkeypatch, t, tmp_path)
+    joined = " ".join(command)
+    assert "TRIAL_PAUSE_DIR=/trial_pause" in joined
+    assert f"{tmp_path / 'pause'}:/trial_pause" in joined
+    assert "export AFL_CUSTOM_MUTATOR_LIBRARY=/tmp/mutdump.so" in command[-1]
+    assert "MUTATION_DUMP_DIR=" not in joined
+    assert t.pause_controller.deadline is not None
+    t.pause_controller.cancel("test cleanup")
+
+
 def test_shim_build_failure_does_not_kill_the_trial(monkeypatch, tmp_path):
     """Losing capture costs an optimization round; losing the trial costs a data
     point. The build must be non-fatal."""

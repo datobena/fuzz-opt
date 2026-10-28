@@ -27,7 +27,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
-from lib import afl, afl_launch, crash_classify, docker_util, provenance, swap_signal
+from lib import afl, afl_launch, crash_classify, docker_util, provenance, swap_signal, trial_pause
 from prework.build_image import image_tag
 
 logging.basicConfig(
@@ -422,6 +422,13 @@ def _launch_container(
     dirs = trial._dirs
     seed = trial.seed
 
+    # Experimental opt-in: callers attach a pause_control_dir to this trial.
+    # Invalidate any old measurement before removing/relaunching its container.
+    trial_pause.cancel_trial(trial, "trial relaunching")
+    pause_dir = getattr(trial, "pause_control_dir", "")
+    if pause_dir and getattr(trial, "pause_controller", None) is None:
+        trial.pause_controller = trial_pause.TrialPause(pause_dir)
+
     # Clean up any leftover container with same name
     subprocess.run(
         ["docker", "rm", "-f", container_name],
@@ -521,6 +528,11 @@ def _launch_container(
             "-v", f"{mutations_dir}:/mutations",
             "-v", f"{shim_src}:/tmp/mutation_dump_afl.c:ro",
         ]
+    if pause_dir:
+        cmd += ["-v", f"{pause_dir}:/trial_pause",
+                "-e", "TRIAL_PAUSE_DIR=/trial_pause"]
+        if not capture:
+            cmd += ["-v", f"{shim_src}:/tmp/mutation_dump_afl.c:ro"]
     cmd += [
         docker_image,
         "/bin/bash", "-c",
@@ -534,7 +546,7 @@ def _launch_container(
              f"-o /tmp/mutdump.so /tmp/mutation_dump_afl.c 2>/tmp/shim_build.log "
              f"&& export AFL_CUSTOM_MUTATOR_LIBRARY=/tmp/mutdump.so "
              f"|| echo 'mutation shim build FAILED; continuing without capture';"
-             if capture else "")
+             if capture or pause_dir else "")
             + f" {launch.shell()}"
             f" 2>&1 | tee /tmp/fuzzer.log;"
             f" cp /tmp/fuzzer.log /afl_out/fuzzer.log 2>/dev/null || true"
@@ -551,6 +563,8 @@ def _launch_container(
             return False
 
         trial.container_id = result.stdout.strip()
+        if pause_dir:
+            trial.pause_controller.started(trial.container_id, deadline=time.time() + duration)
         trial.status = "running"
         trial.start_time = time.time()
 

@@ -37,6 +37,7 @@
  *   MUTATION_DUMP_MAX_BYTES  memory ceiling for the held sample (default 512 MiB)
  *   MUTATION_DUMP_EVERY      pre-filter: consider 1 of every N (default 1)
  *   MUTATION_DUMP_SEED       PRNG seed, so a capture is reproducible
+ *   TRIAL_PAUSE_DIR         opt-in host lease/ack directory (testcase-boundary pause)
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -82,6 +83,9 @@ typedef struct {
 
     uint64_t      rng;
     int           pid;
+    const char   *pause_dir;
+    uint64_t      pause_check_ms;
+    char          expired_pause[65];
 } dump_state_t;
 
 static uint64_t mdump_next(dump_state_t *st) {
@@ -95,6 +99,51 @@ static uint64_t now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+/* Experimental cooperative pause. post_process runs before AFL starts the
+ * next testcase, with no testcase timeout armed. Freezing an arbitrary running
+ * container instead lets poll() deadlines expire and manufactures timeouts.
+ * Nothing changes unless TRIAL_PAUSE_DIR is supplied by the host. The request
+ * is a token and CLOCK_MONOTONIC deadline in ms; an expired lease resumes the
+ * fuzzer even if the host controller has died. Never re-ack an expired token.
+ */
+static int pause_read(const char *path, char token[65], uint64_t *until) {
+    unsigned long long value;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    int ok = fscanf(f, "%64s %llu", token, &value) == 2;
+    fclose(f);
+    if (ok) *until = (uint64_t)value;
+    return ok;
+}
+
+static void pause_before_testcase(dump_state_t *st) {
+    if (!st->pause_dir) return;
+    uint64_t now = now_ms();
+    if (now - st->pause_check_ms < 50) return;
+    st->pause_check_ms = now;
+    char request[4096], ack[4096], tmp[4096], token[65], current[65];
+    uint64_t until;
+    if (snprintf(request, sizeof(request), "%s/request", st->pause_dir) >= (int)sizeof(request) ||
+        snprintf(ack, sizeof(ack), "%s/ack", st->pause_dir) >= (int)sizeof(ack) ||
+        snprintf(tmp, sizeof(tmp), "%s/ack.%d", st->pause_dir, st->pid) >= (int)sizeof(tmp)) return;
+    if (!pause_read(request, token, &until) || until <= now ||
+        !strcmp(token, st->expired_pause)) return;
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;  /* No acknowledgement means the host must not proceed. */
+    int written = fprintf(f, "%s %d\n", token, st->pid) > 0;
+    if (fclose(f) || !written || rename(tmp, ack)) { unlink(tmp); return; }
+    for (;;) {
+        if (!pause_read(request, current, &until) || strcmp(current, token)) break;
+        if (until <= now_ms()) {
+            strcpy(st->expired_pause, token);
+            break;
+        }
+        struct timespec delay = {0, 20000000};
+        nanosleep(&delay, NULL);
+    }
+    unlink(ack);
 }
 
 static unsigned long env_ul(const char *name, unsigned long dflt) {
@@ -160,6 +209,7 @@ void *afl_custom_init(void *afl, unsigned int seed) {
     dump_state_t *st = (dump_state_t *)calloc(1, sizeof(dump_state_t));
     if (!st) return NULL;
     st->dir       = getenv("MUTATION_DUMP_DIR");
+    st->pause_dir = getenv("TRIAL_PAUSE_DIR");
     st->cap       = env_ul("MUTATION_DUMP_CAP", 30000);
     st->every     = env_ul("MUTATION_DUMP_EVERY", 1);
     st->max_bytes = (size_t)env_ul("MUTATION_DUMP_MAX_BYTES", 512UL * 1024 * 1024);
@@ -185,6 +235,7 @@ size_t afl_custom_post_process(void *data, uint8_t *buf, size_t buf_size,
                                uint8_t **out_buf) {
     dump_state_t *st = (dump_state_t *)data;
     *out_buf = buf;
+    if (st) pause_before_testcase(st);
     if (!st || !st->dir) return buf_size;
 
     st->produced++;

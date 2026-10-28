@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 import config
+from lib import trial_pause
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,7 @@ def inspect_container_state(container_id: str) -> dict:
 
 def stop_container(container_id: str, timeout: int = 10):
     """Stop a running container."""
+    trial_pause.cancel_container(container_id, "container stopping")
     subprocess.run(
         ["docker", "stop", "-t", str(timeout), container_id],
         capture_output=True,
@@ -259,6 +261,7 @@ def stop_container(container_id: str, timeout: int = 10):
 
 def remove_container(container_id: str):
     """Remove a container."""
+    trial_pause.cancel_container(container_id, "container removed")
     subprocess.run(
         ["docker", "rm", "-f", container_id],
         capture_output=True,
