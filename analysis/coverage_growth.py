@@ -11,9 +11,10 @@ baseline build asks the comparable question instead: what behaviour of the
 original program did this corpus reach?
 
 Method: one ``afl-showmap`` pass per trial writes a per-input edge map through
-the forkserver; the maps are then unioned in the order the inputs were
-discovered (AFL's ``time:`` field, which is campaign-cumulative across the online
-arm's relaunches). Output is one CSV per trial: time_s, inputs, cumulative_edges.
+the forkserver, replaying the inputs in the order they were discovered (AFL's
+``time:`` field, which is campaign-cumulative across the online arm's
+relaunches); the maps are then unioned in that same order. Output is one CSV per
+trial: time_s, inputs, cumulative_edges.
 
     python3 analysis/coverage_growth.py --experiment-id online-24h-b1-wolfssl --jobs 18
 """
@@ -28,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -61,9 +63,78 @@ def discovery_ms(name: str) -> int | None:
     return int(ms[-1]) if ms else None
 
 
+def replay_key(name: str) -> tuple[int, bytes, bytes]:
+    """Discovery order, with a tie-break that is the same in both arms.
+
+    Replay order is not neutral: the harnesses are persistent, so one process
+    runs every input, and one-time-per-process code (openssl x509: ~140 edges
+    on the first real input) is credited to whichever input runs FIRST. Plain
+    ``id:`` order put a late find first in every hot-swapped trial: a resumed
+    AFL++ re-imports the old queue newest-first and renumbers it, so id:000000
+    became e.g. ``orig:id:002620,...,time:61052610`` and took the one-time edges
+    to t=17h. Sorting by discovery time puts the seeds (time 0) first.
+
+    Seeds all share time 0, so they tie-break on their ORIGINAL file name: the
+    text after ``,orig:``, which AFL++ (pivot_inputs) copies from the seed's
+    file name and never nests -- a re-import keeps only what follows the first
+    ``,orig:``. A fresh AFL++ imports seeds in alphasort order of exactly that
+    name, so this reproduces the baseline arm's seed ids, while a resumed arm's
+    seed ids run reversed after each swap. Byte order matches alphasort in the
+    image's C/POSIX locale. Entries without ``orig:`` compare by their own name;
+    the full name settles anything left.
+    """
+    _, sep, orig = name.partition(",orig:")
+    return (discovery_ms(name) or 0, os.fsencode(orig if sep else name),
+            os.fsencode(name))
+
+
+def replay_order(queue: Path) -> list[str]:
+    """Every regular file in the queue, in the order afl-showmap runs them.
+
+    Entries with a ``time:`` come first, by ``replay_key``. Any without one
+    (e.g. an AFL++ sync import ``id:N,sync:X,src:N``) go last, by name: ``-i``
+    replayed them too, and ``growth_from_maps`` leaves them out of the curve as
+    it always did, so running them last keeps them from touching it.
+    """
+    names = [e.name for e in os.scandir(queue) if e.is_file(follow_symlinks=False)]
+    timed = sorted((n for n in names if discovery_ms(n) is not None), key=replay_key)
+    untimed = sorted((n for n in names if discovery_ms(n) is None), key=os.fsencode)
+    return timed + untimed
+
+
+# The image's AFL++ is built ALWAYS_COLORED, and a crash/timeout notice ends in
+# a colour reset with no newline, so the next line reads "\x1b[0mProcessing ...".
+_ANSI = re.compile(rb"\x1b\[[0-9;]*m")
+_PROCESSING = re.compile(rb"^Processing /queue/(.*)$", re.M)
+_PROCESSED = re.compile(rb"^\[\+\] Processed (\d+) input files\.$", re.M)
+
+
+def parse_replay_log(log: bytes) -> tuple[list[str], int | None]:
+    """afl-showmap's stdout -> (inputs it started, in order; its final
+    "Processed N input files." count, or None if it never got there)."""
+    text = _ANSI.sub(b"", log)
+    done = _PROCESSED.findall(text)
+    return ([os.fsdecode(n) for n in _PROCESSING.findall(text)],
+            int(done[-1]) if done else None)
+
+
 def showmap_maps(image: str, baseline_bin: Path, fuzz_target: str,
-                 queue: Path, out: Path, cpu: int, timeout: int = 3600) -> bool:
-    """One forkserver pass over the whole queue -> one edge map per input."""
+                 queue: Path, order: list[str], out: Path, cpu: int,
+                 timeout: int = 3600) -> bool:
+    """One forkserver pass over the queue IN ``order`` -> one edge map per input.
+
+    ``-i`` would replay in alphasort (= ``id:``) order, so the inputs go in as
+    an ``-I`` file list instead; each map is still written under the input's
+    own file name. AFL_PRINT_FILENAMES makes afl-showmap log every input just
+    before running it. The replay only counts if that log is exactly ``order``
+    (minus empty files, which afl-showmap skips), afl-showmap reached its final
+    "Processed N" line with that same N, and every one of those inputs has a
+    map: wrong order, a dropped input or an aborted pass (even on the last
+    input) all fail here instead of yielding a plausible-looking curve.
+    """
+    filelist = out.parent / "replay_order.txt"
+    filelist.write_bytes(b"".join(b"/queue/" + os.fsencode(n) + b"\n" for n in order))
+    log = out.parent / "replay.log"
     cmd = [
         "docker", "run", "--rm", "--privileged", "--cpuset-cpus", str(cpu),
         # Capped like every other analysis container in the repo (cf.
@@ -76,14 +147,14 @@ def showmap_maps(image: str, baseline_bin: Path, fuzz_target: str,
         "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp",
         "-e", "AFL_NO_AFFINITY=1", "-e", "AFL_SKIP_CPUFREQ=1",
         "-e", "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1",
-        "-e", "ASAN_OPTIONS=detect_leaks=0",
+        "-e", "ASAN_OPTIONS=detect_leaks=0", "-e", "AFL_PRINT_FILENAMES=1",
         "-v", f"{baseline_bin.absolute()}:/out:ro",
         "-v", f"{queue.absolute()}:/queue:ro",
-        # Mount the PARENT: afl-showmap CREATES its -o directory and aborts with
-        # "cannot create output directory ... File exists" if it is already
-        # there -- which bind-mounting the directory itself guarantees. The
-        # failure is silent (it still exits 0), yielding zero maps and a flat
-        # coverage curve that looks like a target which covers nothing.
+        # Mount the PARENT and let afl-showmap create -o itself. Older builds
+        # were seen to abort ("cannot create output directory ... File
+        # exists", still exit 0, zero maps) when -o already existed, which
+        # bind-mounting the directory itself guarantees; 4.21a's -i/-I mode
+        # reuses an existing one, and the log checks below catch either way.
         "-v", f"{out.parent.absolute()}:/w",
         "--entrypoint", "/bin/bash", image, "-lc",
         f"rmdir /w/{out.name} 2>/dev/null; "
@@ -91,40 +162,50 @@ def showmap_maps(image: str, baseline_bin: Path, fuzz_target: str,
         # unless AFL_MAP_SIZE is set; take it from the target itself.
         f"m=$(AFL_DUMP_MAP_SIZE=1 /out/{fuzz_target} 2>/dev/null); "
         f'case "$m" in ""|*[!0-9]*) ;; *) export AFL_MAP_SIZE=$m;; esac; '
-        f"/out/afl-showmap -i /queue -o /w/{out.name} -t 5000+ -m none -- "
-        f"/out/{fuzz_target} >/dev/null 2>&1; ls /w/{out.name} | wc -l",
+        # Only afl-showmap's own messages reach stdout (the target's go to
+        # /dev/null unless AFL_DEBUG_CHILD), i.e. the "Processing" log.
+        f"/out/afl-showmap -I /w/{filelist.name} -o /w/{out.name} -t 5000+ -m none -- "
+        f"/out/{fuzz_target} >/w/{log.name} 2>/dev/null",
     ]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return False
-    return r.returncode == 0 or (out.is_dir() and any(out.iterdir()))
+    try:
+        ran, processed = parse_replay_log(log.read_bytes())
+    except OSError:
+        return False
+    expected = [n for n in order if (queue / n).stat().st_size]
+    return (ran == expected and processed == len(expected)
+            and all((out / n).is_file() for n in expected))
 
 
-def growth_from_maps(maps: Path) -> list[tuple[float, int, int]]:
-    """Union edge sets in discovery order -> (time_s, n_inputs, cum_edges)."""
-    entries = []
-    for f in maps.iterdir():
-        if not f.is_file():
-            continue
-        ms = discovery_ms(f.name)
+def growth_from_maps(maps: Path, order: list[str]
+                     ) -> tuple[list[tuple[float, int, int]], list[str]]:
+    """Union edge sets in replay order -> ((time_s, n_inputs, cum_edges), unreadable).
+
+    One row per queue entry with a ``time:``; entries without one are skipped,
+    as before. An input without a readable map (an empty input, which
+    afl-showmap skips, or a map that cannot be read) adds no edges but is still
+    counted; unreadable maps are returned so the caller can report them.
+    """
+    seen: set[int] = set()
+    rows, unreadable = [], []
+    for name in order:
+        ms = discovery_ms(name)
         if ms is None:
             continue
-        entries.append((ms / 1000.0, f))
-    entries.sort(key=lambda e: e[0])
-
-    seen: set[int] = set()
-    rows = []
-    for i, (t, f) in enumerate(entries, 1):
-        try:
-            for line in f.read_text(errors="replace").splitlines():
-                edge = line.split(":", 1)[0]
-                if edge.isdigit():
-                    seen.add(int(edge))
-        except OSError:
-            continue
-        rows.append((t, i, len(seen)))
-    return rows
+        f = maps / name
+        if f.is_file():
+            try:
+                for line in f.read_text(errors="replace").splitlines():
+                    edge = line.split(":", 1)[0]
+                    if edge.isdigit():
+                        seen.add(int(edge))
+            except OSError:
+                unreadable.append(name)
+        rows.append((ms / 1000.0, len(rows) + 1, len(seen)))
+    return rows, unreadable
 
 
 def resolve_entry(exp_dir_name: str, manifest: dict) -> dict | None:
@@ -142,27 +223,53 @@ def resolve_entry(exp_dir_name: str, manifest: dict) -> dict | None:
     return None
 
 
-def one_trial(args) -> tuple[str, str, int, str]:
-    exp_dir, arm, trial, image, fuzz_target, cpu, outdir = args
+def one_trial(args) -> tuple[str, str, int, bool, str]:
+    """Replay one trial and (re)write its CSV.
+
+    On success the trial's previous CSV is replaced atomically. It is removed
+    only when THIS replay fails (a failed result or an exception), so the plot
+    cannot mix a stale curve in with this run's. An interruption (Ctrl-C, a
+    killed worker, a host reset) removes nothing: KeyboardInterrupt is not an
+    Exception, and a killed process runs no handler, so every trial keeps its
+    last good CSV.
+    """
+    out = Path(args[6]) / f"{args[1]}_{Path(args[2]).name}.csv"
+    try:
+        result = _replay_trial(*args, out=out)
+    except Exception:
+        out.unlink(missing_ok=True)
+        out.with_suffix(".csv.part").unlink(missing_ok=True)
+        raise
+    if not result[3]:
+        out.unlink(missing_ok=True)
+    return result
+
+
+def _replay_trial(exp_dir, arm, trial, image, fuzz_target, cpu, outdir, *,
+                  out: Path) -> tuple[str, str, int, bool, str]:
     queue = Path(trial) / "afl_out" / "default" / "queue"
     baseline_bin = Path(exp_dir) / "baseline" / "bin"
-    name = f"{arm}_{Path(trial).name}"
-    if not queue.is_dir() or not any(queue.iterdir()):
-        return (arm, Path(trial).name, 0, "empty queue")
+    order = replay_order(queue) if queue.is_dir() else []
+    if not order:
+        return (arm, Path(trial).name, 0, False, "empty queue")
     tmp = Path(tempfile.mkdtemp(prefix="cov-"))
     try:
         maps = tmp / "maps"
-        if not showmap_maps(image, baseline_bin, fuzz_target, queue, maps, cpu):
-            return (arm, Path(trial).name, 0, "showmap failed")
-        rows = growth_from_maps(maps)
+        if not showmap_maps(image, baseline_bin, fuzz_target, queue, order, maps, cpu):
+            return (arm, Path(trial).name, 0, False,
+                    "showmap failed (incomplete or out-of-order replay)")
+        rows, unreadable = growth_from_maps(maps, order)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    out = Path(outdir) / f"{name}.csv"
-    with open(out, "w", newline="") as fh:
+    part = out.with_suffix(".csv.part")
+    with open(part, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["time_s", "inputs", "cumulative_edges"])
         w.writerows(rows)
-    return (arm, Path(trial).name, rows[-1][2] if rows else 0, str(out))
+    os.replace(part, out)
+    note = (f"{len(unreadable)} unreadable map(s), counted with no edges"
+            if unreadable else "")
+    return (arm, Path(trial).name, rows[-1][2] if rows else 0, True, note)
 
 
 def main() -> int:
@@ -199,14 +306,29 @@ def main() -> int:
                 tasks.append((str(exp_dir), arm, str(trial), image, target, cpu, str(outdir)))
 
     print(f"  {len(tasks)} trials to replay on the baseline binary")
-    done = 0
+    done, failed = 0, []
     with ProcessPoolExecutor(max_workers=args.jobs) as ex:
-        futs = [ex.submit(one_trial, t) for t in tasks]
+        futs = {ex.submit(one_trial, t): t for t in tasks}
         for f in as_completed(futs):
-            arm, trial, edges, note = f.result()
+            try:
+                arm, trial, edges, ok, note = f.result()
+            except Exception as e:  # noqa: BLE001 - report it with the rest
+                t = futs[f]
+                arm, trial, edges, ok, note = t[1], Path(t[2]).name, 0, False, f"error: {e!r}"
+                # A worker's exception carries its remote traceback as __cause__.
+                traceback.print_exception(e)
             done += 1
-            print(f"  [{done}/{len(tasks)}] {arm:9} {trial}: {edges} edges  "
-                  f"{'' if note.endswith('.csv') else note}")
+            if not ok:
+                t = futs[f]
+                csv_left = (Path(t[6]) / f"{arm}_{trial}.csv").exists()
+                failed.append(f"{Path(t[0]).name} {arm} {trial}: {note}"
+                              f"{'  (previous CSV left in place)' if csv_left else ''}")
+            print(f"  [{done}/{len(tasks)}] {arm:9} {trial}: {edges} edges  {note}")
+    if failed:
+        print(f"  {len(failed)} of {len(tasks)} trials FAILED:")
+        for line in sorted(failed):
+            print(f"    {line}")
+        return 1
     return 0
 
 
