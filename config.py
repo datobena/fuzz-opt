@@ -170,9 +170,9 @@ PHASE2_REPLAY_BUDGET_SECS = int(os.environ.get("PHASE2_REPLAY_BUDGET_SECS", "180
 # Share of the TUNING partition used for the agent's smoke command. A crash is
 # reported to the agent with its sanitizer report. Held-out inputs never enter it.
 ONLINE_SMOKE_FRACTION = float(os.environ.get("ONLINE_SMOKE_FRACTION", "0.05"))
-# Compatibility option: expand the HOST CRASH CHECK to the whole harvest.
-# Final replay TIMING always uses only the proportionally sampled held-out set,
-# regardless of this flag; it cannot revert to timing the full/tuning corpus.
+# Compatibility option: expand pre-optimization crash filtering against the
+# active binary to the whole harvest. Final candidate crash checking and replay
+# timing always use only the proportionally sampled held-out gate set.
 ONLINE_GATE_FULL_SET = os.environ.get("ONLINE_GATE_FULL_SET", "0") == "1"
 
 # Hard upper bound on units the replay gate times, per pass. 0 = no manual cap

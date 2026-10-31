@@ -1551,8 +1551,9 @@ def test_waiting_rounds_are_not_counted_as_attempts(tmp_path):
 
 @pytest.mark.parametrize('repair', [False, True])
 @pytest.mark.parametrize('full_set', [False, True])
-def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(monkeypatch, tmp_path, repair, full_set):
-    """A corrected broker build may still reach the ordinary acceptance gate."""
+@pytest.mark.parametrize('gate_result', ['clean', 'crash', 'incomplete'])
+def test_online_final_validation_uses_current_scope_and_gate_only(monkeypatch, tmp_path, repair, full_set, gate_result):
+    """Corrected scope violations permit gate-only validation, even in full-set mode."""
     from lib.source_scope import SourceScopeGuard, SourceScopeViolation
     from sandbox import broker
 
@@ -1617,8 +1618,23 @@ def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(mo
     monkeypatch.setattr(phase2_setup, 'optimize_and_build', optimize)
     monkeypatch.setattr(phase2_setup, '_reject_if_optimization_removed_bug', lambda **kw:
         (kw['optimization_ready'], None))
-    monkeypatch.setattr(phase3_online.afl_replay, 'find_crashers', lambda **kw:
-        {'ok': True, 'scanned': 1, 'expected': 1, 'crashers': []})
+    crash_checks, crash_reports = [], []
+    def scan_gate(**kwargs):
+        # The combined checked corpus and agent tuning/smoke sets must never
+        # be passed to the final candidate crash check.
+        assert kwargs['corpus_dir'] == 'gate'
+        crash_checks.append(kwargs['corpus_dir'])
+        return {'ok': gate_result != 'incomplete',
+                'scanned': 1 if gate_result == 'incomplete' else 2,
+                'expected': 2,
+                'crashers': ['gate_crasher'] if gate_result == 'crash' else []}
+    def report_gate(**kwargs):
+        assert kwargs['corpus_dir'] == 'gate'
+        assert kwargs['names'] == ['gate_crasher']
+        crash_reports.append(kwargs['corpus_dir'])
+        return 'gate crash diagnostic'
+    monkeypatch.setattr(phase3_online.afl_replay, 'find_crashers', scan_gate)
+    monkeypatch.setattr(phase3_online.afl_replay, 'crash_report', report_gate)
     gates = []
     def speed_gate(**kwargs):
         assert kwargs['corpus_dir'] == 'gate'
@@ -1631,10 +1647,22 @@ def test_online_scope_rejection_tracks_current_candidate_not_resolved_history(mo
         (kw['optimization_ready'], None))
 
     result = phase3_online.run_round(ctx, phase3_online.OnlineState(), 1)
-    assert result[0] is repair and accepted == [repair]
-    assert gates == ([True] if repair else [])
+    keep = repair and gate_result == 'clean'
+    assert result[0] is keep and accepted == [keep]
+    assert crash_checks == (['gate'] if repair else [])
+    assert crash_reports == (['gate'] if repair and gate_result == 'crash' else [])
+    assert gates == ([True] if keep else [])
     prov = json.loads((Path(ctx.online_dir) / 'iter_01/round_provenance.json').read_text())
-    assert prov['outcome'] == ('kept' if repair else 'rejected-source-scope')
+    outcome = ('rejected-source-scope' if not repair else
+               {'clean': 'kept', 'crash': 'rejected-new-crashes',
+                'incomplete': 'crash-check-failed'}[gate_result])
+    assert prov['outcome'] == outcome
+    if repair:
+        assert prov['crash_check']['expected'] == 2
+    if repair and gate_result == 'crash':
+        report = Path(ctx.online_dir) / 'iter_01/source_diff/new_crashes.txt'
+        assert 'gate_crasher' in report.read_text()
+        assert 'gate crash diagnostic' in report.read_text()
     history = Path(ctx.online_dir) / 'iter_01/source_diff/source_scope_history.jsonl'
     assert history.exists()
 

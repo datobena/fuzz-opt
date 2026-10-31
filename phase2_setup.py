@@ -2514,8 +2514,9 @@ def _make_apply_fuzz_source_folds_prompt_with_mode(
             "The smoke command runs your build on a sample of the fuzzer's own "
             "inputs. Inputs that crash the round-start binary were removed first, "
             "so if smoke reports a crash, your edit caused it: read the sanitizer "
-            "report it prints, then fix or revert that fold. The final check "
-            "after you finish runs every input, not just the sample.",
+            "report it prints, then fix or revert that fold. For online rounds, "
+            "after you finish the host checks the final build for crashes on "
+            "the held-out gate inputs before deployment.",
         )
         validation_lines.append(
             "Treat those commands as the real historical-image build/smoke "

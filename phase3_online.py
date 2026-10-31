@@ -1755,13 +1755,12 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 baseline_bin_dir=ctx.previous_best_bin, optimized_bin_dir=opt_bin_dir)
     crash_check = None
     if optimization_ready and round_corpus:
-        # Every filtered input (tuning + gate + smoke), once, on the new build.
-        # None of them crashes the previous best, so any crash here is the
-        # round's edits -- the 5% smoke sample misses a fold that breaks only a
-        # few inputs.
+        # Final validation uses only held-out gate inputs. Tuning and smoke
+        # inputs were already exercised during optimization. Gate inputs were
+        # crash-filtered against the previous best before the agent started.
         with cpu_ledger.timed("crash_check", cores=1):
             scan = afl_replay.find_crashers(
-                out_dir=opt_bin_dir, corpus_dir=round_corpus["checked"],
+                out_dir=opt_bin_dir, corpus_dir=round_corpus["gate"],
                 fuzz_target=ctx.fuzz_target, cpu=ctx.profile_cpu,
                 image=prework_image_for(ctx.entry))
         crash_check = {k: scan[k] for k in ("ok", "scanned", "expected")}
@@ -1769,7 +1768,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         crash_check["crash_count"] = len(scan["crashers"])
         if scan["crashers"]:
             report = afl_replay.crash_report(
-                out_dir=opt_bin_dir, corpus_dir=round_corpus["checked"],
+                out_dir=opt_bin_dir, corpus_dir=round_corpus["gate"],
                 fuzz_target=ctx.fuzz_target, cpu=ctx.profile_cpu,
                 image=prework_image_for(ctx.entry), names=scan["crashers"])
             with open(os.path.join(diff_dir, "new_crashes.txt"), "w") as f:
@@ -1795,7 +1794,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         # Online rounds already sized their corpus, so the gate never shrinks it
         # again (cap=False). It times only the held-out suffix, sampled by
         # the same fraction as the tuning prefix. ONLINE_GATE_FULL_SET affects
-        # crash checking only; it cannot expose tuning inputs to this gate.
+        # pre-optimization crash filtering only, not either final gate check.
         gate_corpus = None
         if round_corpus:
             gate_corpus = round_corpus["gate"]

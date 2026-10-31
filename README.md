@@ -135,7 +135,9 @@ Crash filtering drops inputs in place without moving them between partitions;
 an empty surviving partition skips the round. `corpus/split_manifest.json`
 records the seed, original partitions, sampling fraction, and surviving input
 membership. It and the held-out corpus stay outside the optimizer mounts.
-`ONLINE_GATE_FULL_SET=1` expands only the host crash check, never final replay
-timing. Online rounds without a usable snapshot skip instead of falling back to
-single-corpus tuning and acceptance. Standalone phase 2 retains its existing
-single-corpus workflow.
+The final candidate crash check and replay timing both use only the held-out
+gate set; tuning and smoke inputs are not rerun by the final host crash check.
+`ONLINE_GATE_FULL_SET=1` expands only pre-optimization crash filtering against
+the active binary, not either final gate check. Online rounds without a usable
+snapshot skip instead of falling back to single-corpus tuning and acceptance.
+Standalone phase 2 retains its existing single-corpus workflow.
