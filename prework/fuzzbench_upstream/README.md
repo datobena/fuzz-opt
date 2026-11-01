@@ -15,6 +15,8 @@ Copied:
   `fuzzers.aflplusplus.fuzzer.build()` imports; it needs nothing from `common/`).
   Upstream has no `fuzzers/__init__.py`; `fuzzers` is a namespace package there too.
 - `docker/benchmark-builder/{Dockerfile,checkout_commit.py,fuzzer_build}`.
+- `docker/base-image/Dockerfile` and the repo-root `requirements.txt`: the recipe behind
+  `gcr.io/fuzzbench/base-image`, which can no longer be pulled anonymously. `prework/fuzzbench_image.py --local-base-image` rebuilds it locally (focal pinned by digest, PyYAML at the file's pin, no google-cloud-cli) as the stage-3 `base-image` source.
 
 The AFL++ pinned by `fuzzers/aflplusplus/builder.Dockerfile` is
 `56d5aa3101945e81519a3fac8783d0d8fad82779` (reports itself as 4.21a).

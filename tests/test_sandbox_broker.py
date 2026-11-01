@@ -144,14 +144,55 @@ def test_crash_report_ignores_unsafe_names(tmp_path, monkeypatch):
     assert "unit_2" in script and "rm -rf" not in script
 
 
+def _built(tmp_path):
+    """A candidate /out as fold-build leaves it: the target plus afl-showmap."""
+    (tmp_path / "t").write_text("")
+    (tmp_path / "afl-showmap").write_text("")
+    return tmp_path
+
+
 def test_replay_time_returns_only_a_number(tmp_path, monkeypatch):
     import sandbox.broker as b
     # _run_replay returns a dict (seconds + host-side bracketing detail); the
     # agent-facing reply must stay just the number plus repeats.
     monkeypatch.setattr(b, "_run_replay",
                         lambda ctx, repeats: {"seconds": 12.5, "bracketed": False})
-    r = handle_request({"op": "replay_time", "repeats": 3}, _ctx(tmp_path))
+    r = handle_request({"op": "replay_time", "repeats": 3}, _ctx(_built(tmp_path)))
     assert r == {"ok": True, "seconds": 12.5, "repeats": 3}
+
+
+def test_replay_time_before_any_build_is_refused_without_pausing(tmp_path, monkeypatch):
+    """The candidate /out is empty until the agent's first fold-build. Timing it
+    used to enter the measurement stage (shared-core: pause the trial, freeze
+    the agent), start a container and fail on a missing /out/afl-showmap, and
+    the agent only saw "replay did not complete". Refuse up front, say what to
+    do, and touch nothing."""
+    import os
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    import sandbox.broker as b
+    from lib import online_resources
+
+    monkeypatch.setattr(b, "_run_replay",
+                        lambda ctx, repeats: pytest.fail("measured an unbuilt /out"))
+
+    @contextmanager
+    def no_pause(stage):
+        pytest.fail(f"entered measurement stage {stage!r} with nothing to measure")
+        yield
+
+    policy = SimpleNamespace(cpu=min(os.sched_getaffinity(0)), operation=no_pause)
+    with online_resources.bind(policy):
+        r = handle_request({"op": "replay_time", "repeats": 3}, _ctx(tmp_path))
+    assert r["ok"] is False and "fold-build" in r["error"] and "afl-showmap" in r["error"]
+    # Half a build (target without afl-showmap) is not timeable either.
+    (tmp_path / "t").write_text("")
+    r = handle_request({"op": "replay_time", "repeats": 3}, _ctx(tmp_path))
+    assert r["ok"] is False and "afl-showmap" in r["error"]
+    # Once fold-build has left both in /out, the measurement proceeds.
+    monkeypatch.setattr(b, "_run_replay",
+                        lambda ctx, repeats: {"seconds": 1.0, "bracketed": False})
+    assert handle_request({"op": "replay_time", "repeats": 3}, _ctx(_built(tmp_path)))["ok"]
 
 
 def test_replay_repeats_is_clamped(tmp_path, monkeypatch):
@@ -162,7 +203,7 @@ def test_replay_repeats_is_clamped(tmp_path, monkeypatch):
         seen["n"] = repeats
         return {"seconds": 1.0, "bracketed": False}
     monkeypatch.setattr(b, "_run_replay", fake)
-    handle_request({"op": "replay_time", "repeats": 10000}, _ctx(tmp_path))
+    handle_request({"op": "replay_time", "repeats": 10000}, _ctx(_built(tmp_path)))
     assert seen["n"] <= b.MAX_REPLAY_REPEATS
 
 
@@ -193,7 +234,7 @@ def test_socket_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(b, "_run_replay",
                         lambda ctx, repeats: {"seconds": 4.25, "bracketed": False})
     sock_path = str(tmp_path / "broker.sock")
-    ctx = _ctx(tmp_path)
+    ctx = _ctx(_built(tmp_path))
 
     t = threading.Thread(target=b.serve, args=(sock_path, ctx), daemon=True)
     t.start()

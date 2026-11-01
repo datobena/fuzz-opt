@@ -27,6 +27,16 @@ the upstream text it edits ever moves, so a re-vendor cannot silently drop one):
   * stage 3, last step: ccache unpacked to /opt/fb_ccache/ccache, never on PATH (see
     CCACHE_STEP). Inert unless a rebuild mounts /ccache for a verified target (optimized
     arm only); then both builds use it.
+  * stage 3, ``--local-base-image``: gcr.io/fuzzbench/base-image is no longer pullable
+    anonymously (Artifact Registry denies unauthenticated downloads, 2026-10-28). The
+    stage copies only that image's Python 3.10 tree, so the same recipe
+    (docker/base-image/Dockerfile at FUZZBENCH_COMMIT, vendored: ubuntu:focal + Python
+    3.10.8 built from source) is rebuilt locally as LOCAL_BASE_IMAGE_TAG and used as the
+    ``base-image`` stage (patched_base_image_dockerfile: focal pinned by digest, PyYAML
+    at requirements.txt's pin instead of the whole list, no google-cloud-cli). The
+    fb-aflpp image records what it was built from in its ``fb-aflpp.base-image`` label.
+  * ``--reuse-stages``: a stage whose tag already exists locally is not rebuilt (the
+    normal chain builds all three every time).
 
 Everything else -- checkout_commit.py (unshallow + checkout -f <benchmark.yaml commit>),
 ``apt-get upgrade``, ENV FUZZER/BENCHMARK, build-time ASAN_OPTIONS, the python swap --
@@ -36,6 +46,7 @@ of HEAD (then checked out to the pinned commit) are upstream behaviour too.
 CLI:  python3 -m prework.fuzzbench_image --dir mruby_mruby_fuzzer_8c8bbd
       python3 -m prework.fuzzbench_image --all
       python3 -m prework.fuzzbench_image --dir X --dockerfile-dir /path/to/benchmark/dir
+      python3 -m prework.fuzzbench_image --dir X --reuse-stages --local-base-image
 """
 from __future__ import annotations
 
@@ -69,6 +80,13 @@ BASE_BUILDER = ("gcr.io/oss-fuzz-base/base-builder@sha256:"
 # gcr.io/fuzzbench/base-image:latest as of 2026-10-10 (ubuntu:focal + python 3.10.8).
 FB_BASE_IMAGE = ("gcr.io/fuzzbench/base-image@sha256:"
                  "cc9bb2a509c2c75da3cd27a14b530b91becc599e19f5e60a7b5d0f6bf20c33dc")
+# fuzz-opt deviation (see the module docstring): a local stand-in for the base-image
+# stage. docker.io/library/ubuntu:focal as of 2025-04-08, pinned by digest (upstream's
+# `FROM ubuntu:focal` is a moving tag; FuzzBench's own base-image was built from
+# whatever focal was on its build day).
+UBUNTU_FOCAL = ("ubuntu@sha256:"
+                "8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214")
+LOCAL_BASE_IMAGE_TAG = f"fb-aflpp-stage/base-image:{FUZZBENCH_COMMIT[:8]}-local"
 DEFAULT_CPUSET = "40-79"
 IMAGE_BUILD_TIMEOUT_SECS = 4 * 3600
 MANIFESTS = (REPO_DIR / "data" / "manifests" / "manifest_fuzzbench.json",
@@ -183,20 +201,66 @@ CCACHE_STEP = (
 )
 
 
-def patched_benchmark_builder_dockerfile(*, fuzzbench_dir: str, workdir: str) -> str:
-    """docker/benchmark-builder/Dockerfile minus the build RUN, plus the records."""
+def _requirement_pin(name: str) -> str:
+    """``<name>==<version>`` from the vendored upstream requirements.txt."""
+    for line in (UPSTREAM_DIR / "requirements.txt").read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line.lower().startswith(name.lower() + "=="):
+            return line
+    raise RuntimeError(f"{name} is not pinned in the vendored requirements.txt")
+
+
+def patched_base_image_dockerfile() -> str:
+    """docker/base-image/Dockerfile (upstream, vendored) as a local stand-in for
+    gcr.io/fuzzbench/base-image: the SAME Python 3.10.8 source build on focal.
+
+    What the benchmark-builder stage copies out of base-image is /usr/local's
+    python3*, pip3*, lib/python3.10 (+ site-packages) and include/python3.10,
+    so the parts nothing copies are left out: the full requirements.txt (only
+    PyYAML, which fuzzers/utils.py imports, at the list's own pin) and
+    google-cloud-cli. ubuntu:focal is pinned by digest (UBUNTU_FOCAL).
+    """
+    text = (UPSTREAM_DIR / "docker" / "base-image" / "Dockerfile").read_text()
+    text = _replace_once(text, "FROM ubuntu:focal\n", f"FROM {UBUNTU_FOCAL}\n",
+                         "base-image ubuntu stage")
+    text = _replace_once(
+        text, "COPY ./requirements.txt /tmp\nRUN pip install -r /tmp/requirements.txt\n",
+        "# fb-aflpp: of requirements.txt only PyYAML is imported by the vendored\n"
+        "# fuzzers/ modules (fuzzers/utils.py); nothing else is copied out of here.\n"
+        f"RUN pip install {_requirement_pin('PyYAML')}\n",
+        "base-image requirements")
+    marker = "# Install dependencies required by google-cloud-cli.\n"
+    if text.count(marker) != 1:
+        raise RuntimeError("vendored FuzzBench text for 'base-image google-cloud-cli' "
+                           "not found exactly once; the upstream file changed -- "
+                           "re-check the deviation")
+    return (text[:text.index(marker)]
+            + "# fb-aflpp: google-cloud-cli omitted; the benchmark-builder stage copies\n"
+              "# nothing of it (see prework/fuzzbench_image.py).\n")
+
+
+def patched_benchmark_builder_dockerfile(*, fuzzbench_dir: str, workdir: str,
+                                         base_image: str = FB_BASE_IMAGE) -> str:
+    """docker/benchmark-builder/Dockerfile minus the build RUN, plus the records.
+
+    ``base_image`` is the image the Python 3.10 tree is copied from: upstream's
+    digest-pinned gcr.io/fuzzbench/base-image by default, or the local stand-in
+    (LOCAL_BASE_IMAGE_TAG, patched_base_image_dockerfile). Recorded in the
+    ``fb-aflpp.base-image`` label either way.
+    """
     if not workdir.startswith("/"):
         raise ValueError(f"benchmark WORKDIR must be absolute, got {workdir!r}")
     text = (UPSTREAM_DIR / "docker" / "benchmark-builder" / "Dockerfile").read_text()
     text = _replace_once(
         text, "FROM gcr.io/fuzzbench/base-image AS base-image\n",
-        f"FROM {FB_BASE_IMAGE} AS base-image\n", "base-image stage")
+        f"FROM {base_image} AS base-image\n", "base-image stage")
     labels = {
         "fb-aflpp.benchmark": fuzzbench_dir,
         "fb-aflpp.workdir": workdir,
         "fb-aflpp.fuzzbench-commit": FUZZBENCH_COMMIT,
         "fb-aflpp.aflpp-commit": AFLPP_COMMIT,
         "fb-aflpp.base-builder": BASE_BUILDER,
+        "fb-aflpp.base-image": base_image,
     }
     tail = (
         # checkout_commit.py exits 0 even when no checkout succeeded (main()'s return
@@ -269,12 +333,47 @@ def _image_workdir(tag: str) -> str:
     return r.stdout.strip()
 
 
+def _image_exists(tag: str) -> bool:
+    return subprocess.run(["docker", "image", "inspect", tag],
+                          capture_output=True).returncode == 0
+
+
+def build_local_base_image(
+    *, cpuset: str | None = DEFAULT_CPUSET, log_path: str | Path | None = None,
+    timeout: int = IMAGE_BUILD_TIMEOUT_SECS, tag: str = LOCAL_BASE_IMAGE_TAG,
+) -> str:
+    """Build the local base-image stand-in (patched_base_image_dockerfile) as ``tag``.
+
+    Returns the tag. The Python build is upstream's `make -j install` (every cpu of
+    ``cpuset``); allow 15-40 minutes, --enable-optimizations runs a PGO pass.
+    """
+    log_path = Path(log_path) if log_path else (
+        Path(tempfile.gettempdir()) / "fb-aflpp-logs" / "base-image.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    args = ["--cpuset-cpus", str(cpuset)] if cpuset else []
+    with open(log_path, "w") as log, tempfile.TemporaryDirectory(prefix="fb-aflpp-base-") as tmp:
+        df = Path(tmp) / "Dockerfile"
+        df.write_text(patched_base_image_dockerfile())
+        _docker_build([*args, "--tag", tag, "--file", str(df), tmp], log, timeout)
+    logger.info("built local base image %s (log %s)", tag, log_path)
+    return tag
+
+
 def build_fuzzbench_image(
     fuzzbench_dir: str, *, dockerfile_dir: str | Path | None = None,
     cpuset: str | None = DEFAULT_CPUSET, no_cache: bool = False,
     log_path: str | Path | None = None, timeout: int = IMAGE_BUILD_TIMEOUT_SECS,
+    base_image: str | None = None, reuse_stages: bool = False,
 ) -> dict:
-    """Build fb-aflpp/<fuzzbench_dir> through the 3-stage chain. Returns a record."""
+    """Build fb-aflpp/<fuzzbench_dir> through the 3-stage chain. Returns a record.
+
+    ``base_image``: the stage-3 ``base-image`` source (default FB_BASE_IMAGE; the
+    local stand-in from build_local_base_image when gcr.io cannot be pulled).
+    ``reuse_stages``: skip stage 1 / 2 when their tags already exist locally
+    (the record lists them under ``reused_stages``); the final stage is always
+    built.
+    """
+    base_image = base_image or FB_BASE_IMAGE
     bdir = Path(dockerfile_dir) if dockerfile_dir else BENCHMARKS_DIR / fuzzbench_dir
     dockerfile = bdir / "Dockerfile"
     yaml_path = bdir / "benchmark.yaml"
@@ -294,22 +393,31 @@ def build_fuzzbench_image(
     tag2 = _stage_tag(fuzzbench_dir, "intermediate")
     final = fuzzbench_image_tag(fuzzbench_dir)
     times: dict[str, float] = {}
+    reused: list[str] = []
     with open(log_path, "w") as log, tempfile.TemporaryDirectory(prefix="fb-aflpp-") as tmp:
         tmp = Path(tmp)
         # 1. benchmark project builder
-        t0 = time.time()
-        _docker_build([*common, "--tag", tag1, "--file", str(dockerfile), str(bdir)],
-                      log, timeout)
-        times["benchmark"] = time.time() - t0
+        if reuse_stages and _image_exists(tag1):
+            reused.append("benchmark")
+            log.write(f"\n# reusing existing {tag1}\n")
+        else:
+            t0 = time.time()
+            _docker_build([*common, "--tag", tag1, "--file", str(dockerfile), str(bdir)],
+                          log, timeout)
+            times["benchmark"] = time.time() - t0
         workdir = _image_workdir(tag1)
         # 2. aflplusplus builder intermediate
-        df2 = tmp / "builder.Dockerfile"
-        df2.write_text(patched_builder_dockerfile())
-        t0 = time.time()
-        _docker_build([*common, "--tag", tag2, "--build-arg", f"parent_image={tag1}",
-                       "--file", str(df2), str(UPSTREAM_DIR / "fuzzers" / FUZZER)],
-                      log, timeout)
-        times["intermediate"] = time.time() - t0
+        if reuse_stages and _image_exists(tag2):
+            reused.append("intermediate")
+            log.write(f"\n# reusing existing {tag2}\n")
+        else:
+            df2 = tmp / "builder.Dockerfile"
+            df2.write_text(patched_builder_dockerfile())
+            t0 = time.time()
+            _docker_build([*common, "--tag", tag2, "--build-arg", f"parent_image={tag1}",
+                           "--file", str(df2), str(UPSTREAM_DIR / "fuzzers" / FUZZER)],
+                          log, timeout)
+            times["intermediate"] = time.time() - t0
         # 3. benchmark-builder (context mirrors FuzzBench's repo-root context)
         ctx = tmp / "ctx"
         shutil.copytree(UPSTREAM_DIR / "fuzzers", ctx / "fuzzers")
@@ -319,7 +427,7 @@ def build_fuzzbench_image(
                         ctx / "docker" / "benchmark-builder")
         df3 = tmp / "benchmark-builder.Dockerfile"
         df3.write_text(patched_benchmark_builder_dockerfile(
-            fuzzbench_dir=fuzzbench_dir, workdir=workdir))
+            fuzzbench_dir=fuzzbench_dir, workdir=workdir, base_image=base_image))
         t0 = time.time()
         _docker_build([*common, "--tag", final,
                        "--build-arg", f"parent_image={tag2}",
@@ -328,7 +436,8 @@ def build_fuzzbench_image(
                        "--file", str(df3), str(ctx)], log, timeout)
         times["builder"] = time.time() - t0
     rec = {"image": final, "workdir": workdir, "dockerfile_dir": str(bdir),
-           "log": str(log_path), "stage_secs": {k: round(v, 1) for k, v in times.items()}}
+           "log": str(log_path), "stage_secs": {k: round(v, 1) for k, v in times.items()},
+           "base_image": base_image, "reused_stages": reused}
     logger.info("built %s: %s", final, rec)
     return rec
 
@@ -355,17 +464,35 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cpuset", default=DEFAULT_CPUSET)
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--log-dir")
+    ap.add_argument("--reuse-stages", action="store_true",
+                    help="skip stage 1/2 builds whose tags already exist locally")
+    bi = ap.add_mutually_exclusive_group()
+    bi.add_argument("--base-image", help="stage-3 base-image source (default: "
+                    f"{FB_BASE_IMAGE})")
+    bi.add_argument("--local-base-image", action="store_true",
+                    help=f"build (if missing) and use {LOCAL_BASE_IMAGE_TAG}, the local "
+                         "rebuild of upstream's base-image recipe")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     if a.dockerfile_dir and a.all:
         ap.error("--dockerfile-dir needs --dir")
+    base_image = a.base_image
+    if a.local_base_image:
+        base_image = LOCAL_BASE_IMAGE_TAG
+        if _image_exists(base_image):
+            logger.info("local base image %s exists; reusing it", base_image)
+        else:
+            build_local_base_image(
+                cpuset=a.cpuset,
+                log_path=Path(a.log_dir) / "base-image.log" if a.log_dir else None)
     dirs = [a.dir] if a.dir else manifest_fuzzbench_dirs()
     failed = []
     for d in dirs:
         log = Path(a.log_dir) / f"{d}.log" if a.log_dir else None
         try:
             rec = build_fuzzbench_image(d, dockerfile_dir=a.dockerfile_dir,
-                                        cpuset=a.cpuset, no_cache=a.no_cache, log_path=log)
+                                        cpuset=a.cpuset, no_cache=a.no_cache, log_path=log,
+                                        base_image=base_image, reuse_stages=a.reuse_stages)
             print(json.dumps(rec))
         except Exception as e:  # noqa: BLE001 -- report and continue with --all
             logger.error("%s: %s", d, e)

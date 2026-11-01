@@ -110,6 +110,9 @@ def test_broker_rows_carry_the_sessions_trial_round_and_core(monkeypatch, tmp_pa
     monkeypatch.setattr(b, "_run_build", lambda ctx: (True, "ok"))
     monkeypatch.setattr(b, "_run_smoke", lambda ctx: (True, "ok"))
     monkeypatch.setattr(b, "_run_replay", lambda ctx, n: {"seconds": 1.0})
+    # A built candidate /out: replay_time refuses an unbuilt one before any row.
+    (tmp_path / "t").write_text("")
+    (tmp_path / "afl-showmap").write_text("")
     ctx = b.BrokerContext(image="i", source_dir=str(tmp_path), out_dir=str(tmp_path),
                           corpus_dir=str(tmp_path), fuzz_target="t", project="php-src",
                           cpu=17, ledger_trial_id=4, ledger_iter=3)

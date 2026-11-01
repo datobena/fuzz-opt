@@ -35,3 +35,25 @@ def test_shared_core_plots_ignore_stale_cost_files(tmp_path):
     assert P.cpu_charge_windows(tmp_path, "p", []) == []
     assert P.per_trial_charge_windows(tmp_path, {}) == {}
     assert "no synthetic charge" in P._charge_caption(tmp_path)
+
+
+def test_plot_span_follows_the_campaign_budget(tmp_path):
+    """A 6 h campaign is drawn on a 6 h axis; --hours overrides; no provenance -> 24 h.
+    set_plot_span resizes the GRID every loader shares."""
+    import json
+    import numpy as np
+    import plot_coverage_growth as P
+    root = tmp_path / "exp"
+    prov = root / "libxml2-x" / "optimized" / "online" / "campaign_provenance.json"
+    prov.parent.mkdir(parents=True)
+    prov.write_text(json.dumps({"duration_s": 21600}))
+    assert P.plot_hours(root, None) == 6.0
+    assert P.plot_hours(root, 24) == 24.0
+    assert P.plot_hours(tmp_path / "none", None) == 24.0
+    old_hours, old_grid = P.HOURS, P.GRID
+    try:
+        P.set_plot_span(6.0)
+        assert P.HOURS == 6.0 and P.GRID[-1] == 6 * 3600 and np.all(np.diff(P.GRID) == 30)
+    finally:
+        P.set_plot_span(old_hours)
+        assert P.GRID.shape == old_grid.shape

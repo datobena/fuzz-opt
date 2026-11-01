@@ -190,7 +190,8 @@ def test_vendored_files_are_verbatim_upstream_layout():
                 "fuzzers/aflplusplus/runner.Dockerfile",
                 "docker/benchmark-builder/Dockerfile",
                 "docker/benchmark-builder/checkout_commit.py",
-                "docker/benchmark-builder/fuzzer_build"):
+                "docker/benchmark-builder/fuzzer_build",
+                "docker/base-image/Dockerfile", "requirements.txt"):
         assert (up / rel).is_file(), rel
     assert fbi.FUZZBENCH_COMMIT in (up / "README.md").read_text()
     assert f"git checkout {fbi.AFLPP_COMMIT} || \\\n    true" in \
@@ -202,6 +203,98 @@ def test_unpinned_benchmark_base_is_refused():
         fbi.check_benchmark_dockerfile("ARG BASE\nFROM ${BASE}\nRUN true\n")
     fbi.check_benchmark_dockerfile(f"FROM {fbi.BASE_BUILDER}\nRUN true\n")
     fbi.check_benchmark_dockerfile(f"FROM {fbi.BASE_BUILDER} AS b\nFROM b\n")
+
+
+# ------------------------------------------------ local base-image + stage reuse
+
+def test_local_base_image_dockerfile_is_upstream_python_recipe():
+    """gcr.io/fuzzbench/base-image cannot be pulled anonymously any more. The
+    benchmark-builder stage copies only its Python 3.10 tree, so the same recipe
+    is rebuilt locally: upstream's docker/base-image/Dockerfile with ubuntu:focal
+    pinned, PyYAML (the one requirement fuzzers/utils.py imports) at
+    requirements.txt's pin instead of the whole list, and no google-cloud-cli."""
+    up = (REPO / "prework" / "fuzzbench_upstream" / "docker" / "base-image" /
+          "Dockerfile").read_text()
+    text = fbi.patched_base_image_dockerfile()
+    assert text.startswith(up[:up.index("FROM ubuntu:focal")])
+    assert "FROM ubuntu:focal\n" not in text
+    assert f"FROM {fbi.UBUNTU_FOCAL}\n" in text
+    assert "@sha256:" in fbi.UBUNTU_FOCAL
+    # The Python build RUN is upstream's own text, verbatim.
+    i = up.index("RUN cd /tmp/ && \\\n    curl -O https://www.python.org")
+    j = up.index("ln -s /usr/local/bin/pip3 /usr/local/bin/pip\n", i)
+    python_run = up[i:j + len("ln -s /usr/local/bin/pip3 /usr/local/bin/pip\n")]
+    assert "ENV PYTHON_VERSION 3.10.8" in text
+    assert python_run in text
+    assert "RUN pip install PyYAML==6.0\n" in text
+    assert "COPY ./requirements.txt" not in text
+    # Only the omission note mentions google-cloud; no RUN/ENV line does.
+    assert not [l for l in text.splitlines()
+                if not l.startswith("#") and ("google-cloud" in l or "apt-key" in l)]
+    assert "PyYAML==6.0" in (REPO / "prework" / "fuzzbench_upstream" /
+                             "requirements.txt").read_text()
+
+
+def test_benchmark_builder_dockerfile_records_and_overrides_base_image():
+    default = fbi.patched_benchmark_builder_dockerfile(fuzzbench_dir="d", workdir="/src/p")
+    assert f'LABEL fb-aflpp.base-image="{fbi.FB_BASE_IMAGE}"' in default
+    text = fbi.patched_benchmark_builder_dockerfile(
+        fuzzbench_dir="d", workdir="/src/p", base_image="local/base:x")
+    assert "FROM local/base:x AS base-image\n" in text
+    assert fbi.FB_BASE_IMAGE not in text
+    assert 'LABEL fb-aflpp.base-image="local/base:x"' in text
+    # Everything else is the default text.
+    assert text.replace("local/base:x", fbi.FB_BASE_IMAGE) == default
+
+
+def _fake_chain(monkeypatch, tmp_path, existing):
+    builds = []
+    monkeypatch.setattr(fbi, "_docker_build",
+                        lambda args, log, timeout: builds.append(list(args)))
+    monkeypatch.setattr(fbi, "_image_exists", lambda tag: tag in existing)
+    monkeypatch.setattr(fbi, "_image_workdir", lambda tag: "/src/p")
+    bdir = tmp_path / "bench"
+    bdir.mkdir(exist_ok=True)
+    (bdir / "Dockerfile").write_text(f"FROM {fbi.BASE_BUILDER}\nRUN true\n")
+    (bdir / "benchmark.yaml").write_text("commit: abc\nfuzz_target: t\n")
+    return builds, bdir
+
+
+def test_build_fuzzbench_image_reuses_existing_stages(monkeypatch, tmp_path):
+    tag1 = fbi._stage_tag("d", "benchmark")
+    tag2 = fbi._stage_tag("d", "intermediate")
+    builds, bdir = _fake_chain(monkeypatch, tmp_path, {tag1, tag2})
+    rec = fbi.build_fuzzbench_image("d", dockerfile_dir=bdir, cpuset="6-9",
+                                    reuse_stages=True, base_image="local/base:x",
+                                    log_path=tmp_path / "log")
+    assert len(builds) == 1, builds
+    (stage3,) = builds
+    assert "--build-arg" in stage3 and f"parent_image={tag2}" in stage3
+    assert "--tag" in stage3 and fbi.fuzzbench_image_tag("d") in stage3
+    assert rec["reused_stages"] == ["benchmark", "intermediate"]
+    assert rec["base_image"] == "local/base:x"
+    assert set(rec["stage_secs"]) == {"builder"}
+    df = Path(stage3[stage3.index("--file") + 1]).read_text() if \
+        Path(stage3[stage3.index("--file") + 1]).exists() else ""
+    # The Dockerfile lived in a tempdir that is gone by now; the recorded base
+    # image is what matters. (Content is covered by the test above.)
+    assert df == "" or "FROM local/base:x AS base-image" in df
+
+
+def test_build_fuzzbench_image_rebuilds_missing_stages_even_when_reusing(
+        monkeypatch, tmp_path):
+    tag1 = fbi._stage_tag("d", "benchmark")
+    builds, bdir = _fake_chain(monkeypatch, tmp_path, {tag1})
+    rec = fbi.build_fuzzbench_image("d", dockerfile_dir=bdir, cpuset=None,
+                                    reuse_stages=True, log_path=tmp_path / "log")
+    assert len(builds) == 2
+    assert rec["reused_stages"] == ["benchmark"]
+    assert rec["base_image"] == fbi.FB_BASE_IMAGE
+    # Default: every stage is built, existing tags or not.
+    builds2, _ = _fake_chain(monkeypatch, tmp_path, {tag1})
+    rec2 = fbi.build_fuzzbench_image("d", dockerfile_dir=bdir, cpuset=None,
+                                     log_path=tmp_path / "log2")
+    assert len(builds2) == 3 and rec2["reused_stages"] == []
 
 
 # ------------------------------------------------------------------ fold lists

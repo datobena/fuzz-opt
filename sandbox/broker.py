@@ -606,6 +606,17 @@ def _timed_replay(ctx: BrokerContext, out_dir: str) -> float | None:
     return elapsed
 
 
+def _unbuilt_candidate(ctx: BrokerContext) -> str:
+    """Why the candidate /out cannot be replayed yet ("" when it can): the
+    target or afl-showmap (both left in /out by every build path) is missing."""
+    missing = [n for n in (ctx.fuzz_target, "afl-showmap")
+               if not os.path.isfile(os.path.join(ctx.out_dir, n))]
+    if not missing:
+        return ""
+    return ("nothing to time yet: /out has no built " + " or ".join(missing)
+            + " -- run fold-build first; replay_time measures the current build")
+
+
 def _run_replay(ctx: BrokerContext, repeats: int) -> dict | None:
     """Median replay time of the candidate /out, in seconds (or None on failure).
 
@@ -737,6 +748,16 @@ def _handle_request(req, ctx: BrokerContext) -> dict:
         if isinstance(raw, bool) or not isinstance(raw, int):
             return {"ok": False, "error": "repeats must be an integer"}
         repeats = max(1, min(raw, MAX_REPLAY_REPEATS))
+        # Before the measurement stage (shared-core rounds pause the trial and
+        # freeze the agent for it): an unbuilt candidate cannot be timed. The
+        # candidate /out starts EMPTY and only fold-build fills it, and every
+        # observed session's first call was replay_time -- which paused the
+        # fuzzer, ran a container and failed on a missing /out/afl-showmap,
+        # telling the agent only "replay did not complete".
+        why = _unbuilt_candidate(ctx)
+        if why:
+            _audit(ctx, "replay", "refused: " + why)
+            return {"ok": False, "error": why}
         with cpu_ledger.timed("broker_replay", cores=1, **_ledger_tags(ctx)) as info:
             result = _run_replay(ctx, repeats)
             info["repeats"] = repeats

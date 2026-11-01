@@ -60,7 +60,7 @@ import config
 from lib import cpu_ledger
 
 ARMS = {"baseline": ("#4C72B0", "Baseline"), "optimized": ("#DD8452", "Online-optimized")}
-HOURS = 24.0
+HOURS = 24.0   # time-axis span; set_plot_span() re-derives GRID when main() changes it
 # 30 s bins. Must be SHORTER than the shortest stopped interval (~100 s for a
 # hot swap), or a bin straddles the gap edge, averages inserted zeros with
 # real throughput, and the stop never reaches zero on the plot.
@@ -1040,6 +1040,30 @@ def with_gaps(xs, ys, windows, hold):
     return np.array(out_x), np.array(out_y)
 
 
+def plot_hours(root: Path, requested: float | None) -> float:
+    """Span of the time axis in hours: ``--hours`` when given, else the campaign's
+    own fuzzing budget (``duration_s`` in the first target's campaign_provenance),
+    else 24. A 6 h shared-core validation run used to be drawn on the 24 h grid,
+    with every curve held flat across 18 empty hours."""
+    if requested:
+        return float(requested)
+    for prov in sorted(Path(root).glob("*/optimized/online/campaign_provenance.json")):
+        try:
+            d = float(json.loads(prov.read_text()).get("duration_s") or 0)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if d > 0:
+            return d / 3600.0
+    return 24.0
+
+
+def set_plot_span(hours: float) -> None:
+    """Resize the shared time grid (HOURS, GRID) every loader and panel reads."""
+    global HOURS, GRID
+    HOURS = float(hours)
+    GRID = np.arange(0, HOURS * 3600 + 30, 30, dtype=float)
+
+
 def band(series, gridded=False, hold_right=False):
     """Per-time-point mean across trials with a t-based 95% confidence interval.
 
@@ -1372,17 +1396,23 @@ def main() -> int:
                          "one trial's windows zero an aggregate that was still "
                          "fuzzing. The green overlay marks the same windows "
                          "without overwriting the data.")
+    ap.add_argument("--hours", type=float, default=None,
+                    help="time-axis span in hours (default: the campaign's own "
+                         "budget from campaign_provenance.json, else 24)")
     ap.add_argument("--smooth", type=int, default=9,
                     help="throughput smoothing window in 30 s bins (default 9 = "
                          "4.5 min; shared-core runs use 0); applied within fuzzing segments only, never "
                          "across a stopped interval. 0 disables.")
     args = ap.parse_args()
 
+    root = Path(args.results_dir) / args.experiment_id
+    set_plot_span(plot_hours(root, args.hours))
+    print(f"  time axis: {HOURS:g} h ({'--hours' if args.hours else 'campaign budget'})")
+
     if args.engine == "libfuzzer":
         from libfuzzer_growth import plot_experiment
         return plot_experiment(args, GRID, band)
 
-    root = Path(args.results_dir) / args.experiment_id
     project = args.experiment_id.rsplit("-", 1)[-1]
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
     by_trial = swap_windows_by_trial(args.experiment_id)

@@ -72,10 +72,15 @@ def test_profile_and_replay_quiesce_fuzzer_and_agent_and_resume_on_error(monkeyp
     assert not p.trial.pause_controller.active
 
 
-def test_broker_thread_receives_owning_trial_policy(monkeypatch):
+def test_broker_thread_receives_owning_trial_policy(monkeypatch, tmp_path):
     p = policy()
-    ctx = broker.BrokerContext(image="img", source_dir="src", out_dir="out", corpus_dir="tune",
-                              fuzz_target="target", project="p", cpu=p.cpu, resource_policy=p)
+    # A built candidate /out (target + afl-showmap): replay_time refuses an
+    # unbuilt one before it ever reaches the measurement stage.
+    (tmp_path / "target").write_text("")
+    (tmp_path / "afl-showmap").write_text("")
+    ctx = broker.BrokerContext(image="img", source_dir="src", out_dir=str(tmp_path),
+                              corpus_dir="tune", fuzz_target="target", project="p",
+                              cpu=p.cpu, resource_policy=p)
     seen = []
     def check(stage, result):
         def op(*args):
