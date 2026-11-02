@@ -24,6 +24,8 @@ def _args(tmp_path, grow, snap, art, **over):
         evolving_corpus_dir=grow, snapshot_dir=snap, artifact_dir=art,
         fuzz_target="demo_fuzzer", duration=3600, seed=1337, cpu=3,
         memory="4g", shm_size="2g", per_unit_timeout=10, filter_timeout=1800,
+        # build_corpus.py's argparse defaults: one filter worker, sizing off.
+        filter_ncpu=1, replay_budget_secs=0, replay_repeats=3,
     )
     base.update(over)
     return types.SimpleNamespace(**base)
@@ -92,14 +94,15 @@ def test_crash_filter_command_is_readwrite_and_removes(tmp_path):
     bc = _load_module("build_corpus")
     cmd = bc.build_crash_filter_command(
         out_dir="rel/out", corpus_dir="rel/corpus", fuzz_target="t",
-        per_unit_timeout=10, cpu=3, memory="4g", shm_size="2g",
+        per_unit_timeout=10, ncpu=3, memory="4g", shm_size="2g",
     )
     joined = " ".join(cmd)
     # corpus is writable (no :ro) so the filter can delete crashers
     assert ":/corpus:ro" not in joined
     assert any(m.endswith(":/corpus") for m in [cmd[i + 1] for i, a in enumerate(cmd) if a == "-v"])
     script = cmd[-1]
-    assert "for f in /corpus/*" in script
+    # every top-level unit in /corpus is checked, ncpu at a time
+    assert "find /corpus -maxdepth 1 -type f -print0 | xargs -0 -P3 -n1" in script
     assert "rm -f" in script
     assert "REMOVED=" in script
     assert "timeout 10" in script

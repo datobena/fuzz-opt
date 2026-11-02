@@ -1,4 +1,5 @@
 import importlib.util
+import itertools
 import subprocess
 from pathlib import Path
 
@@ -126,7 +127,9 @@ def test_measure_binary_raises_on_failed_run():
             shm_size="2g",
             run_timeout=600,
             runner=fake_runner,
-            clock=iter([0.0, 1.0]).__next__,
+            # measure_binary retries each slot, reading the clock twice per
+            # attempt; a counter never runs out however many attempts it makes.
+            clock=itertools.count(0.0, 1.0).__next__,
         )
     except RuntimeError as exc:
         assert "boom" in str(exc)
