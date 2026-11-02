@@ -234,6 +234,62 @@ def test_socket_survives_garbage(tmp_path):
     assert reply["ok"] is False
 
 
+def test_an_op_that_raises_gets_a_json_error_and_the_broker_keeps_serving(
+        tmp_path, monkeypatch):
+    """A handler bug must not reach the agent as an empty reply, nor leak.
+
+    serve() used to let a non-OSError from handle_request escape the accept
+    loop: the client read b'' ("malformed broker reply"), and the listener
+    closed and unlinked the socket, so every later build/smoke/replay of the
+    session failed with ENOENT.
+    """
+    import socket as _s
+    import threading
+
+    import sandbox.broker as b
+
+    calls = []
+
+    def flaky(ctx, repeats):
+        calls.append(repeats)
+        if len(calls) == 1:
+            raise TypeError(
+                "boom /home/x/results/exp1/libxml2-arvo-1972/optimized/smoke")
+        return {"seconds": 2.0}
+
+    monkeypatch.setattr(b, "_run_replay", flaky)
+    sock_path = str(tmp_path / "b3.sock")
+    ctx = _ctx(tmp_path)
+    t = threading.Thread(target=b.serve, args=(sock_path, ctx), daemon=True)
+    t.start()
+    for _ in range(50):
+        if (tmp_path / "b3.sock").exists():
+            break
+        __import__("time").sleep(0.02)
+
+    def ask():
+        c = _s.socket(_s.AF_UNIX, _s.SOCK_STREAM)
+        c.settimeout(5)
+        c.connect(sock_path)
+        c.sendall(json.dumps({"op": "replay_time", "repeats": 2}).encode() + b"\n")
+        raw = c.recv(65536)
+        c.close()
+        return json.loads(raw.decode())
+
+    try:
+        first = ask()
+        assert first["ok"] is False
+        # Type name only: the message carries a host path that names the bug.
+        assert first["error"] == "broker error: TypeError; see the host log"
+        assert "boom" not in json.dumps(first)
+        assert "arvo" not in json.dumps(first)
+        assert t.is_alive(), "one failing op ended the broker"
+        assert ask() == {"ok": True, "seconds": 2.0, "repeats": 2}
+    finally:
+        ctx.stop.set()
+        t.join(timeout=5)
+
+
 def test_timed_out_container_is_killed(monkeypatch):
     """A timeout must kill the container, not just the `docker run` client."""
     import subprocess

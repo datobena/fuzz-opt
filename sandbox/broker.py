@@ -780,7 +780,23 @@ def serve(socket_path: str, ctx: BrokerContext) -> None:
                         {"ok": False, "error": f"bad request: {e}"}).encode() + b"\n")
                     continue
                 try:
-                    reply = handle_request(req, ctx)
+                    try:
+                        reply = handle_request(req, ctx)
+                    except Exception as e:  # noqa: BLE001 -- keep the service up
+                        # handle_request is meant never to raise; when it does
+                        # (a helper bug, a ledger write failing), the agent still
+                        # gets a JSON error. Letting it escape sent the client an
+                        # empty reply and closed and unlinked the listener, so the
+                        # rest of the session lost its only build/replay channel.
+                        # The reply names the exception TYPE only: host-side
+                        # messages carry absolute host paths
+                        # (results/<exp>/<project>-arvo-<id>/...), which name the
+                        # bug. The detail stays in the orchestrator log.
+                        logger.exception("broker op %r failed", req.get("op")
+                                         if isinstance(req, dict) else None)
+                        reply = {"ok": False,
+                                 "error": f"broker error: {type(e).__name__}; "
+                                          "see the host log"}
                     if ctx.stop.is_set():
                         # The session ended mid-op: its agent is gone, and what
                         # the op returned describes a killed container.
