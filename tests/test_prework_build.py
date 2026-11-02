@@ -82,3 +82,45 @@ def test_stage_source_keeps_a_nested_dir_that_shares_an_engine_name(tmp_path):
     stage_source(src, tmp_path / "staged")
 
     assert (tmp_path / "staged" / "proj" / "afl" / "keep.c").exists()
+
+
+def test_definition_hash_is_stable_and_covers_every_definition_file(tmp_path):
+    from prework.build_image import definition_hash
+    pins = tmp_path / "pins"; pins.mkdir()
+    (pins / "base.pin").write_text("gcr.io/x@sha256:aa\n"); (pins / "aflpp.pin").write_text("v5.02c\n")
+    t = tmp_path / "t"; t.mkdir()
+    (t / "Dockerfile").write_text("FROM x\n"); (t / "meta.json").write_text("{}")
+    h1 = definition_hash(t, prework_dir=pins)
+    assert len(h1) == 64 and h1 == definition_hash(t, prework_dir=pins)
+    (t / "build.sh").write_text("make\n")
+    h2 = definition_hash(t, prework_dir=pins)
+    assert h2 != h1, "adding build.sh must change the hash"
+    (t / "build.sh").write_text("make all\n")
+    assert definition_hash(t, prework_dir=pins) != h2
+    (pins / "aflpp.pin").write_text("v5.03c\n")
+    assert definition_hash(t, prework_dir=pins) not in (h1, h2), "a pin change must change the hash"
+
+
+def test_build_docker_command_carries_labels(tmp_path):
+    cmd = build_docker_command(target_dir=tmp_path, tag="bench-aflpp/x-arvo-1",
+                               base="gcr.io/x@sha256:aa", aflpp_ref="v5.02c",
+                               labels={"bench-aflpp.definition-sha256": "abc"})
+    assert "--label" in cmd and "bench-aflpp.definition-sha256=abc" in cmd
+    assert cmd.index("--label") > cmd.index("-t")
+
+
+def test_build_image_stamps_the_definition_hash(tmp_path, monkeypatch):
+    from prework import build_image as bi
+    seen = {}
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        class R: returncode = 0; stdout = ""; stderr = ""
+        return R()
+    monkeypatch.setattr(bi.subprocess, "run", fake_run)
+    monkeypatch.setattr(bi, "read_pin", lambda n: {"base.pin": "gcr.io/x@sha256:aa", "aflpp.pin": "v5.02c"}[n])
+    t = tmp_path / "t"; t.mkdir(); (t / "Dockerfile").write_text("FROM x\n"); (t / "meta.json").write_text("{}")
+    src = tmp_path / "src"; src.mkdir(); (src / "p").mkdir()
+    ok, _ = bi.build_image(t, src, "bench-aflpp/x-arvo-1")
+    assert ok
+    expected = f"{bi.DEFINITION_LABEL}={bi.definition_hash(t)}"
+    assert expected in seen["cmd"]

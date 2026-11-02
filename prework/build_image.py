@@ -9,6 +9,7 @@ images screened, 10 ship only classic AFL 2.5x and the rest are a mix of
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -18,6 +19,12 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 PREWORK_DIR = Path(__file__).parent
+
+# Image label carrying definition_hash(), so a consumer can tell whether a built
+# image still matches the definition it was built from.
+DEFINITION_LABEL = "bench-aflpp.definition-sha256"
+DEFINITION_FILES = ("Dockerfile", "meta.json", "build.sh", "poc_input")
+PIN_FILES = ("base.pin", "aflpp.pin")
 
 
 def image_tag(project: str, arvo_id: int) -> str:
@@ -40,8 +47,27 @@ def read_pin(name: str) -> str:
     return (PREWORK_DIR / name).read_text().strip()
 
 
+def definition_hash(target_dir: str | Path, *, prework_dir: Path = PREWORK_DIR) -> str:
+    """sha256 over everything an image is built from: the target's definition
+    files and the shared pins, in a fixed order.
+
+    An absent optional file (build.sh, poc_input) contributes the word "absent",
+    so adding one changes the hash just as editing one does. The staged source is
+    deliberately excluded: it is a build artifact extracted from ARVO, not part
+    of the definition.
+    """
+    target_dir, prework_dir = Path(target_dir), Path(prework_dir)
+    paths = [target_dir / n for n in DEFINITION_FILES] + [prework_dir / n for n in PIN_FILES]
+    h = hashlib.sha256()
+    for path in paths:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest().encode() if path.is_file() else b"absent"
+        h.update(path.name.encode() + b"\0" + digest + b"\n")
+    return h.hexdigest()
+
+
 def build_docker_command(
     *, target_dir: str | Path, tag: str, base: str, aflpp_ref: str,
+    labels: dict[str, str] | None = None,
 ) -> list[str]:
     """`docker build` for one target. Refuses a base that is not digest-pinned."""
     if "@sha256:" not in base:
@@ -49,11 +75,13 @@ def build_docker_command(
             f"base image must be digest-pinned, got {base!r}; a tag re-pulls "
             "to a different toolchain and silently changes the experiment"
         )
+    label_args = [a for k, v in (labels or {}).items() for a in ("--label", f"{k}={v}")]
     return [
         "docker", "build",
         "--build-arg", f"BASE={base}",
         "--build-arg", f"AFLPP_REF={aflpp_ref}",
         "-t", tag,
+        *label_args,
         "-f", str(Path(target_dir) / "Dockerfile"),
         str(target_dir),
     ]
@@ -105,6 +133,7 @@ def build_image(
     cmd = build_docker_command(
         target_dir=target_dir, tag=tag,
         base=read_pin("base.pin"), aflpp_ref=read_pin("aflpp.pin"),
+        labels={DEFINITION_LABEL: definition_hash(target_dir)},
     )
     logger.info("Building %s", tag)
     r = subprocess.run(
