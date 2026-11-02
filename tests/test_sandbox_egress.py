@@ -27,8 +27,23 @@ def _isolate_credential_store(tmp_path, monkeypatch):
     test suite bricked the benchmark, which is exactly the kind of coupling an
     autouse fixture exists to make impossible rather than remembered.
     """
+    _redirect_store(monkeypatch, tmp_path / "_store")
+
+
+def _redirect_store(monkeypatch, store):
+    """Point the store AND every path derived from it at ``store``.
+
+    CREDENTIAL_LOCK and INFLIGHT_DIR are computed from CREDENTIAL_STORE at
+    import time, so moving the store alone leaves stage_credentials() taking its
+    refresh lock, and mark_session_start() writing its in-flight marker, in the
+    REAL .sandbox-creds/. A stray marker there holds off real refreshes for
+    INFLIGHT_STALE_SECS.
+    """
     import sandbox.egress as e
-    monkeypatch.setattr(e, "CREDENTIAL_STORE", tmp_path / "_store")
+    monkeypatch.setattr(e, "CREDENTIAL_STORE", store)
+    monkeypatch.setattr(e, "CREDENTIAL_LOCK", store / ".refresh.lock")
+    monkeypatch.setattr(e, "INFLIGHT_DIR", store / "inflight")
+    return e
 
 
 def test_allows_the_backends_the_optimizer_actually_uses():
@@ -126,8 +141,12 @@ def test_credential_is_a_writable_copy_not_the_host_file(tmp_path, monkeypatch):
 def test_missing_credential_is_skipped_not_fatal(tmp_path, monkeypatch):
     import sandbox.egress as e
 
-    monkeypatch.setattr(e, "CREDENTIAL_FILES",
-                        {"codex": (tmp_path / "absent.json", "/c.json")})
+    # Both backends CREDENTIAL_FILES configures, neither present on the host.
+    # The refresh gate reads the "claude" entry unconditionally, so a config
+    # without that key is not one production can have.
+    monkeypatch.setattr(e, "CREDENTIAL_FILES", {
+        "claude": (tmp_path / "absent-claude.json", "/home/agent/.claude/.credentials.json"),
+        "codex": (tmp_path / "absent.json", "/c.json")})
     assert e.stage_credentials(tmp_path / "s") == []
 
 
@@ -154,9 +173,14 @@ def test_extra_allowed_hosts_are_passed_through(tmp_path):
 # next session would otherwise re-seed from.
 
 def _store(tmp_path, monkeypatch):
-    import sandbox.egress as e
-    monkeypatch.setattr(e, "CREDENTIAL_STORE", tmp_path / "store")
-    return e
+    return _redirect_store(monkeypatch, tmp_path / "store")
+
+
+def _oauth_refreshed(access):
+    """What the CLI writes after a real in-session refresh."""
+    return json.dumps({"claudeAiOauth": {
+        "accessToken": access, "refreshToken": f"r-{access}",
+        "expiresAt": 1900000000000}})
 
 
 def test_refreshed_credential_survives_into_the_next_session(tmp_path, monkeypatch):
@@ -172,14 +196,26 @@ def test_refreshed_credential_survives_into_the_next_session(tmp_path, monkeypat
     s1 = tmp_path / "s1"
     staged = e.stage_credentials(s1)[0].split(":")[0]
     from pathlib import Path
-    Path(staged).write_text('{"token": "v2-refreshed"}')
+    # A real refresh: the CLI writes a new access token, a rotated refresh
+    # token and a new expiry. harvest folds back only a copy that carries a
+    # refresh token -- an access-token-only copy cannot have refreshed anything.
+    Path(staged).write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "v2-refreshed", "refreshToken": "r2",
+        "expiresAt": 1900000000000}}))
     import os
     os.utime(staged, (time.time() + 10, time.time() + 10))
     assert e.harvest_credentials(s1) == ["claude"]
 
     s2 = tmp_path / "s2"
     staged2 = e.stage_credentials(s2)[0].split(":")[0]
-    assert Path(staged2).read_text() == '{"token": "v2-refreshed"}'
+    oauth2 = json.loads(Path(staged2).read_text())["claudeAiOauth"]
+    assert oauth2["accessToken"] == "v2-refreshed"
+    assert oauth2["expiresAt"] == 1900000000000
+    # The next session gets the refreshed ACCESS token; the rotated refresh
+    # token stays in the store.
+    assert "refreshToken" not in oauth2
+    stored = json.loads((e.CREDENTIAL_STORE / "claude.json").read_text())
+    assert stored["claudeAiOauth"]["refreshToken"] == "r2"
 
 
 def test_store_is_not_re_seeded_from_a_stale_host_credential(tmp_path, monkeypatch):
@@ -209,11 +245,15 @@ def test_harvest_never_writes_the_host_credential(tmp_path, monkeypatch):
     s = tmp_path / "s"
     staged = e.stage_credentials(s)[0].split(":")[0]
     from pathlib import Path
-    Path(staged).write_text('{"token": "sandbox-refreshed"}')
+    # A copy harvest really folds back (it carries a rotated refresh token), so
+    # the host check below is not vacuous.
+    Path(staged).write_text(_oauth_refreshed("sandbox-refreshed"))
     os.utime(staged, (time.time() + 10, time.time() + 10))
-    e.harvest_credentials(s)
+    assert e.harvest_credentials(s) == ["claude"]
 
     assert host.read_text() == '{"token": "host-original"}'
+    assert (e.CREDENTIAL_STORE / "claude.json").read_text() == \
+        _oauth_refreshed("sandbox-refreshed")
 
 
 def test_harvest_ignores_an_older_session_copy(tmp_path, monkeypatch):
@@ -231,7 +271,9 @@ def test_harvest_ignores_an_older_session_copy(tmp_path, monkeypatch):
     (e.CREDENTIAL_STORE / "claude.json").write_text('{"token": "newer"}')
     os.utime(e.CREDENTIAL_STORE / "claude.json", (time.time() + 60, time.time() + 60))
     from pathlib import Path
-    Path(staged).write_text('{"token": "older"}')
+    # Carries a refresh token, so it is the mtime check that turns it away,
+    # not the access-token-only guard.
+    Path(staged).write_text(_oauth_refreshed("older"))
 
     assert e.harvest_credentials(s) == []
     assert (e.CREDENTIAL_STORE / "claude.json").read_text() == '{"token": "newer"}'

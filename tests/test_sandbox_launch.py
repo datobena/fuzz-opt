@@ -113,7 +113,11 @@ def test_agent_tools_speak_the_broker_protocol(tmp_path, monkeypatch):
 
     import sandbox.broker as b
 
-    monkeypatch.setattr(b, "_run_replay", lambda ctx, repeats: 7.5)
+    # _run_replay returns a dict (seconds plus host-side bracketing detail);
+    # a bare float made handle_request raise, which is what the client saw as
+    # an empty "malformed broker reply".
+    monkeypatch.setattr(b, "_run_replay",
+                        lambda ctx, repeats: {"seconds": 7.5, "bracketed": False})
     sock = tmp_path / "broker.sock"
     ctx = b.BrokerContext(
         image="i", source_dir=str(tmp_path), out_dir=str(tmp_path),

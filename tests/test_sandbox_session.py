@@ -151,10 +151,15 @@ def test_agent_cpus_on_the_real_topology_avoid_trial_and_profile_cores(pertrial_
     sib = thread_siblings()
     if not sib or max(sib) < 39:
         pytest.skip("needs the 40-core host topology")
-    got = set(parse_cpuset(resolve_agent_cpus()))
     banned = set()
     for c in parse_cpuset("2-31"):
-        banned |= sib[c]
+        banned |= sib.get(c, frozenset({c}))
+    # The 40-cpu test server (20 physical cores, sibling c+20) has every
+    # physical core under a trial or profile cpu of this layout; there
+    # resolve_agent_cpus() correctly refuses, which the fail-loudly test covers.
+    if all(sib[c] & banned for c in sib):
+        pytest.skip("host cannot hold the 2-31 trial/profile layout")
+    got = set(parse_cpuset(resolve_agent_cpus()))
     assert got and not (got & banned)
     if sib == HT80:
         assert resolve_agent_cpus() == "0-1,32-39"
