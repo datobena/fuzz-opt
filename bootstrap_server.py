@@ -16,7 +16,8 @@ Still manual, because they cannot be automated safely:
   * core-count settings, which depend on the machine
 
     python3 bootstrap_server.py --check      # report readiness, change nothing
-    python3 bootstrap_server.py              # build everything missing
+    python3 bootstrap_server.py              # build everything missing or stale
+    python3 bootstrap_server.py --rebuild-unverified   # ...and pre-stamping images
 """
 from __future__ import annotations
 
@@ -28,12 +29,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from prework.build_image import DEFINITION_LABEL, definition_hash, image_tag
+
 REPO = Path(__file__).resolve().parent
 TARGETS_DIR = REPO / "prework" / "targets"
 AGENT_IMAGE = "bench-sandbox/agent"
 PROXY_IMAGE = "bench-sandbox/egress"
 
 OK, MISSING, FAIL = "OK", "MISSING", "FAIL"
+# An image whose stamped definition hash no longer matches its target dir
+# (STALE), or that predates stamping and so cannot be checked (UNVERIFIED).
+STALE, UNVERIFIED = "STALE", "UNVERIFIED"
 
 
 def _run(cmd, **kw):
@@ -45,6 +51,29 @@ def _image_exists(image: str) -> bool:
     if not shutil.which("docker"):
         return False
     return _run(["docker", "image", "inspect", image]).returncode == 0
+
+
+def image_definition_label(image: str) -> str | None:
+    """The definition hash build_image stamped on IMAGE, or None when the image
+    is absent or carries no stamp."""
+    r = _run(["docker", "image", "inspect", "-f",
+              f'{{{{index .Config.Labels "{DEFINITION_LABEL}"}}}}', image])
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip() or None
+
+
+def image_state(tag: str, target_dir: Path, *, exists=_image_exists,
+                label=image_definition_label) -> str:
+    """Asking only whether the tag exists let an image fall behind its
+    definition unnoticed (two did on the test box). Compare the stamped hash
+    with the definition on disk instead."""
+    if not exists(tag):
+        return MISSING
+    stamped = label(tag)
+    if stamped is None:
+        return UNVERIFIED
+    return OK if stamped == definition_hash(target_dir) else STALE
 
 
 def _symbolizer_check() -> tuple[bool, str]:
@@ -180,8 +209,16 @@ def check_images() -> list[tuple[str, str, str]]:
         if not (target / "meta.json").is_file():
             continue
         meta = json.loads((target / "meta.json").read_text())
-        tag = f"bench-aflpp/{meta['project']}-arvo-{meta['arvo_id']}"
-        rows.append((tag, OK if _image_exists(tag) else MISSING, target.name))
+        # image_tag lowercases, as docker requires; building the tag by hand
+        # reported PcapPlusPlus as missing although its image was built.
+        tag = image_tag(meta["project"], meta["arvo_id"])
+        state = image_state(tag, target, exists=_image_exists,
+                            label=image_definition_label)
+        note = {
+            STALE: "stale: definition changed since the image was built",
+            UNVERIFIED: "unverified: built before stamping; rebuild with --rebuild-unverified",
+        }.get(state, target.name)
+        rows.append((tag, state, note))
     return rows
 
 
@@ -202,8 +239,12 @@ def build_support_images() -> bool:
     return ok
 
 
-def build_target_images(work: str) -> list[tuple[str, str, str]]:
+def build_target_images(work: str, *, rebuild_unverified: bool = False
+                        ) -> list[tuple[str, str, str]]:
     """Run prework per target. Each pulls a multi-GB ARVO image, so this is slow.
+
+    Missing and stale images are rebuilt; an unverified one (built before
+    stamping) only with REBUILD_UNVERIFIED, since it is most likely still fine.
 
     A target whose bug no longer reproduces is reported and skipped, not patched
     around -- the benchmark must only measure bugs that exist in the binary.
@@ -213,9 +254,12 @@ def build_target_images(work: str) -> list[tuple[str, str, str]]:
         if not (target / "meta.json").is_file():
             continue
         meta = json.loads((target / "meta.json").read_text())
-        tag = f"bench-aflpp/{meta['project']}-arvo-{meta['arvo_id']}"
-        if _image_exists(tag):
-            results.append((target.name, OK, "already built"))
+        tag = image_tag(meta["project"], meta["arvo_id"])
+        state = image_state(tag, target, exists=_image_exists,
+                            label=image_definition_label)
+        rebuild = state in (MISSING, STALE) or (state == UNVERIFIED and rebuild_unverified)
+        if not rebuild:
+            results.append((target.name, OK, state))
             continue
         print(f"[prework] {target.name} (pulls a multi-GB ARVO image; slow)")
         r = subprocess.run(
@@ -232,7 +276,8 @@ def report(title: str, rows) -> bool:
     print(f"\n{title}")
     worst_ok = True
     for name, status, note in rows:
-        mark = {OK: "  ok  ", MISSING: " todo ", FAIL: " FAIL "}[status]
+        mark = {OK: "  ok  ", MISSING: " todo ", FAIL: " FAIL ",
+                STALE: " STALE", UNVERIFIED: "unver."}[status]
         print(f"  [{mark}] {name}" + (f"  -- {note}" if note else ""))
         if status != OK:
             worst_ok = False
@@ -243,6 +288,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Prepare a machine for an online run")
     ap.add_argument("--check", action="store_true", help="report only, build nothing")
     ap.add_argument("--work", default="/tmp/prework", help="prework artifact root")
+    ap.add_argument("--rebuild-unverified", action="store_true",
+                    help="also rebuild images built before definition stamping")
     args = ap.parse_args()
     sys.path.insert(0, str(REPO))
 
@@ -256,7 +303,7 @@ def main() -> int:
     if not build_support_images():
         print("\nsupport images failed to build; stopping before prework")
         return 2
-    rows = build_target_images(args.work)
+    rows = build_target_images(args.work, rebuild_unverified=args.rebuild_unverified)
     c = report("prework targets", rows)
 
     ready = [n for n, s, _ in rows if s == OK]
