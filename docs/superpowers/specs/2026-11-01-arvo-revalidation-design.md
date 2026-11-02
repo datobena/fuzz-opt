@@ -121,6 +121,10 @@ python3 -m prework.run_prework --target prework/targets/<t> --work <scratch>/pre
 `FUZZING_ENGINE=afl` and re-verifies the PoC. Exit 5 (bug gone) drops the target
 per policy; any other non-zero exit is reported with its log.
 
+**Done 2026-11-01 22:06.** Both rebuilt in about two minutes each (warm layer
+cache); both report `verdict: poc_crash, status: ready`; the previously missing
+`build.sh` edits are present in the new images.
+
 ### W2 — Smoke campaign on unmodified code
 
 ```
@@ -149,7 +153,8 @@ label, and reports one of: `ok` (hash matches), `STALE` (hash differs), `unverif
 (no label: built before stamping), `todo` (missing). The build step rebuilds
 `todo` and `STALE` images; `--rebuild-unverified` rebuilds the unlabeled ones too.
 After T1 lands, every image on this box is rebuilt with `--rebuild-unverified` so all
-8 carry a label (about 2 h, not concurrent with the campaign).
+8 carry a label (minutes per image with a warm layer cache; not concurrent with the
+campaign).
 
 **T2. Profiler library policy for glibc in /out**
 (`skills/profile-once-fuzz-folds/scripts/target_libs.py`, `tests/test_profile_target_libs.py`).
@@ -184,6 +189,27 @@ Full suite; every `tests/test_fuzzbench_*` and `tests/test_fb_ccache.py` test gr
 Then `docs/ARVO_REVALIDATION.md`: what was broken, what changed (per commit), the
 exact commands for this box, per-target verdicts, dropped targets with reasons, the
 known remaining test failures, and the campaign's experiment id.
+
+## What changes measurement, and what does not
+
+Per the user's rule, only choices that change instrumentation settings, pipeline
+behavior or engine flags are decisions for the user; the rest are implementation
+details.
+
+- **Engine flags and instrumentation: unchanged.** ARVO launches keep the exact
+  argv and environment pinned by `tests/test_fuzzbench_run.py`
+  (`-i -o -V -s -m none -t 1000`, `AFL_NO_AFFINITY`, `AFL_SKIP_CPUFREQ`,
+  `AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES`, `AFL_AUTORESUME`). Builds keep
+  `arvo_compile_args` (AFL++ v5.02c on LLVM 18, `-O` as the image's CFLAGS, the
+  fold denylist). FuzzBench launches and builds are not touched.
+- **Pipeline behavior, one change (T2).** The profiler's library check stops
+  requiring glibc/loader-family libraries found in `/out` to load in the profiler
+  image. For a target whose build copies glibc into `/out` (PcapPlusPlus) this turns
+  a refused campaign into a running one; for every other target the supplied
+  library set and the profile are identical to before. The trials, the replay gate
+  and the hot-swap set never read those files.
+- **Operational only (T1, T3, docs):** image staleness reporting, the tag-case
+  fix, test updates. No effect on what is compiled or how it is fuzzed.
 
 ## Process
 
