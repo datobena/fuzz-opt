@@ -351,6 +351,58 @@ def test_an_out_library_its_own_image_cannot_load_is_skipped(tmp_path, out, monk
     assert "/out/libmod.so" not in fake.runs[1][-1]
 
 
+GLIBC_OUT = ["/out/cmplog/libpthread.so.0", "/out/libc.so.6", "/out/librt.so.1"]
+
+
+def _glibc_in_out(out):
+    # PcapPlusPlus's build.sh copies the build image's glibc into $OUT.
+    (out / "cmplog").mkdir()
+    for rel in ("libc.so.6", "librt.so.1", "cmplog/libpthread.so.0"):
+        (out / rel).write_bytes(b"\x7fELF " + rel.encode())
+
+
+def test_glibc_copies_in_out_are_ignored_not_required(tmp_path, out, monkeypatch):
+    _glibc_in_out(out)
+    # What the 24.04 profiler says of the 2.31 librt: it needs its own libpthread.
+    extra = {"/out/librt.so.1": [f"/out/librt.so.1: {L}/libpthread.so.0: version "
+                                 "`GLIBC_PRIVATE' not found (required by /out/librt.so.1)"]}
+    fake = FakeDocker(extra=extra)
+    monkeypatch.setattr(tl, "_run", fake)
+    main, sos = tl.probe_files(out, "t")
+    assert not any(tl.is_libc_family(p) for p in sos)
+    assert tl.libc_in_out(out) == ["/out/cmplog/libpthread.so.0", "/out/libc.so.6", "/out/librt.so.1"]
+    res = _prepare(out, tmp_path / "target_libs")
+    assert res["ignored_libc_out"] == ["/out/cmplog/libpthread.so.0", "/out/libc.so.6", "/out/librt.so.1"]
+
+
+def test_a_non_glibc_out_library_the_profiler_cannot_load_still_fails(tmp_path, out, monkeypatch):
+    (out / "libc.so.6").write_bytes(b"\x7fELF libc")
+    (out / "libfoo.so.1").write_bytes(b"\x7fELF foo")
+    profiler = dict(PROFILER, **{"/out/libfoo.so.1": [("libbar.so.1", None)]})
+    monkeypatch.setattr(tl, "_run", FakeDocker(profiler=profiler))
+    with pytest.raises(tl.TargetLibsError, match="libfoo"):
+        _prepare(out, tmp_path / "target_libs")
+
+
+def test_a_record_from_the_previous_policy_version_is_not_reused(tmp_path, out, monkeypatch):
+    fake = FakeDocker()
+    monkeypatch.setattr(tl, "_run", fake)
+    libs_dir = tmp_path / "target_libs"
+    main, sos = tl.probe_files(out, "t")
+    with monkeypatch.context() as m:
+        m.setattr(tl, "VERSION", 2)
+        old_key = tl.cache_key(out, main + sos, target_image_id=fake.ids[TGT_IMG],
+                               profiler_image_id=fake.ids[PROF_IMG],
+                               base_ld_path="/opt/oss-libs")
+    libs_dir.mkdir()
+    (libs_dir / tl.RECORD).write_text(json.dumps(
+        {"version": 2, "key": old_key, "files": main + sos, "libs": {}, "needed_by": {},
+         "append_out": False, "out_libs": [], "skipped_out_libs": {},
+         "ld_library_path": "/opt/oss-libs", "seconds": 0.1}))
+    res = _prepare(out, libs_dir)
+    assert res["cached"] is False
+
+
 def test_a_probe_container_that_keeps_failing_is_a_marked_probe_error(
         tmp_path, out, monkeypatch):
     fake = FakeDocker(fail_rc=125)
@@ -365,6 +417,7 @@ def test_a_probe_container_that_keeps_failing_is_a_marked_probe_error(
 
 LIBS = {"libs": {"libglib-2.0.so.0": f"{L}/libglib-2.0.so.0"}, "append_out": False,
         "ld_library_path": "/opt/target-libs:/opt/oss-libs", "skipped_out_libs": {},
+        "ignored_libc_out": [],
         "cached": False, "seconds": 1.2}
 
 

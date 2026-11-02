@@ -22,7 +22,10 @@ this; the build is not changed.
      copy too old for the version the target asks for, are followed through the
      staged copies until nothing new appears (glib's own libpcre need is only
      visible once glib is found). The libc/loader family is never supplied: it
-     must come from the profiler image.
+     must come from the profiler image. glibc and loader-family files found
+     under /out are ignored: the module never supplies them and the trials'
+     target image resolves them from its own system path (PcapPlusPlus's
+     historical build.sh copies them into $OUT).
   3. those libraries are copied into the per-profile ``target_libs`` dir, which
      the profile mounts read-only at TARGET_LIBS_MOUNT and puts on
      LD_LIBRARY_PATH for the target process only (perf keeps its own), and a
@@ -60,7 +63,7 @@ STAGE_SUFFIX = ".stage"
 # other shared library outside /out).
 TARGET_LIBS_MOUNT = "/opt/target-libs"
 CONTAINER_OUT = "/out"
-VERSION = 2
+VERSION = 3
 PROBE_MEMORY = "1g"
 PROBE_TIMEOUT_SECS = 300
 RM_TIMEOUT_SECS = 60
@@ -105,23 +108,13 @@ def is_libc_family(name: str) -> bool:
     return bool(_LIBC_FAMILY_RE.match(os.path.basename(name)))
 
 
-def probe_files(out_dir, fuzz_target: str) -> tuple[list[str], list[str]]:
-    """Container paths of what the profile runs, and of what it may load from
-    /out: (the target and afl-showmap, the AFL replay's parent), (every /out
-    shared library but AFL++'s plugins -- dlopen'd extension modules are not
-    in the target's own ldd)."""
+def _out_shared_libs(out_dir):
+    """(file name, container path) of every ELF shared library under /out."""
     out = Path(out_dir)
-    if not (out / fuzz_target).is_file():
-        raise TargetLibsError(f"{UNRESOLVED_MARK}: {out / fuzz_target} does not exist; "
-                              "nothing to resolve shared libraries for")
-    main = [f"{CONTAINER_OUT}/{fuzz_target}"]
-    if (out / "afl-showmap").is_file():
-        main.append(f"{CONTAINER_OUT}/afl-showmap")
-    sos = []
     for root, _dirs, names in os.walk(out):
         for n in names:
             p = Path(root) / n
-            if not _SHARED_LIB_RE.search(n) or _AFL_TOOL_SO_RE.search(n):
+            if not _SHARED_LIB_RE.search(n):
                 continue
             try:
                 with open(p, "rb") as fh:
@@ -129,7 +122,30 @@ def probe_files(out_dir, fuzz_target: str) -> tuple[list[str], list[str]]:
                         continue        # a linker script or other non-ELF
             except OSError:
                 continue
-            sos.append(f"{CONTAINER_OUT}/{p.relative_to(out).as_posix()}")
+            yield n, f"{CONTAINER_OUT}/{p.relative_to(out).as_posix()}"
+
+
+def libc_in_out(out_dir) -> list[str]:
+    """Container paths of the glibc/loader-family copies under /out. Inert: no
+    trial puts /out ahead of the image's own glibc, and the profiler image could
+    not load a build image's copies anyway (GLIBC_PRIVATE needs their own loader)."""
+    return sorted(c for n, c in _out_shared_libs(out_dir) if is_libc_family(n))
+
+
+def probe_files(out_dir, fuzz_target: str) -> tuple[list[str], list[str]]:
+    """Container paths of what the profile runs, and of what it may load from
+    /out: (the target and afl-showmap, the AFL replay's parent), (every /out
+    shared library -- dlopen'd extension modules are not in the target's own
+    ldd -- but AFL++'s plugins and the glibc copies of :func:`libc_in_out`)."""
+    out = Path(out_dir)
+    if not (out / fuzz_target).is_file():
+        raise TargetLibsError(f"{UNRESOLVED_MARK}: {out / fuzz_target} does not exist; "
+                              "nothing to resolve shared libraries for")
+    main = [f"{CONTAINER_OUT}/{fuzz_target}"]
+    if (out / "afl-showmap").is_file():
+        main.append(f"{CONTAINER_OUT}/afl-showmap")
+    sos = [c for n, c in _out_shared_libs(out)
+           if not _AFL_TOOL_SO_RE.search(n) and not is_libc_family(n)]
     return main, sorted(sos)
 
 
@@ -295,6 +311,7 @@ def prepare(*, out_dir, fuzz_target: str, libs_dir, target_image: str,
     t0 = time.monotonic()
     libs_dir = Path(libs_dir)
     main, sos = probe_files(out_dir, fuzz_target)
+    ignored = libc_in_out(out_dir)
     files = main + sos
     key = cache_key(out_dir, files,
                     target_image_id=_image_id(target_image, "the target's image"),
@@ -401,7 +418,8 @@ def prepare(*, out_dir, fuzz_target: str, libs_dir, target_image: str,
                "libs": {n: resolved.get(n) for n in copy}, "needed_by":
                {n: needed_by[n] for n in copy + from_out},
                "append_out": bool(from_out), "out_libs": from_out,
-               "skipped_out_libs": skipped, "ld_library_path": ld,
+               "skipped_out_libs": skipped, "ignored_libc_out": ignored,
+               "ld_library_path": ld,
                "seconds": round(time.monotonic() - t0, 2)}
         libs_dir.mkdir(parents=True, exist_ok=True)
         (libs_dir / RECORD).write_text(json.dumps(rec, indent=2, sort_keys=True))
