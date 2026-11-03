@@ -388,3 +388,64 @@ Expected: `READY`, image `fb-aflpp/libxml2_xml_e85b9b`, `aflbuild` reported as `
 git add docs/ARVO_REVALIDATION.md
 git commit -m "docs: how the ARVO targets were revalidated on the current pipeline"
 ```
+
+---
+
+### Task 10: Profiler library supply honors /out subdirectories (campaign finding, user-approved 2026-11-02)
+
+**Why:** freeradius-server's historical `build.sh` copies `libfreeradius-*`, `libtalloc.so.2` and `libkqueue.so.0` into `/out/lib` and sets the fuzzer's RUNPATH to `$ORIGIN/lib`. In the target image the fuzzer resolves them from `/out/lib`, so `prepare` classifies them `from_out` and appends bare `/out` to the profiler path. The step-3 re-check then probes `/out/lib/libfreeradius-util.so` standalone (no RUNPATH context), where `libtalloc.so.2`/`libkqueue.so.0` read as unresolved because `/out/lib` is not on the path, and the profile is refused although the real process loads fine (verified: with `/out/lib` on the path both resolve inside the profiler image).
+
+**Files:**
+- Modify: `skills/profile-once-fuzz-folds/scripts/target_libs.py` (`VERSION`, `ld_library_path`, `prepare`, module doc)
+- Modify: `skills/profile-once-fuzz-folds/scripts/replay_fuzzer_profile.py:503-504` only if the status key set must carry `out_dirs` (optional; see step 3)
+- Test: `tests/test_profile_target_libs.py`
+
+**Interfaces:**
+- Consumes: the record keys from Task 3 (`ignored_libc_out`), `resolved` (name -> path in the target image), `from_out`.
+- Produces: `VERSION = 4`; `ld_library_path(base_ld_path: str, *, libs: bool, out_dirs: list[str]) -> str` (replaces the `append_out: bool` keyword; the path is `[TARGET_LIBS_MOUNT if libs] + [base_ld_path if set] + out_dirs`); record gains `"out_dirs": [container directories, sorted]` = `sorted({posixpath.dirname(resolved[n]) for n in from_out})`; `append_out` stays in the record as `bool(out_dirs)`; `out_libs` unchanged.
+
+- [ ] **Step 1: Write the failing tests** (use the file's `out` fixture and fake-probe pattern; the existing test at the `"/opt/oss-libs:/out"` assertion is the root-level reference)
+
+```python
+def test_libraries_found_in_an_out_subdirectory_put_that_directory_on_the_path(tmp_path, out, monkeypatch):
+    # /out/t NEEDS libtalloc.so.2; target-image ldd resolves it to /out/lib/libtalloc.so.2 (RUNPATH);
+    # /out/lib/libmod.so NEEDS libtalloc.so.2 too; profiler step 2 reports it missing for both;
+    # the re-check with the final path resolves it from /out/lib.
+    res = tl.prepare(...)
+    assert res["out_dirs"] == ["/out/lib"]
+    assert res["append_out"] is True
+    assert res["ld_library_path"] == "/opt/oss-libs:/out/lib"
+    # the re-check probe ran with /out/lib on its LD_LIBRARY_PATH
+    assert any("/out/lib" in r[-1] for r in fake.runs)
+
+def test_root_level_out_libraries_keep_the_previous_path(tmp_path, out, monkeypatch):
+    # same shape as the existing "/opt/oss-libs:/out" test: from_out resolved at /out/libbuild.so
+    res = tl.prepare(...)
+    assert res["out_dirs"] == ["/out"] and res["ld_library_path"] == "/opt/oss-libs:/out"
+
+def test_a_record_from_policy_version_3_is_not_reused(tmp_path, out, monkeypatch):
+    # key computed with VERSION monkeypatched to 3 -> prepare returns cached False
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `python3 -m pytest tests/test_profile_target_libs.py -q -k "subdirectory or root_level or version_3"`
+Expected: `TypeError` (unexpected keyword `out_dirs`) / `KeyError: out_dirs`.
+
+- [ ] **Step 3: Implement**: `VERSION = 4`; `ld_library_path` takes `out_dirs`; in `prepare`, after `from_out` is known, `out_dirs = sorted({posixpath.dirname(resolved[n]) for n in from_out})`, pass `out_dirs=out_dirs` to `ld_library_path`, write `"out_dirs": out_dirs` and `"append_out": bool(out_dirs)` into the record. Update the existing call sites and the exact-record assertions in the test file. Module doc: in the step-3 sentence replace "and /out if a build library is found only through it" with "and the /out directories a build library was found in (bare /out for root-level libraries, /out/lib for a build that copies its libraries there with an $ORIGIN/lib RUNPATH)". `replay_fuzzer_profile.py` keeps reading `ld_library_path`/`append_out` unchanged; add `out_dirs` to its copied key set only if the auditor asks.
+
+- [ ] **Step 4: Run the file and its consumers**
+
+Run: `python3 -m pytest tests/test_profile_target_libs.py tests/test_replay_fuzzer_profile.py tests/test_hotspot_table.py -q`
+Expected: all pass; then the full suite once (4 failed baseline must not grow).
+
+- [ ] **Step 5: Auditor checks:** (a) for every existing test fixture and for FuzzBench's known /out layouts (php `modules/*.so`, systemd `src/shared/*.so`), state whether `out_dirs` differs from `["/out"]` and what that changes; (b) the re-check still fails for a subdirectory module whose dependency exists nowhere (no false positive introduced).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add skills/profile-once-fuzz-folds/scripts/target_libs.py tests/test_profile_target_libs.py
+git commit -m "profile: put the /out directories build libraries were found in on the profiler path"
+```
+
+- [ ] **Step 7 (controller, box):** `python3 tools/preflight_online.py --project freeradius-server --cpu 3 --build-cpus 2-19 --smoke-secs 120` must report READY; rerun libxml2's preflight once to show an unchanged `ld_library_path` for a root-level target.
