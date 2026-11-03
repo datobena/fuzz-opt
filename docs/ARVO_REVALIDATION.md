@@ -24,7 +24,9 @@ and its decisions are in
 - **PcapPlusPlus is dropped** (user decision, 2026-11-02). After the rebuild its
   PoC crashes at a different frame from the historical one (see
   [Dropped targets](#dropped-targets-and-why)).
-- **The libxml2 smoke campaign passed:** `smoke-arvo-final-libxml2-20261102-0114`
+- **The libxml2 smoke campaign passed** (on the code as of cebd94a, before
+  392bfef; see [Campaign record](#campaign-record)):
+  `smoke-arvo-final-libxml2-20261102-0114`
   had 4 rounds, 3 of them `kept` (1.0999x, 1.1909x, 1.5827x), and 2 hot-swaps.
 - **FuzzBench libxml2 still preflights READY** on the final code (rerun after
   392bfef).
@@ -313,7 +315,10 @@ on hosts that cannot hold the 2-31 trial/profile layout, which includes this box
    - `broker_audit.log` shows rc=127 in trial_00/iter_01, trial_01/iter_01 and
      trial_01/iter_02.
    - Every affected round still ended `kept`.
-5. **The broker now survives a failing op** (871840e). It answers
+5. **systemd's FuzzBench layout is a pre-existing case this work does not
+   change.** It keeps glibc copies beside `$ORIGIN`-RUNPATH libraries under
+   `/out/src/shared`. No systemd record exists on this box.
+6. **The broker now survives a failing op** (871840e). It answers
    `broker error: <TypeName>; see the host log` and keeps serving, instead of
    closing the socket for the rest of the session. The detail is in the host
    log.
@@ -324,6 +329,19 @@ on hosts that cannot hold the 2-31 trial/profile layout, which includes this box
 |---|---|---|---|
 | `smoke-arvo-libxml2-20261101-2208` | launched on unmodified code; later rounds picked up commits landing in the checkout (round-2 profile records are version 3) | DURATION=7200 OPT_TIMEOUT=2700 | Benchmark Complete. 3 outcomes, all `agent-failed` at the 2700 s cap; the gate was never reached |
 | `smoke-arvo-final-libxml2-20261102-0114` | as of cebd94a | DURATION=10800 OPT_TIMEOUT=5400 | Benchmark Complete. 4 outcomes: 3 `kept`, 1 `agent-failed`; 2 HOT-SWAPs |
+
+**A deviation from the spec's W4 rule.** That rule reruns the smoke once on
+the final code when a task touches a skill script that every round runs. The
+final smoke predates 392bfef, which changed `target_libs.py`, and no third run
+was made, for two reasons:
+
+- 392bfef is inert for libxml2's layout. libxml2 loads no library from `/out`,
+  so its record has `out_dirs: []` and the same `ld_library_path` as before
+  (`results/preflight-final-20261102/preflight_libxml2.json`, and its
+  experiment dir's `target_libs.json`, version 4).
+- The freeradius-server preflight on 392bfef exercises the same `target_libs`
+  path that a round runs
+  (`results/preflight-final-20261102/preflight_freeradius-server.json`).
 
 Logs are in the repo root: `.smoke-arvo-libxml2-20261101-2208.log` and
 `.smoke-arvo-final-libxml2-20261102-0114.log`. Results are in

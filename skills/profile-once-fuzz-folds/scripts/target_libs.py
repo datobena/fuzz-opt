@@ -130,9 +130,12 @@ def _out_shared_libs(out_dir):
 
 
 def libc_in_out(out_dir) -> list[str]:
-    """Container paths of the glibc/loader-family copies under /out. Inert: no
-    trial puts /out ahead of the image's own glibc, and the profiler image could
-    not load a build image's copies anyway (GLIBC_PRIVATE needs their own loader)."""
+    """Container paths of the glibc/loader-family copies under /out. The profiler
+    image can never load a build image's glibc (GLIBC_PRIVATE ties each copy to
+    its own loader), and a trial that does load a /out glibc copy (FuzzBench
+    trials run with LD_LIBRARY_PATH=:/out; systemd's $ORIGIN-RUNPATH libraries)
+    loads its own image's bytes. So the copies are never probed or supplied,
+    and the trial is unaffected either way."""
     return sorted(c for n, c in _out_shared_libs(out_dir) if is_libc_family(n))
 
 
