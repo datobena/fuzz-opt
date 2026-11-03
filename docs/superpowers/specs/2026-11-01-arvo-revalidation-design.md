@@ -159,7 +159,7 @@ campaign).
 **T2. Profiler library policy for glibc in /out**
 (`skills/profile-once-fuzz-folds/scripts/target_libs.py`, `tests/test_profile_target_libs.py`).
 `probe_files` leaves libc/loader-family files (`is_libc_family`) out of the `/out`
-library set; `prepare` records them in the result as `ignored_libc_in_out` so the
+library set; `prepare` records them in the result as `ignored_libc_out` so the
 provenance shows what was skipped. Nothing else changes: a non-glibc `/out` library
 the profiler cannot load still raises. The auditor checks (a) that no FuzzBench
 benchmark in `prework/fuzzbench/` copies glibc into `$OUT`, and (b) that
