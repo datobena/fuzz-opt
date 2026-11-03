@@ -28,8 +28,11 @@ this; the build is not changed.
      historical build.sh copies them into $OUT).
   3. those libraries are copied into the per-profile ``target_libs`` dir, which
      the profile mounts read-only at TARGET_LIBS_MOUNT and puts on
-     LD_LIBRARY_PATH for the target process only (perf keeps its own), and a
-     profiler re-check must then resolve everything.
+     LD_LIBRARY_PATH for the target process only (perf keeps its own), together
+     with the /out directories a build library was found in (bare /out for
+     root-level libraries, /out/lib for a build that copies its libraries there
+     with an $ORIGIN/lib RUNPATH), and a profiler re-check must then resolve
+     everything.
 
 The target and afl-showmap are also checked symbol by symbol (``ldd -r``) on the
 final path, so a profiler library older than the one the build linked (a newer
@@ -47,6 +50,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -63,7 +67,7 @@ STAGE_SUFFIX = ".stage"
 # other shared library outside /out).
 TARGET_LIBS_MOUNT = "/opt/target-libs"
 CONTAINER_OUT = "/out"
-VERSION = 3
+VERSION = 4
 PROBE_MEMORY = "1g"
 PROBE_TIMEOUT_SECS = 300
 RM_TIMEOUT_SECS = 60
@@ -281,13 +285,15 @@ def cache_key(out_dir, files, *, target_image_id: str, profiler_image_id: str,
     return h.hexdigest()
 
 
-def ld_library_path(base_ld_path: str, *, libs: bool, append_out: bool) -> str:
+def ld_library_path(base_ld_path: str, *, libs: bool, out_dirs: list[str]) -> str:
     """The target process's LD_LIBRARY_PATH: the supplied libraries first (they
     are only names the profiler lacks or has too old), then the profiler's own
-    path, then /out if a build library is found only through it (FuzzBench's
-    runner has ``LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/out``)."""
+    path, then the /out directories a build library was found in (bare /out for
+    root-level libraries, /out/lib for a build that copies its libraries there
+    with an $ORIGIN/lib RUNPATH; FuzzBench's runner has
+    ``LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/out``)."""
     parts = ([TARGET_LIBS_MOUNT] if libs else []) + ([base_ld_path] if base_ld_path else [])
-    return ":".join(parts + ([CONTAINER_OUT] if append_out else []))
+    return ":".join(parts + list(out_dirs))
 
 
 def _cached(libs_dir: Path, key: str) -> dict | None:
@@ -368,6 +374,7 @@ def prepare(*, out_dir, fuzz_target: str, libs_dir, target_image: str,
         libc = sorted(n for n in needed_by if is_libc_family(n))
         from_out = sorted(n for n in needed_by if n not in libc
                           and (resolved.get(n) or "").startswith(CONTAINER_OUT + "/"))
+        out_dirs = sorted({posixpath.dirname(resolved[n]) for n in from_out})
         copy = sorted(n for n in needed_by
                       if n in staged and n not in libc and n not in from_out)
         nowhere = sorted(set(needed_by) - set(libc) - set(from_out) - set(copy))
@@ -386,7 +393,7 @@ def prepare(*, out_dir, fuzz_target: str, libs_dir, target_image: str,
         for n in copy:
             shutil.copyfile(stage / n, libs_dir / n)
             os.chmod(libs_dir / n, 0o644)
-        ld = ld_library_path(base_ld_path, libs=bool(copy), append_out=bool(from_out))
+        ld = ld_library_path(base_ld_path, libs=bool(copy), out_dirs=out_dirs)
 
         # 3. Re-check on the target's final path, supplied libraries mounted.
         # With nothing supplied, that path is step 2's and so is its listing.
@@ -417,7 +424,7 @@ def prepare(*, out_dir, fuzz_target: str, libs_dir, target_image: str,
         rec = {"version": VERSION, "key": key, "files": files,
                "libs": {n: resolved.get(n) for n in copy}, "needed_by":
                {n: needed_by[n] for n in copy + from_out},
-               "append_out": bool(from_out), "out_libs": from_out,
+               "append_out": bool(out_dirs), "out_dirs": out_dirs, "out_libs": from_out,
                "skipped_out_libs": skipped, "ignored_libc_out": ignored,
                "ld_library_path": ld,
                "seconds": round(time.monotonic() - t0, 2)}

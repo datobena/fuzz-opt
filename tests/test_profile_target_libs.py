@@ -314,7 +314,7 @@ def test_a_failed_recheck_fails_loudly(tmp_path, out, monkeypatch):
 
 
 def test_a_build_library_found_only_via_out_puts_out_on_the_path(tmp_path, out, monkeypatch):
-    target = {"/out/t": [("libbuild.so", "/out/lib/libbuild.so"),
+    target = {"/out/t": [("libbuild.so", "/out/libbuild.so"),
                          ("libc.so.6", f"{L}/libc.so.6")]}
     profiler = {"/out/t": [("libbuild.so", None), ("libc.so.6", f"{L}/libc.so.6")]}
     fake = FakeDocker(target=target, profiler=profiler)
@@ -324,6 +324,57 @@ def test_a_build_library_found_only_via_out_puts_out_on_the_path(tmp_path, out, 
     assert res["append_out"] is True and res["out_libs"] == ["libbuild.so"]
     assert res["ld_library_path"] == "/opt/oss-libs:/out"
     assert "/opt/target-libs" not in " ".join(fake.runs[2])
+
+
+def test_libraries_found_in_an_out_subdirectory_put_that_directory_on_the_path(tmp_path, out, monkeypatch):
+    # freeradius-server: build.sh copies its libraries into /out/lib and gives the
+    # fuzzer (and them) an $ORIGIN/lib-style RUNPATH, so the target image resolves
+    # libtalloc.so.2 from /out/lib for /out/t and for /out/lib/libmod.so alike.
+    (out / "lib").mkdir()
+    (out / "lib" / "libmod.so").write_bytes(b"\x7fELF mod")
+    (out / "lib" / "libtalloc.so.2").write_bytes(b"\x7fELF talloc")
+    libc = ("libc.so.6", f"{L}/libc.so.6")
+    target = {"/out/t": [("libtalloc.so.2", "/out/lib/libtalloc.so.2"), libc],
+              "/out/afl-showmap": [libc],
+              "/out/lib/libmod.so": [("libtalloc.so.2", "/out/lib/libtalloc.so.2"), libc],
+              "/out/lib/libtalloc.so.2": [libc]}
+    profiler = {"/out/t": [("libtalloc.so.2", None), libc], "/out/afl-showmap": [libc],
+                "/out/lib/libmod.so": [("libtalloc.so.2", None), libc],
+                "/out/lib/libtalloc.so.2": [libc]}
+    fake = FakeDocker(target=target, profiler=profiler)
+
+    def run(cmd, *, timeout=None):
+        # /out/t finds libtalloc through its RUNPATH; the standalone re-check
+        # probe of /out/lib/libmod.so has no RUNPATH context, so there it
+        # resolves only if /out/lib is on LD_LIBRARY_PATH.
+        found = "/out/lib/libtalloc.so.2" if cmd[-1:] and re.search(
+            r"LD_LIBRARY_PATH=\S*/out/lib\b", cmd[-1]) else None
+        fake.recheck = {"/out/t": [("libtalloc.so.2", "/out/lib/libtalloc.so.2"), libc],
+                        "/out/lib/libmod.so": [("libtalloc.so.2", found), libc]}
+        return fake(cmd, timeout=timeout)
+
+    monkeypatch.setattr(tl, "_run", run)
+    res = _prepare(out, tmp_path / "target_libs")
+    assert res["out_dirs"] == ["/out/lib"]
+    assert res["append_out"] is True and res["out_libs"] == ["libtalloc.so.2"]
+    assert res["ld_library_path"] == "/opt/oss-libs:/out/lib"
+    assert res["libs"] == {} and res["host_dir"] is None
+    # the re-check probe ran with /out/lib on its LD_LIBRARY_PATH
+    assert len(fake.runs) == 3
+    assert "LD_LIBRARY_PATH=/opt/oss-libs:/out/lib ldd $r" in fake.runs[2][-1]
+    assert any("/out/lib" in r[-1] for r in fake.runs)
+
+
+def test_root_level_out_libraries_keep_the_previous_path(tmp_path, out, monkeypatch):
+    # same shape as the "/opt/oss-libs:/out" test: from_out resolved at /out/libbuild.so
+    target = {"/out/t": [("libbuild.so", "/out/libbuild.so"), ("libc.so.6", f"{L}/libc.so.6")]}
+    profiler = {"/out/t": [("libbuild.so", None), ("libc.so.6", f"{L}/libc.so.6")]}
+    fake = FakeDocker(target=target, profiler=profiler)
+    monkeypatch.setattr(tl, "_run", fake)
+    res = _prepare(out, tmp_path / "target_libs")
+    assert res["out_dirs"] == ["/out"] and res["ld_library_path"] == "/opt/oss-libs:/out"
+    assert res["append_out"] is True and res["out_libs"] == ["libbuild.so"]
+    assert "LD_LIBRARY_PATH=/opt/oss-libs:/out ldd $r" in fake.runs[2][-1]
 
 
 def test_probe_files_skip_afl_plugins_and_non_elf(out):
@@ -401,6 +452,26 @@ def test_a_record_from_the_previous_policy_version_is_not_reused(tmp_path, out, 
          "ld_library_path": "/opt/oss-libs", "seconds": 0.1}))
     res = _prepare(out, libs_dir)
     assert res["cached"] is False
+
+
+def test_a_record_from_policy_version_3_is_not_reused(tmp_path, out, monkeypatch):
+    fake = FakeDocker()
+    monkeypatch.setattr(tl, "_run", fake)
+    libs_dir = tmp_path / "target_libs"
+    main, sos = tl.probe_files(out, "t")
+    with monkeypatch.context() as m:
+        m.setattr(tl, "VERSION", 3)
+        old_key = tl.cache_key(out, main + sos, target_image_id=fake.ids[TGT_IMG],
+                               profiler_image_id=fake.ids[PROF_IMG],
+                               base_ld_path="/opt/oss-libs")
+    libs_dir.mkdir()
+    (libs_dir / tl.RECORD).write_text(json.dumps(
+        {"version": 3, "key": old_key, "files": main + sos, "libs": {}, "needed_by": {},
+         "append_out": False, "out_libs": [], "skipped_out_libs": {},
+         "ignored_libc_out": [], "ld_library_path": "/opt/oss-libs", "seconds": 0.1}))
+    res = _prepare(out, libs_dir)
+    assert res["cached"] is False and len(fake.runs) == 3
+    assert res["version"] == tl.VERSION == 4
 
 
 def test_a_probe_container_that_keeps_failing_is_a_marked_probe_error(
