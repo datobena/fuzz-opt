@@ -28,7 +28,7 @@ and works, through the existing online pipeline, and nothing else.
 | Candidate list | The 53 projects in `data.zip` (`intro_rows.json`), with the OSS-Fuzz build-status files beside it as evidence |
 | Process | Implementer agents that make projects build, separate agents that validate and audit every change |
 | Leak detection and timeout | `detect_leaks=0` and a fixed `-t 1000` instead of `run_fuzzer`'s leak detection on and `-t 5000+`: the kind's ONE recorded deviation from `run_fuzzer`, applied to both arms (user decision 2026-11-05) |
-| Sanitizers | Every sanitizer the project lists in `project.yaml`: ASan for all 50 C/C++ candidates, UBSan for the 29 that list it, MSan for the 16 that list it; one image and one set of entries per project-sanitizer; ASan is built first and an MSan or UBSan build failure never drops the project (the user said only the bug yield matters; this is my call) |
+| Sanitizers | Every sanitizer the project lists in `project.yaml`: ASan for all 50 C/C++ candidates, UBSan for the 29 that list it, MSan for the 16 that list it; one compile and one set of entries per project-sanitizer (one image per project); ASan is built first and an MSan or UBSan build failure never drops the project (the user said only the bug yield matters; this is my call) |
 | The other session's FuzzBench-kind attempt | Preserved untouched on branch `wip/crypto-candidates-fuzzbench-kind` (commit on 2026-11-05); this design does not build on it (my call: it contradicts the OSS-Fuzz-exact rule) |
 
 ## What "exactly as OSS-Fuzz sets" means (facts read from the images on this box)
@@ -104,12 +104,14 @@ rewriting brittle); instead the source that landed in the image is what every la
 extraction, rebuild and campaign uses, and `pins.json` records which commits that was.
 Rebuilding an onboarded image is a deliberate re-pin: `pins.json` must be regenerated
 and the image's definition-hash label (from the ARVO revalidation work) must match.
-Image tag: `bench-upstream/<project>-<sanitizer>` (lowercase).
+Image tag: `bench-upstream/<project>` (lowercase).
 
 ### Build path
 
-One image per project-sanitizer pair (`bench-upstream/<project>-<sanitizer>`), built from
-the same Dockerfile; `compile` is `docker run <image> compile` with `FUZZING_ENGINE=afl SANITIZER=<sanitizer>
+One image per project (`bench-upstream/<project>`); the sanitizer is chosen at compile
+time, exactly as OSS-Fuzz does (`SANITIZER` is an environment variable of the `compile`
+step, and `compile` sets up the MSan libc++ itself). `compile` is `docker run <image> compile`
+with `FUZZING_ENGINE=afl SANITIZER=<sanitizer>
 ARCHITECTURE=x86_64 FUZZING_LANGUAGE=<language from project.yaml>` and the one pipeline
 addition `AFL_LLVM_DENYLIST=/src/aflpp_fold_denylist.txt` (inert unless a `fold_*`
 helper exists). The edited source tree is bind-mounted over `$SRC/<srcdir>` for every
@@ -233,8 +235,8 @@ kinds keep their byte-for-byte pins).
 
 OSS-Fuzz builds each project once per sanitizer in its `project.yaml` and fuzzes each
 build separately; ASan and MSan cannot share a binary and OSS-Fuzz never combines any
-of them. This design follows OSS-Fuzz: one build and one entry set per listed
-sanitizer. Run-time options per sanitizer come from `run_fuzzer` (`MSAN_OPTIONS` gets
+of them. This design follows OSS-Fuzz: one compile (from the project's single image) and one
+entry set per listed sanitizer. Run-time options per sanitizer come from `run_fuzzer` (`MSAN_OPTIONS` gets
 `exit_code=86:symbolize=0`, `UBSAN_OPTIONS` gets `symbolize=0`, plus the `.options`
 sections) with the leak/timeout deviation above. Campaign selection per project and
 sanitizer is the user's, from the onboarding report.
