@@ -1716,13 +1716,23 @@ def _check_profile_target_samples(profile_dir: str | Path, fuzz_target: str,
     info = (f"{n} of {total} samples attributed to target-source functions; "
             f"target DSO share {share if share is None else round(share, 2)}%")
     if n < floor:
+        build_n = int(tot.get("build_dso_samples", 0))
+        if n == 0 and total >= max(floor, 500) and (
+                (share is not None and share >= 50.0) or build_n >= total / 2):
+            diagnosis = (
+                "samples were collected but none mapped to target source "
+                "(symbolizer/file attribution). Check llvm-addr2line selection "
+                "and header source paths in hotspots.json")
+        else:
+            diagnosis = (
+                "too few samples mapped to target source; check perf/kernel "
+                "compatibility, whether the binary ran, and symbolizer/file "
+                f"attribution. See {Path(profile_dir) / 'fuzzer.log'}")
         return False, (f"only {n} samples attributed to {fuzz_target}'s own source "
                        f"functions (floor {floor}; "
                        f"{total} samples in all, target DSO share "
-                       f"{share if share is None else round(share, 2)}%) -- perf "
-                       "almost certainly did not sample the target processes (perf/"
-                       "kernel mismatch, or the binary never ran). See "
-                       f"{Path(profile_dir) / 'fuzzer.log'}")
+                       f"{share if share is None else round(share, 2)}%) -- "
+                       f"{diagnosis}")
     if not quiet:
         logger.info("Profile in %s: %s", profile_dir, info)
     return True, info

@@ -64,6 +64,7 @@ import re
 import shutil
 import struct
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -457,19 +458,30 @@ def read_chains(lines, frames: _Frames, ip_lines=None, stats: dict | None = None
 # Source resolution and classification
 # ---------------------------------------------------------------------------
 def find_symbolizer() -> list[str] | None:
-    """GNU addr2line, or llvm-addr2line (same CLI; also as llvm-addr2line-NN)."""
-    for name in ("addr2line", "llvm-addr2line"):
-        p = shutil.which(name)
-        if p:
-            return [p]
+    """Prefer LLVM (unversioned, then highest numeric version), then GNU.
+
+    GNU addr2line can misattribute Clang DWARF 5 header functions to the
+    compilation unit's primary file, excluding header-only libraries as harness.
+    """
+    p = shutil.which("llvm-addr2line")
+    if p:
+        return [p]
+    candidates = []
     for d in os.environ.get("PATH", "").split(os.pathsep):
+        d = d or os.curdir
         try:
-            for f in sorted(os.listdir(d), reverse=True):
-                if re.fullmatch(r"llvm-addr2line-\d+", f):
-                    return [os.path.join(d, f)]
+            for f in os.listdir(d):
+                match = re.fullmatch(r"llvm-addr2line-(\d+)", f)
+                path = os.path.join(d, f)
+                if match and os.path.isfile(path) and os.access(path, os.X_OK):
+                    candidates.append((int(match[1]), path))
         except OSError:
             continue
-    return None
+    if candidates:
+        # max keeps PATH order for equal versions.
+        return [max(candidates, key=lambda item: item[0])[1]]
+    p = shutil.which("addr2line")
+    return [p] if p else None
 
 
 def resolve_sources(binary: str, addrs, *, timeout: int = 600) -> dict[int, tuple]:
@@ -528,12 +540,60 @@ def resolve_sources(binary: str, addrs, *, timeout: int = 600) -> dict[int, tupl
     return out
 
 
+def _symbolizer_header_selftest() -> tuple[bool, str]:
+    """Exercise a non-primary file in a Clang DWARF 5 compilation unit."""
+    compiler = shutil.which("clang") or shutil.which("cc")
+    if not compiler:
+        return True, "WARNING: no clang/cc; DWARF 5 header attribution unchecked"
+    try:
+        with tempfile.TemporaryDirectory(prefix="symbolizer-selftest-") as tmp:
+            root = Path(tmp)
+            header = root / "probe.h"
+            header.write_text(
+                "__attribute__((noinline)) int hotspot_header_probe(int x) {\n"
+                "    return x + 7;\n}\n")
+            source = root / "probe.c"
+            source.write_text('#include "probe.h"\n'
+                              'int main(int argc, char **argv) {\n'
+                              '    return hotspot_header_probe(argc);\n}\n')
+            binary = root / "probe"
+            r = subprocess.run(
+                [compiler, "-O0", "-gdwarf-5", str(source), "-o", str(binary)],
+                capture_output=True, text=True, timeout=60)
+            if r.returncode:
+                return False, f"DWARF 5 header probe build failed: {r.stderr[-300:]}"
+            addrs = ElfInfo(binary).symbol_addresses(["hotspot_header_probe"])
+            got = resolve_sources(str(binary), addrs.values())
+            paths = [v[1] for v in got.values()]
+            if paths != [str(header)]:
+                return False, (f"DWARF 5 header attribution failed: expected {header}, "
+                               f"got {paths}; symbolizer/file attribution may map "
+                               "header functions to the compilation unit's primary "
+                               "file (harness). Install llvm-addr2line")
+    except (OSError, subprocess.TimeoutExpired, HotspotError) as e:
+        return False, f"DWARF 5 header probe failed: {e}"
+    return True, f"DWARF 5 header attribution verified ({compiler})"
+
+
 def symbolizer_selftest(binary: str | None = None) -> tuple[bool, str]:
-    """Can the symbolizer actually resolve? With a fuzz target binary: map its
-    LLVMFuzzerTestOneInput to a source file. Without one: run it at all."""
+    """Check execution, header attribution, and optionally the target's harness.
+
+    LLVM is preferred over GNU; a compiled DWARF 5 probe checks that header
+    functions resolve to the header rather than the CU's primary source file.
+    """
     tool = find_symbolizer()
     if tool is None:
         return False, "no addr2line / llvm-addr2line (or llvm-addr2line-NN) on PATH"
+    try:
+        r = subprocess.run(tool + ["-a", "-f", "-e", tool[0], "0x0"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"{tool[0]} does not run: {e}"
+    if r.returncode != 0 or "0x0" not in r.stdout:
+        return False, f"{tool[0]} exited {r.returncode}: {(r.stderr or '')[-200:]}"
+    ok, note = _symbolizer_header_selftest()
+    if not ok:
+        return False, f"{tool[0]}: {note}"
     if binary:
         try:
             addr = ElfInfo(binary).symbol_addresses(_HARNESS_SYMBOLS[:1])
@@ -544,15 +604,8 @@ def symbolizer_selftest(binary: str | None = None) -> tuple[bool, str]:
         if not f:
             return False, (f"{tool[0]} could not map LLVMFuzzerTestOneInput of "
                            f"{binary} to a source file")
-        return True, f"{tool[0]} resolves {os.path.basename(binary)} -> {f}"
-    try:
-        r = subprocess.run(tool + ["-a", "-f", "-e", tool[0], "0x0"],
-                           capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"{tool[0]} does not run: {e}"
-    if r.returncode != 0 or "0x0" not in r.stdout:
-        return False, f"{tool[0]} exited {r.returncode}: {(r.stderr or '')[-200:]}"
-    return True, f"{tool[0]} runs (no fuzz target binary found to test resolution)"
+        return True, f"{tool[0]} resolves {os.path.basename(binary)} -> {f}; {note}"
+    return True, f"{tool[0]} runs; {note} (no fuzz target binary found)"
 
 
 def _split_loc(loc: str):

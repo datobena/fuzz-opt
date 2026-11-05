@@ -2019,3 +2019,21 @@ def test_standalone_phase2_installs_launcher_cleanup(monkeypatch, tmp_path,
     with pytest.raises(SystemExit):          # an empty manifest builds nothing
         phase2_setup.main()
     assert launcher_cleanup_calls == ["e2"]
+
+
+@pytest.mark.parametrize("dso_evidence", ["target", "build"])
+def test_profile_sanity_diagnoses_zero_source_attribution(tmp_path, dso_evidence):
+    prof = tmp_path / "profile_once"
+    _write_hotspots(prof, 0, 30000)
+    if dso_evidence == "target":
+        (prof / "dso.txt").write_text("82.9%  demo_fuzzer\n17.1%  libc.so.6\n")
+    else:
+        path = prof / "hotspots.json"
+        data = json.loads(path.read_text())
+        data["totals"]["build_dso_samples"] = 25000
+        path.write_text(json.dumps(data))
+    ok, why = phase2_setup._check_profile_target_samples(prof, "demo_fuzzer")
+    assert not ok
+    assert "samples were collected but none mapped to target source" in why
+    assert "symbolizer/file attribution" in why
+    assert "almost certainly did not sample" not in why

@@ -446,6 +446,7 @@ def test_no_symbolizer_is_loud(monkeypatch):
 
 def test_symbolizer_finds_versioned_llvm_addr2line(monkeypatch, tmp_path):
     (tmp_path / "llvm-addr2line-18").write_text("")
+    (tmp_path / "llvm-addr2line-18").chmod(0o755)
     monkeypatch.setattr(ht.shutil, "which", lambda name: None)
     monkeypatch.setenv("PATH", str(tmp_path))
     assert ht.find_symbolizer() == [str(tmp_path / "llvm-addr2line-18")]
@@ -493,3 +494,76 @@ def test_build_dso_samples_counts_any_frame_in_the_build(tmp_path, fake_binary):
             + sample([kern(), fr("next_char")], 10))
     t = build(tmp_path, text)["totals"]
     assert t["build_dso_samples"] == 2 and t["target_attributed"]["samples"] == 1
+
+
+@pytest.mark.parametrize("unversioned", [True, False])
+def test_symbolizer_prefers_llvm_over_gnu(monkeypatch, tmp_path, unversioned):
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    for directory, names in ((first, ["addr2line", "llvm-addr2line-9",
+                                      "llvm-addr2line-18"]),
+                             (second, ["llvm-addr2line-20", "llvm-addr2line-99"])):
+        for name in names:
+            path = directory / name
+            path.write_text("")
+            path.chmod(0o644 if name.endswith("-99") else 0o755)
+    if unversioned:
+        (first / "llvm-addr2line").write_text("")
+        (first / "llvm-addr2line").chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join(map(str, (first, second))))
+    expected = first / "llvm-addr2line" if unversioned else second / "llvm-addr2line-20"
+    assert ht.find_symbolizer() == [str(expected)]
+
+
+def test_symbolizer_falls_back_to_gnu(monkeypatch, tmp_path):
+    tool = tmp_path / "addr2line"
+    tool.write_text("")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert ht.find_symbolizer() == [str(tool)]
+
+
+def test_header_in_harness_compilation_unit_is_target(monkeypatch, tmp_path, tree):
+    (tree / "lib.h").write_text("/* header-only implementation */")
+    monkeypatch.setattr(ht, "ElfInfo", FakeElf)
+    monkeypatch.setattr(ht, "find_symbolizer", lambda: ["llvm-addr2line"])
+
+    def fake_run(cmd, **kw):
+        output = "".join(
+            (f"{addr}\nLLVMFuzzerTestOneInput\n/src/proj/tests/target.c:3\n"
+             if int(addr, 16) == 0x4000 else
+             f"{addr}\nnext_char\n/src/proj/tests/../lib.h:4027\n")
+            for addr in kw["input"].splitlines())
+        return subprocess.CompletedProcess(cmd, 0, output, "")
+
+    monkeypatch.setattr(ht.subprocess, "run", fake_run)
+    result = build(tmp_path, sample([fr("next_char")]),
+                   source_root="/src/proj", source_tree=tree,
+                   harness_paths=["/src/proj/tests/target.c"])
+    r = row(result, "next_char")
+    assert r["file"] == "/src/proj/lib.h"
+    assert r["rel_path"] == "lib.h"
+    assert r["editable"] is True
+    assert result["totals"]["target_attributed"]["samples"] == 1
+    clf = ht.Classifier(ht.SourceMap("/src/proj", tree),
+                        ["/src/proj/tests/target.c"])
+    path, _ = ht._split_loc("/src/proj/tests/../lib.h:4027")
+    assert clf.classify_target_frame("next_char", path) == (ht.CLS_TARGET, "lib.h")
+
+
+def test_symbolizer_selftest_rejects_primary_file_for_header(monkeypatch):
+    if not (ht.shutil.which("clang") or ht.shutil.which("cc")):
+        pytest.skip("no C compiler for DWARF 5 probe")
+    if ht.find_symbolizer() is None:
+        pytest.skip("no symbolizer")
+
+    def wrong_file(binary, addrs, **kw):
+        return {a: ("hotspot_header_probe", str(Path(binary).with_suffix(".c")), 1)
+                for a in addrs}
+
+    monkeypatch.setattr(ht, "resolve_sources", wrong_file)
+    ok, note = ht.symbolizer_selftest()
+    assert not ok
+    assert "header attribution failed" in note
+    assert "primary file (harness)" in note

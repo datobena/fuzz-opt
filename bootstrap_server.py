@@ -77,9 +77,8 @@ def image_state(tag: str, target_dir: Path, *, exists=_image_exists,
 
 
 def _symbolizer_check() -> tuple[bool, str]:
-    """Run the profiler's own symbolizer self-test: resolve LLVMFuzzerTestOneInput
-    of a fuzz target binary from an earlier run when one is on disk, else at
-    least run the tool."""
+    """Run the profiler's DWARF 5 header attribution probe, plus resolve
+    LLVMFuzzerTestOneInput of an earlier fuzz target when one is on disk."""
     import importlib.util
     import config
     path = Path(config.PHASE2_SKILL_SCRIPTS_DIR) / "hotspot_table.py"
@@ -111,8 +110,8 @@ def check_prereqs() -> list[tuple[str, str, str]]:
         rows.append((tool, OK if shutil.which(tool) else MISSING, ""))
     # The profile step maps each hotspot function to its source file on the
     # host (hotspot_table.py); without a WORKING symbolizer every round ends
-    # prebuild-failed. Same lookup as the profiler (addr2line, llvm-addr2line,
-    # llvm-addr2line-NN), and it must actually resolve, not just exist.
+    # prebuild-failed. Same lookup as the profiler (llvm-addr2line, highest numeric
+    # llvm-addr2line-NN, then GNU addr2line), including header attribution.
     ok, note = _symbolizer_check()
     rows.append(("addr2line (hotspot table)", OK if ok else FAIL, note))
     if not shutil.which("docker"):
