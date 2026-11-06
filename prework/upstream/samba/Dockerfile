@@ -18,6 +18,14 @@ FROM gcr.io/oss-fuzz-base/base-builder@sha256:415ccd95bff8714ae7bd5b6989f2cbc159
 
 RUN git clone https://gitlab.com/samba-team/samba samba
 
+# Deviation A2 (fix-policy): do_build.sh fetches the seed zips at compile time,
+# but compile runs with --network none. Fetch the SAME URL here instead; the
+# vendored build.sh makes do_build.sh copy this file in place of its wget.
+# --no-iri: with the image's empty LANG, wget's IRI handling re-encodes the
+# signed CDN redirect (%2A%27%27 -> *'') and the CDN answers 403; the URL and
+# the downloaded bytes are unchanged (sha256 matches a host download).
+RUN wget --no-iri -O $SRC/seeds.zip 'https://gitlab.com/samba-team/samba-fuzz-seeds/-/jobs/artifacts/master/download?job=zips'
+
 # Upstream samba dropped ubuntu2004 in commit 313a630 (2026-04-08) and
 # build_image.sh still has DIST=ubuntu2004 hard-coded. The OSS-Fuzz base-builder
 # for this project is Ubuntu 24.04 (see base_os_version in project.yaml), so

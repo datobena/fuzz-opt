@@ -1,0 +1,20 @@
+{
+  "project": "bls-signatures",
+  "image": "bench-upstream/bls-signatures",
+  "sanitizers": {
+    "address": {
+      "status": "compile_failed",
+      "reason": "compile exited 2",
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/bls-signatures/address/compile.log",
+      "returncode": 2,
+      "secs": 299,
+      "timeout": 21600
+    }
+  },
+  "build_log": "results/upstream-onboarding-20261105/bls-signatures/build.log",
+  "definition_hash": "6b924e06b292be2b3d83a733c0955c6bf64976caf78b3a9e0172e80d8fc8fe58",
+  "status": "compile_failed",
+  "updated": "2026-11-05T20:33:24-0700",
+  "compile_timeout": 21600
+}

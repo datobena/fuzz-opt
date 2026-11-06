@@ -8,5 +8,9 @@
     "memory"
   ],
   "harnesses": {},
-  "deviations": []
+  "deviations": [],
+  "dropped": {
+    "when": "2026-11-05",
+    "reason": "Fix cap (3 rounds) reached without an address build. Round 1: A2 cargo fetch for cryptofuzz's arkworks-algebra module (crates.io unreachable under --network none) worked. Round 2: constantine HEAD needs Nim >= 2.2 while OSS-Fuzz's build.sh installs Nim 2.0.8 (A1 pin to 677b825d worked). Round 3: cryptofuzz's botan module no longer compiles against Botan HEAD (Botan PR #5289); the A1 pin to 701e3d09 fails inside Botan's own library build (ffi_cert.cpp with x509 disabled); a further pin (b941fcb5) was proposed but untested. The cryptofuzz dependency stack drifts in three places at once; edits were reverted so the vendored config stays verbatim. Spare project; not needed to reach ten."
+  }
 }

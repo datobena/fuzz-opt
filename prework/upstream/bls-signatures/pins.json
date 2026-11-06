@@ -3,5 +3,11 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder-rust": "gcr.io/oss-fuzz-base/base-builder-rust@sha256:3428d0a90b1e7efbe2ba947bd1d0c9a70594986b4b6553804547f1fb24cfc92f"
   },
-  "checkouts": {}
+  "checkouts": {
+    "blst": "9fc156b1208ac5c92c789f1c6a65a12c10c47158",
+    "botan": "701e3d0938b21dfd50dca9ebefec9e45eabe1792",
+    "constantine": "677b825dde3c6eeb20bf9a6fead3c70ce668e451",
+    "cryptofuzz": "6f1e4970288ecaf8d2fa34643fb4b19fa0adc626",
+    "mcl": "39a914f11f4f2de39b02dd235ba2cce8b37ab0cc"
+  }
 }

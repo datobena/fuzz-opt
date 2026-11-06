@@ -6,6 +6,42 @@
     "address",
     "undefined"
   ],
-  "harnesses": {},
-  "deviations": []
+  "harnesses": {
+    "address": [
+      "fuzz_dump",
+      "fuzz_ffi_ops",
+      "fuzz_keyimport",
+      "fuzz_keyring",
+      "fuzz_keyring_g10",
+      "fuzz_keyring_kbx",
+      "fuzz_sigimport",
+      "fuzz_verify",
+      "fuzz_verify_detached"
+    ],
+    "undefined": [
+      "fuzz_dump",
+      "fuzz_ffi_ops",
+      "fuzz_keyimport",
+      "fuzz_keyring",
+      "fuzz_keyring_g10",
+      "fuzz_keyring_kbx",
+      "fuzz_sigimport",
+      "fuzz_verify",
+      "fuzz_verify_detached"
+    ]
+  },
+  "deviations": [
+    {
+      "what": "Botan tarball is downloaded by the Dockerfile into $SRC (sha256 pinned and checked, from the same https://botan.randombit.net/releases/ location) and build.sh extracts that copy with `tar xJf $SRC/Botan-<ver>.tar.xz` instead of `wget -qO- <url> | tar xJ`.",
+      "why": "Policy A2: build.sh fetched Botan at compile time; compile runs with --network none, so wget produced an empty stream and `tar xJ` failed (xz: File format not recognized).",
+      "affects_measurement": false,
+      "rationale": "Same source, same extraction location; Botan configure/make/make install lines untouched (incl. --unsafe-fuzzer-mode, --cc-abi-flags=$CXXFLAGS, module list). Tarball GPG signature verified Good against the Botan Distribution Key 621D AF64 11E1 851C 4CF9 A2E1 6211 EBF1 EFBA DFBC."
+    },
+    {
+      "what": "Botan dependency pinned to 3.13.0 (sha256 12f5a8358890bbee82edfe9d2e7769b0a610b6dd0e0698aea13d20a675d84620) instead of OSS-Fuzz's 3.4.0.",
+      "why": "Policy A1: with 3.4.0, Botan's configure.py aborts with `ERROR: Module not found: legacy_ec_point`; rnp HEAD (7d7f2da) ci/botan3-pqc-modules, which build.sh passes to --enable-modules, names modules that only exist in newer Botan (legacy_ec_point, pcurves_*, ml_kem, ml_dsa, slh_dsa_*). The OSS-Fuzz build is broken upstream; rnp's .github/workflows/fuzzing.yml says so and builds its fuzzers against Botan 3.13.0.",
+      "affects_measurement": true,
+      "rationale": "Dependency pin, not a main-repo pin (F4 allows this). 3.13.0 is the version rnp's own fuzzing CI uses; all 67 requested modules plus locking_allocator exist in it. No flags changed. Reviewer note: Botan code linked into the harnesses is 3.13.0, not 3.4.0, so a crash inside Botan is a claim about Botan 3.13.0; rnp code (the srcdir) is unchanged at HEAD. Controller ruling R8: affects_measurement=true because the Botan code linked into every rnp harness is 3.13.0, not the 3.4.0 OSS-Fuzz's definition names; rnp itself is at HEAD. A crash inside Botan is a claim about Botan 3.13.0; a crash in rnp code is unaffected. OSS-Fuzz's own rnp build is broken at HEAD (3.4.0 lacks the legacy_ec_point module rnp requires), so no OSS-Fuzz-exact build exists."
+    }
+  ]
 }

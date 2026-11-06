@@ -3,5 +3,7 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder": "gcr.io/oss-fuzz-base/base-builder@sha256:8b4a73d83374b298a0a771eeec9a1d44ceff3416a678b7d7946303389d022aca"
   },
-  "checkouts": {}
+  "checkouts": {
+    "rnp": "7d7f2da0b3a62992c0b70d3f54518c2f2da3d5c2"
+  }
 }

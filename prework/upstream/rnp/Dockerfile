@@ -31,4 +31,9 @@ RUN apt-get update && apt-get install -y \
 
 RUN git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/rnpgp/rnp.git rnp
 WORKDIR $SRC
+# fuzz-opt deviations: A2 fetch Botan at image build time (compile runs with --network none);
+# A1 Botan 3.4.0 -> 3.13.0 (3.4.0 lacks modules rnp HEAD's ci/botan3-pqc-modules requests; 3.13.0 is rnp's own fuzzing CI pin).
+RUN wget -q -O $SRC/Botan-3.13.0.tar.xz https://botan.randombit.net/releases/Botan-3.13.0.tar.xz && \
+    echo "12f5a8358890bbee82edfe9d2e7769b0a610b6dd0e0698aea13d20a675d84620  $SRC/Botan-3.13.0.tar.xz" | sha256sum -c -
+WORKDIR $SRC
 COPY build.sh $SRC/
