@@ -1772,8 +1772,12 @@ def run_replay_speedup(
     image: str | None = None,
     corpus_dir: str | Path | None = None,
     cap: bool = True,
+    sanitizer_env: dict | None = None,
 ) -> dict | None:
     """Headline throughput metric: deterministic corpus-replay speedup.
+
+    ``sanitizer_env`` (upstream targets: the trials' run-time sanitizer
+    options) is what the afl-showmap replay exports; None -> the default set.
 
     ``corpus_dir`` replaces the fixed corpus as the replayed set (online rounds
     pass their crash-filtered held-out partition). ``cap=False`` replays it whole
@@ -1798,7 +1802,9 @@ def run_replay_speedup(
         # matters here: the broker times folds with afl-showmap, so scoring them
         # with a different replay would judge the agent on a metric it never saw.
         from lib import afl_replay
-        measure = functools.partial(afl_replay.measure_binary, image=image)
+        measure = functools.partial(
+            afl_replay.measure_binary, image=image,
+            **({"sanitizer_env": sanitizer_env} if sanitizer_env else {}))
     else:
         # No prework image named -> legacy libFuzzer path. Loaded OUTSIDE the
         # catch-all below, and logged at ERROR: every other failure here is a

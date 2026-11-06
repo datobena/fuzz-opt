@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 def measure_binary(
     *, out_dir: str | Path, corpus_dir: str | Path, fuzz_target: str, cpu: int,
     repeats: int, memory: str, shm_size: str, run_timeout: int, image: str,
-    **_ignored,
+    sanitizer_env: dict | None = None, **_ignored,
 ) -> dict:
     """Median wall-clock of ``repeats`` deterministic replays, in seconds.
 
@@ -51,6 +51,10 @@ def measure_binary(
     file count -- reported so the caller's rate-normalisation still reduces to
     baseline_time / optimized_time.
 
+    ``sanitizer_env`` (an upstream target's run-time ASAN/UBSAN/MSAN_OPTIONS,
+    the trials' set) is what the replay exports; None -> the broker default, the
+    command unchanged. Same for find_crashers and crash_report.
+
     ``**_ignored`` absorbs the libFuzzer-only knobs the caller still passes
     (seed, min_partial_units): replay order here is the directory walk and there
     is no prefix to salvage.
@@ -60,7 +64,7 @@ def measure_binary(
     ctx = BrokerContext(
         image=image, source_dir="", out_dir=str(out_dir),
         corpus_dir=str(corpus_dir), fuzz_target=fuzz_target, project="",
-        cpu=int(cpu),
+        cpu=int(cpu), sanitizer_env=dict(sanitizer_env or {}),
     )
     cmd = _replay_command(ctx)
     units = sum(1 for p in Path(corpus_dir).rglob("*") if p.is_file())
@@ -106,7 +110,7 @@ def measure_binary(
 
 
 def find_crashers(*, out_dir: str | Path, corpus_dir: str | Path, fuzz_target: str,
-                  cpu: int, image: str) -> dict:
+                  cpu: int, image: str, sanitizer_env: dict | None = None) -> dict:
     """Run every input in ``corpus_dir`` once on ``out_dir``; name the crashers.
 
     Same forkserver, timeout and sanitizer env as measure_binary, so "crashes
@@ -118,19 +122,20 @@ def find_crashers(*, out_dir: str | Path, corpus_dir: str | Path, fuzz_target: s
     ctx = BrokerContext(
         image=image, source_dir="", out_dir=str(out_dir),
         corpus_dir=str(corpus_dir), fuzz_target=fuzz_target, project="",
-        cpu=int(cpu),
+        cpu=int(cpu), sanitizer_env=dict(sanitizer_env or {}),
     )
     return scan_for_crashers(ctx, str(out_dir), str(corpus_dir))
 
 
 def crash_report(*, out_dir: str | Path, corpus_dir: str | Path, fuzz_target: str,
-                 cpu: int, image: str, names: list[str]) -> str:
+                 cpu: int, image: str, names: list[str],
+                 sanitizer_env: dict | None = None) -> str:
     """Symbolized sanitizer reports for the first few crashing ``names``."""
     from sandbox.broker import BrokerContext, crash_report as _report
 
     ctx = BrokerContext(
         image=image, source_dir="", out_dir=str(out_dir),
         corpus_dir=str(corpus_dir), fuzz_target=fuzz_target, project="",
-        cpu=int(cpu),
+        cpu=int(cpu), sanitizer_env=dict(sanitizer_env or {}),
     )
     return _report(ctx, str(out_dir), str(corpus_dir), names)

@@ -252,3 +252,157 @@ def test_phase3_round_env_only_for_upstream(tmp_path):
     assert json.loads(env["PHASE2_SANITIZER_ENV"]) == dict(
         afl_launch.upstream_sanitizer_env(str(tmp_path), "t", "memory"))
     assert "foo=1" in json.loads(env["PHASE2_SANITIZER_ENV"])["ASAN_OPTIONS"]
+
+
+# (f) ------------------------------------------------------------------------
+def _measured_cmds(monkeypatch, tmp_path, **kw):
+    from lib import afl_replay
+    seen = []
+
+    def fake_run(cmd, **k):
+        seen.append(cmd)
+        return types.SimpleNamespace(returncode=0, stdout="Captured 1 tuples", stderr="")
+    monkeypatch.setattr(afl_replay.subprocess, "run", fake_run)
+    (tmp_path / "c").mkdir(exist_ok=True)
+    afl_replay.measure_binary(out_dir=tmp_path / "o", corpus_dir=tmp_path / "c",
+                              fuzz_target="t", cpu=3, repeats=1, memory="4g",
+                              shm_size="2g", run_timeout=10, image=kw.pop("image"), **kw)
+    return seen[0]
+
+
+def test_host_gate_measure_binary_carries_the_kinds_set(monkeypatch, tmp_path):
+    cmd = _measured_cmds(monkeypatch, tmp_path, image="bench-upstream/x",
+                         sanitizer_env=dict(CUSTOM))
+    assert CUSTOM_EXPORTS in cmd[-1] and cmd[-1].count("ASAN_OPTIONS=") == 1
+    assert config.REPLAY_ASAN_OPTIONS not in cmd[-1]
+
+
+def test_host_gate_and_crash_checks_default_byte_identical(monkeypatch, tmp_path):
+    from lib import afl_replay
+    for image in ("bench-aflpp/x-arvo-1", "fb-aflpp/x"):
+        ctx = BrokerContext(image=image, source_dir="", out_dir=str(tmp_path / "o"),
+                            corpus_dir=str(tmp_path / "c"), fuzz_target="t", project="",
+                            cpu=3)
+        assert _measured_cmds(monkeypatch, tmp_path, image=image) == broker._replay_command(ctx)
+        assert _measured_cmds(monkeypatch, tmp_path, image=image, sanitizer_env=None) == \
+            broker._replay_command(ctx)
+        seen = []
+        monkeypatch.setattr(broker, "scan_for_crashers",
+                            lambda c, o, d: seen.append(broker._crash_scan_command(c, o, d)) or {})
+        monkeypatch.setattr(broker, "crash_report",
+                            lambda c, o, d, n: seen.append(broker._crash_report_command(c, o, d, n)) or "")
+        afl_replay.find_crashers(out_dir=tmp_path / "o", corpus_dir=tmp_path / "c",
+                                 fuzz_target="t", cpu=3, image=image)
+        afl_replay.crash_report(out_dir=tmp_path / "o", corpus_dir=tmp_path / "c",
+                                fuzz_target="t", cpu=3, image=image, names=["a"])
+        assert seen == [broker._crash_scan_command(ctx, ctx.out_dir, ctx.corpus_dir),
+                        broker._crash_report_command(ctx, ctx.out_dir, ctx.corpus_dir, ["a"])]
+        seen.clear()
+        afl_replay.find_crashers(out_dir=tmp_path / "o", corpus_dir=tmp_path / "c",
+                                 fuzz_target="t", cpu=3, image=image, sanitizer_env=dict(CUSTOM))
+        assert CUSTOM_EXPORTS in seen[0][-1]
+
+
+# (g) ------------------------------------------------------------------------
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("kind", ["upstream", "arvo"])
+@pytest.mark.parametrize("gate_result", ["clean", "crash"])
+def test_run_round_threads_the_kinds_set_into_host_checks(monkeypatch, tmp_path, kind,
+                                                          gate_result):
+    import phase3_online
+    from lib import afl_launch
+    entry = {"cve": "x", "project": "libxml2"}
+    if kind == "upstream":
+        entry.update(kind="upstream", sanitizer="memory", language="c")
+    live = tmp_path / "live"
+    live.mkdir()
+    online = tmp_path / "trial_02"
+    ctx = phase3_online.RoundContext(
+        entry=entry, experiment_id="e", experiment_dir=str(tmp_path),
+        online_dir=str(online), source_tree=str(tmp_path / "src"),
+        source_root=str(tmp_path / "src"), project="libxml2", image="", fuzz_target="xml",
+        poc_path=None, previous_best_bin=str(tmp_path / "iter_00_bin"), prev_tag="iter_00",
+        optimized_bin_dir=str(live), ledger_path=str(online / "ledger.json"),
+        swap_timeline_path="", profile_cpu=1, wrapper_env_fn=lambda root, state: {})
+    ctx.trial = types.SimpleNamespace(trial_id=2, project="libxml2", cve="x",
+                                      variant="optimized")
+    ctx.fixed_mutations = str(tmp_path / "fixed_mutations")
+    ctx.fixed_mutation_count = 10
+    expected = (dict(afl_launch.upstream_sanitizer_env(str(live), "xml", "memory"))
+                if kind == "upstream" else None)
+
+    calls = {}
+    rc = {k: 1 for k in ("harvested", "checked_count", "crashers_removed",
+                         "tuning_count", "units_per_s", "budget_secs", "smoke_count")}
+    rc.update(tuning="tuning", smoke="smoke", checked="checked", gate="gate")
+    monkeypatch.setattr(phase3_online.config, "ONLINE_FIXED_MUTATION_CORPUS", True)
+    monkeypatch.setattr(phase3_online, "prepare_round_corpus",
+                        lambda **kw: calls.setdefault("prepare", kw) and rc)
+    monkeypatch.setattr(phase3_online, "prework_image_for", lambda e: "img")
+    monkeypatch.setattr(phase3_online, "_gate_replay_rate", lambda d: None)
+    monkeypatch.setattr(phase3_online, "build_round_env", lambda **k: {})
+    monkeypatch.setattr(phase3_online, "_reassert_edit_mtimes", lambda t: None)
+    monkeypatch.setattr(phase3_online, "_carry_forward_agent_memory", lambda *a: False)
+    monkeypatch.setattr(phase3_online, "_write_cpu_cost_summary", lambda c: None)
+    monkeypatch.setattr(phase3_online, "_write_cumulative_diff", lambda *a: None)
+    monkeypatch.setattr(phase2_setup, "optimizer_provenance", lambda: {})
+    monkeypatch.setattr(phase3_online, "apply_round_outcome",
+                        lambda ready, **kw: kw["previous_best_bin"])
+
+    def optimize(source, target, diff_dir, **kwargs):
+        calls["env"] = kwargs["codex_extra_env"]
+        (Path(diff_dir) / "optimization.diff").write_text("diff --git a/x b/x\n")
+        return True
+    monkeypatch.setattr(phase2_setup, "optimize_and_build", optimize)
+    monkeypatch.setattr(phase2_setup, "_reject_if_optimization_removed_bug",
+                        lambda **kw: (kw["optimization_ready"], None))
+    monkeypatch.setattr(phase3_online.afl_replay, "find_crashers",
+                        lambda **kw: calls.setdefault("find", kw) and {
+                            "ok": True, "scanned": 1, "expected": 1,
+                            "crashers": ["c"] if gate_result == "crash" else []})
+    monkeypatch.setattr(phase3_online.afl_replay, "crash_report",
+                        lambda **kw: calls.setdefault("report", kw) and "r")
+    monkeypatch.setattr(phase2_setup, "run_replay_speedup",
+                        lambda **kw: calls.setdefault("replay", kw) and {
+                            "replay_speedup": 1.0, "partial": False,
+                            "baseline": {"median_time_s": 1}, "optimized": {"median_time_s": 1}})
+    monkeypatch.setattr(phase2_setup, "_reject_if_no_replay_speedup",
+                        lambda **kw: (kw["optimization_ready"], None))
+
+    phase3_online.run_round(ctx, phase3_online.OnlineState(), 1)
+
+    assert calls["prepare"]["sanitizer_env"] == expected
+    assert calls["find"].get("sanitizer_env") == expected
+    if gate_result == "crash":
+        assert calls["report"].get("sanitizer_env") == expected
+        assert "replay" not in calls
+    else:
+        assert calls["replay"]["sanitizer_env"] == expected
+    if expected is None:
+        # ARVO keeps the exact argument lists it had.
+        assert "sanitizer_env" not in calls["find"]
+        assert not any(k.startswith("PHASE2_SANITIZER") for k in calls["env"])
+    else:
+        assert json.loads(calls["env"]["PHASE2_SANITIZER_ENV"]) == expected
+        assert calls["env"]["PHASE2_SANITIZER"] == "memory"
+
+
+def test_noise_floor_measure_gets_the_kinds_set(monkeypatch, tmp_path):
+    import phase3_online
+    from lib import afl_replay, provenance
+    seen = {}
+    monkeypatch.setattr(afl_replay, "measure_binary", lambda **kw: seen.update(kw) or {})
+    monkeypatch.setattr(phase3_online, "_setup_build", lambda **kw: (True, ""))
+    monkeypatch.setattr(provenance, "noise_floor",
+                        lambda rebuild, measure, rounds: measure("/d") or {})
+    online = tmp_path / "exp" / "optimized" / "online"
+    online.mkdir(parents=True)
+    for san in (dict(CUSTOM), None):
+        seen.clear()
+        phase3_online._measure_noise_floor(
+            ctx_entry={"project": "x", "local_id": 1},
+            source_root=str(tmp_path), fuzz_target="t", online_dir=str(online),
+            profile_cpu=1, rounds=2, sanitizer_env=san)
+        assert seen.get("sanitizer_env") == san

@@ -292,7 +292,8 @@ def _gate_replay_rate(experiment_dir) -> float | None:
 
 def prepare_round_corpus(*, mutations_dir, out_root, previous_best_bin, fuzz_target,
                          image, cpu, seed, replay_rate=None,
-                         find_crashers_fn=None) -> dict | None:
+                         find_crashers_fn=None,
+                         sanitizer_env: dict | None = None) -> dict | None:
     """Prepare a reproducible 75/25 tuning/held-out split of one snapshot.
 
     Partition the seeded permutation BEFORE any filtering: crash removals cannot
@@ -334,7 +335,7 @@ def prepare_round_corpus(*, mutations_dir, out_root, previous_best_bin, fuzz_tar
             return 0.0
         d = stage(name, todo)
         r = find(out_dir=previous_best_bin, corpus_dir=d, fuzz_target=fuzz_target,
-                 cpu=cpu, image=image)
+                 cpu=cpu, image=image, **_san_kw(sanitizer_env))
         shutil.rmtree(d, ignore_errors=True)
         if not r["ok"]:
             logger.warning("crash filter did not cover the %s set (%s of %s inputs): %s",
@@ -952,6 +953,20 @@ def upstream_round_env(entry: dict, fuzz_target: str, bin_dir: str | None) -> di
     }
 
 
+def round_sanitizer_env(round_env: dict) -> dict | None:
+    """The run-time sanitizer options in ``round_env`` (upstream_round_env's
+    PHASE2_SANITIZER_ENV), for the host-side gate and crash checks; None for
+    every other kind, which keeps their commands unchanged."""
+    raw = (round_env or {}).get("PHASE2_SANITIZER_ENV")
+    return json.loads(raw) if raw else None
+
+
+def _san_kw(sanitizer_env: dict | None) -> dict:
+    """``{"sanitizer_env": ...}`` only when there is one: ARVO/FuzzBench calls
+    keep their exact argument lists."""
+    return {"sanitizer_env": sanitizer_env} if sanitizer_env else {}
+
+
 def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = None,
                             profile_cpu: int | None = None,
                             ccache_dir: str | None = None):
@@ -1488,6 +1503,11 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     the next round never builds on a rejected edit.
     """
     ctx.iter_n = iter_n
+    # Upstream targets: sanitizer/language and the trials' run-time options,
+    # read from the live bin dir the trials read <target>.options from. {} /
+    # None for ARVO and FuzzBench.
+    upstream_env = upstream_round_env(ctx.entry, ctx.fuzz_target, ctx.optimized_bin_dir)
+    sanitizer_env = round_sanitizer_env(upstream_env)
     # Tag every ledger row this round writes with ITS trial and round, on this
     # thread. Thread-local beats the environment, and _drive tags the thread
     # iter=0 before the first round -- so the old set_round(env) here never took
@@ -1624,7 +1644,8 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 seed=(config.BASE_SEED if ctx.fixed_mutations and getattr(
                     config, "ONLINE_FIXED_MUTATION_CORPUS", True)
                     else config.BASE_SEED + iter_n),
-                replay_rate=_gate_replay_rate(ctx.experiment_dir))
+                replay_rate=_gate_replay_rate(ctx.experiment_dir),
+                sanitizer_env=sanitizer_env)
             _info["ok"] = round_corpus is not None
         if round_corpus is None:
             logger.warning("online round %d: crash filter failed; skipping round "
@@ -1657,11 +1678,11 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         corpus_dir=corpus_dir, entry=ctx.entry,
         previous_best_bin=ctx.previous_best_bin, profile_cpu=ctx.profile_cpu)
     env.update(ctx.wrapper_env_fn(ctx.source_root, os.path.join(iter_dir, "validation")))
-    # Upstream targets: sanitizer/language and the trials' run-time options, from
-    # the round's baseline binary dir (its <target>.options) -- set beside the
-    # wrapper's PHASE2_FB_CCACHE_DIR, which the closure cannot do: it is never
-    # handed the round's bin dir. Nothing for ARVO/FuzzBench.
-    env.update(upstream_round_env(ctx.entry, ctx.fuzz_target, ctx.previous_best_bin))
+    # Upstream targets: sanitizer/language and the trials' run-time options
+    # (computed above) -- set beside the wrapper's PHASE2_FB_CCACHE_DIR, which
+    # the closure cannot do: it is never handed the round's bin dir. Nothing for
+    # ARVO/FuzzBench.
+    env.update(upstream_env)
     if live_mutations:
         # Hand phase 2 the already-captured mutations; its own capture step sees
         # this and skips the re-fuzz.
@@ -1790,7 +1811,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             scan = afl_replay.find_crashers(
                 out_dir=opt_bin_dir, corpus_dir=round_corpus["gate"],
                 fuzz_target=ctx.fuzz_target, cpu=ctx.profile_cpu,
-                image=prework_image_for(ctx.entry))
+                image=prework_image_for(ctx.entry), **_san_kw(sanitizer_env))
         crash_check = {k: scan[k] for k in ("ok", "scanned", "expected")}
         crash_check["crashers"] = scan["crashers"][:50]
         crash_check["crash_count"] = len(scan["crashers"])
@@ -1798,7 +1819,8 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             report = afl_replay.crash_report(
                 out_dir=opt_bin_dir, corpus_dir=round_corpus["gate"],
                 fuzz_target=ctx.fuzz_target, cpu=ctx.profile_cpu,
-                image=prework_image_for(ctx.entry), names=scan["crashers"])
+                image=prework_image_for(ctx.entry), names=scan["crashers"],
+                **_san_kw(sanitizer_env))
             with open(os.path.join(diff_dir, "new_crashes.txt"), "w") as f:
                 f.write(f"{len(scan['crashers'])} of {scan['expected']} inputs crash "
                         f"the new build and not the previous best:\n"
@@ -1832,7 +1854,8 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
                 optimized_bin_dir=opt_bin_dir, fuzz_target=ctx.fuzz_target,
                 experiment_dir=ctx.experiment_dir, profile_cpu=ctx.profile_cpu,
                 image=prework_image_for(ctx.entry),
-                corpus_dir=gate_corpus, cap=not round_corpus)
+                corpus_dir=gate_corpus, cap=not round_corpus,
+                sanitizer_env=sanitizer_env)
         optimization_ready, replay_rej = phase2_setup._reject_if_no_replay_speedup(
             project=ctx.project, cve=ctx.entry["cve"],
             optimization_ready=optimization_ready, replay=replay,
@@ -2597,7 +2620,8 @@ def _seed_corpus_provenance(experiment_dir: str) -> dict:
 
 
 def _measure_noise_floor(*, ctx_entry, source_root, fuzz_target, online_dir,
-                         profile_cpu, rounds: int, setup_cpus=None) -> dict:
+                         profile_cpu, rounds: int, setup_cpus=None,
+                         sanitizer_env: dict | None = None) -> dict:
     """Rebuild unmodified source `rounds` times and replay-measure each.
 
     Uses the SAME rebuild and replay paths the gate uses, so the number is
@@ -2653,7 +2677,8 @@ def _measure_noise_floor(*, ctx_entry, source_root, fuzz_target, online_dir,
         seed=int(getattr(config, "BASE_SEED", 1337)),
         memory=getattr(config, "MEMORY_LIMIT", "4g"),
         shm_size=getattr(config, "DOCKER_SHM_SIZE", "2g"),
-        run_timeout=int(getattr(config, "TRIAL_DURATION_SECS", 3600)))
+        run_timeout=int(getattr(config, "TRIAL_DURATION_SECS", 3600)),
+        **_san_kw(sanitizer_env))
     try:
         return provenance.noise_floor(_rebuild, lambda d: measure(out_dir=d),
                                       rounds=rounds)
@@ -2910,7 +2935,9 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
             _nf = _measure_noise_floor(ctx_entry=entry, source_root=project_src_dir,
                                        fuzz_target=fuzz_target, online_dir=online_dir,
                                        profile_cpu=profile_cpu, rounds=_nf_rounds,
-                                       setup_cpus=setup_cpus)
+                                       setup_cpus=setup_cpus,
+                                       sanitizer_env=round_sanitizer_env(upstream_round_env(
+                                           entry, fuzz_target, baseline_bin_dir)))
             logger.info("noise floor: spread=%s%% -> folds below %sx are inside "
                         "the target's own measurement noise",
                         _nf.get("spread_pct"), _nf.get("min_meaningful_speedup"))
