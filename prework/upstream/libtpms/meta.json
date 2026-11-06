@@ -1,0 +1,11 @@
+{
+  "project": "libtpms",
+  "srcdir": "libtpms",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

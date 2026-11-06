@@ -1,0 +1,8 @@
+{
+  "ossfuzz_commit": "f3af0cb37c1a5fbc8be71f4ad13135b6f9de9acd",
+  "bases": {
+    "gcr.io/oss-fuzz-base/base-builder": "gcr.io/oss-fuzz-base/base-builder@sha256:8b4a73d83374b298a0a771eeec9a1d44ceff3416a678b7d7946303389d022aca",
+    "gcr.io/oss-fuzz-base/base-builder-go": "gcr.io/oss-fuzz-base/base-builder-go@sha256:1dbadefbb28c6bfd796c64d9c2115977deb8f19494533cc5a3b724c3441df23d"
+  },
+  "checkouts": {}
+}

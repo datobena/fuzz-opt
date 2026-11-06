@@ -1,0 +1,12 @@
+{
+  "project": "bls-signatures",
+  "srcdir": "blst",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "undefined",
+    "memory"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

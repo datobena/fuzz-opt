@@ -1,0 +1,7 @@
+{
+  "ossfuzz_commit": "f3af0cb37c1a5fbc8be71f4ad13135b6f9de9acd",
+  "bases": {
+    "gcr.io/oss-fuzz-base/base-builder:ubuntu-24-04": "gcr.io/oss-fuzz-base/base-builder@sha256:415ccd95bff8714ae7bd5b6989f2cbc159e9715f27284f763ddfae88b5e9997b"
+  },
+  "checkouts": {}
+}

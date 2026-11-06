@@ -1,0 +1,11 @@
+{
+  "project": "hpn-ssh",
+  "srcdir": "hpn-ssh",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

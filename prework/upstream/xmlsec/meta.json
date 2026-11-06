@@ -1,0 +1,11 @@
+{
+  "project": "xmlsec",
+  "srcdir": "xmlsec",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

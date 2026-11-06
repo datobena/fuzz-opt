@@ -1,0 +1,11 @@
+{
+  "project": "liboqs",
+  "srcdir": "liboqs",
+  "language": "c",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

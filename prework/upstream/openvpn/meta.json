@@ -1,0 +1,11 @@
+{
+  "project": "openvpn",
+  "srcdir": "openvpn",
+  "language": "c",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

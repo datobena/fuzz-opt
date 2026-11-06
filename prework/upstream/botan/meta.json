@@ -1,0 +1,12 @@
+{
+  "project": "botan",
+  "srcdir": "botan",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "memory",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

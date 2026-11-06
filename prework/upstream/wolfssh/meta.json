@@ -1,0 +1,11 @@
+{
+  "project": "wolfssh",
+  "srcdir": "wolfssh",
+  "language": "c",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

@@ -1,0 +1,11 @@
+{
+  "project": "tpm2-tss",
+  "srcdir": "tpm2-tss",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

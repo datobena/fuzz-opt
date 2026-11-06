@@ -1,0 +1,11 @@
+{
+  "project": "tink-cc",
+  "srcdir": "tink-cc",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "memory"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

@@ -1,0 +1,11 @@
+{
+  "project": "samba",
+  "srcdir": "samba",
+  "language": "c",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

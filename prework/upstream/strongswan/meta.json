@@ -1,0 +1,11 @@
+{
+  "project": "strongswan",
+  "srcdir": "strongswan",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

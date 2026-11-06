@@ -1,0 +1,11 @@
+{
+  "project": "rnp",
+  "srcdir": "rnp",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

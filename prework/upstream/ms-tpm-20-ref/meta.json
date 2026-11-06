@@ -1,0 +1,11 @@
+{
+  "project": "ms-tpm-20-ref",
+  "srcdir": "ms-tpm-20-ref",
+  "language": "c",
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}

@@ -1,0 +1,12 @@
+{
+  "project": "tor",
+  "srcdir": "tor",
+  "language": "c++",
+  "sanitizers": [
+    "address",
+    "memory",
+    "undefined"
+  ],
+  "harnesses": {},
+  "deviations": []
+}
