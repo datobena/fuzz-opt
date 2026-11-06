@@ -22,7 +22,8 @@ be unusable: c-blosc2 was observed producing 756 crashes in 10 minutes, which fl
 the crash dir, and (with a userspace core_pattern) once left 36 apport processes
 holding ~8000% CPU against 39 afl-fuzz processes at 188%.
 
-Writes preflight_<project>.json next to the experiment dir. Exit 0 iff every stage
+Writes preflight_<project>.json (preflight_<project>_<local_id>.json when the entry
+has a local_id) next to the experiment dir. Exit 0 iff every stage
 passed.
 """
 from __future__ import annotations
@@ -68,6 +69,26 @@ def _count(p: Path) -> int:
     return sum(1 for _ in p.iterdir()) if p.is_dir() else 0
 
 
+def _name_id(entry: dict):
+    """The local_id that tells entries apart in file/container names: upstream
+    only (ARVO/FuzzBench carry a local_id too, but keep their historical names)."""
+    return entry.get("local_id") if entry.get("kind") == "upstream" else None
+
+
+def result_path(exp_dir: str, project: str, local_id) -> Path:
+    """Where the verdict JSON goes: one file per manifest entry, so the several
+    harnesses of an upstream project (same project, distinct local_id) never clash."""
+    suffix = f"_{local_id}" if local_id is not None else ""
+    return Path(exp_dir).parent / f"preflight_{project}{suffix}.json"
+
+
+def container_name(entry: dict, epoch: int) -> str:
+    """Smoke container name; carries the local_id so same-second starts of two
+    entries of one project cannot collide."""
+    lid = _name_id(entry)
+    return f"preflight_{entry['project']}{'_' + str(lid) if lid is not None else ''}_{epoch}"
+
+
 def smoke(entry, exp_dir, fuzz_target, cpu, secs) -> dict:
     """Run afl-fuzz briefly on the built baseline and report what it did."""
     bin_dir = Path(exp_dir) / "baseline" / "bin"
@@ -76,7 +97,7 @@ def smoke(entry, exp_dir, fuzz_target, cpu, secs) -> dict:
     if out.exists():
         shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True, exist_ok=True)
-    name = f"preflight_{entry['project']}_{int(time.time())}"
+    name = container_name(entry, int(time.time()))
     # Mirror phase3_runner.start_trial's invocation: --user so the output tree is
     # owned by the host user (without it afl_out is root-owned and unreadable),
     # HOME=/tmp because a pinned uid has no passwd entry, /out read-only. The
@@ -221,7 +242,7 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
     finally:
         res["total_secs"] = round(time.time() - t0)
         res["ok"] = all(v["ok"] for v in res["stages"].values())
-        out = Path(exp_dir).parent / f"preflight_{project}.json"
+        out = result_path(exp_dir, project, _name_id(entry))
         out.write_text(json.dumps(res, indent=2))
         print(f"  -> {out}  ({'READY' if res['ok'] else 'NOT READY'})", flush=True)
         if not keep:

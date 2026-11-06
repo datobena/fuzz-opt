@@ -271,7 +271,7 @@ def test_preflight_upstream_skips_poc_and_rebuild(monkeypatch, tmp_path):
     assert res["stages"]["poc"]["ok"] is True and "upstream" in res["stages"]["poc"]["skipped"]
     assert res["stages"]["aflbuild"]["ok"] is True
     assert "upstream" in res["stages"]["aflbuild"]["skipped"]
-    out = json.loads((exp.parent / "preflight_libssh.json").read_text())
+    out = json.loads((exp.parent / "preflight_libssh_970002.json").read_text())
     assert out["local_id"] == 970002 and out["kind"] == "upstream"
     assert out["sanitizer"] == "address" and out["fuzz_target"] == "ssh_client_fuzzer"
     assert out["cve"] == "upstream-970002"
