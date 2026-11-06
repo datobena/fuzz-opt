@@ -26,10 +26,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 from lib.core_lock import cpuset_lock
+from lib.target_kind import is_upstream, is_upstream_image, language_of, sanitizer_of
 from prework.build_image import image_tag
 from prework.fuzzbench_image import (
     fuzzbench_build_command, fuzzbench_image_tag, is_fuzzbench_image,
 )
+from prework.upstream_image import upstream_image_tag
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +82,18 @@ def prework_image_for(entry: dict) -> str:
     """Resolve a manifest entry to its pinned prework image.
 
     kind == "fuzzbench" entries build in the FuzzBench-parity image
-    fb-aflpp/<fuzzbench_dir> (prework/fuzzbench_image.py); everything else (ARVO)
-    keeps bench-aflpp/<project>-arvo-<local_id>.
+    fb-aflpp/<fuzzbench_dir> (prework/fuzzbench_image.py); kind == "upstream"
+    entries in bench-upstream/<ossfuzz_project> (prework/upstream_image.py);
+    everything else (ARVO) keeps bench-aflpp/<project>-arvo-<local_id>.
     """
+    if is_upstream(entry):
+        oss_project = entry.get("ossfuzz_project")
+        if not oss_project:
+            raise ValueError(
+                f"upstream entry for {entry.get('project')!r} has no ossfuzz_project; "
+                "the bench-upstream image tag is derived from it"
+            )
+        return upstream_image_tag(oss_project)
     if entry.get("kind") == "fuzzbench":
         fb_dir = entry.get("fuzzbench_dir")
         if not fb_dir:
@@ -187,7 +198,7 @@ def opt_level_env(image: str, level: str | None = None) -> dict[str, str]:
     return out
 
 
-def arvo_build_opt_record(image: str) -> dict:
+def arvo_build_opt_record(image: str, *, apply_override: bool = True) -> dict:
     """The -O level an ARVO build of ``image`` actually compiles at, for provenance.
 
     Recording the raw BUILD_OPT_LEVEL string is not enough now that its default is
@@ -196,8 +207,11 @@ def arvo_build_opt_record(image: str) -> dict:
     is the override, and ``cflags`` is the exact string every build was given.
     ``source`` says which. A build.sh that hardcodes its own -O on top of CFLAGS
     is the benchmark's own build too, and is not visible here.
+
+    ``apply_override=False`` (upstream images, which never take the override)
+    always reports the image's own CFLAGS level.
     """
-    override = arvo_opt_level()
+    override = arvo_opt_level() if apply_override else ""
     if override:
         cflags = opt_level_env(image).get("CFLAGS", "")
         return {"level": override, "source": "BUILD_OPT_LEVEL",
@@ -214,18 +228,24 @@ def build_opt_provenance(entry: dict) -> dict:
     FuzzBench: the per-type level fuzzers/utils.py sets (-O1 bug, -O3 coverage);
     BUILD_OPT_LEVEL never applies (unchanged from before). ARVO: arvo_build_opt_record
     -- the image's own CFLAGS level, or the override -- with the full record under
-    "build_opt". Provenance must not kill a campaign, so an unreadable image is
-    recorded as an error rather than raised.
+    "build_opt". Upstream: the image's own CFLAGS level (source "image-cflags");
+    BUILD_OPT_LEVEL never applies. Provenance must not kill a campaign, so an
+    unreadable image is recorded as an error rather than raised.
     """
     from lib import afl_launch
     if afl_launch.is_fuzzbench(entry):
         return {"build_opt_level": afl_launch.fuzzbench_opt_level(entry),
                 "build_opt_level_source": "fuzzbench:" + str(entry.get("type")
                                                              or "coverage")}
+    upstream = is_upstream(entry)
     try:
-        rec = arvo_build_opt_record(prework_image_for(entry))
+        rec = arvo_build_opt_record(prework_image_for(entry),
+                                    apply_override=not upstream)
+        if upstream:
+            rec["source"] = "image-cflags"
     except Exception as e:  # noqa: BLE001 -- provenance must not kill a campaign
-        rec = {"level": None, "source": "unknown", "override": arvo_opt_level(),
+        rec = {"level": None, "source": "unknown",
+               "override": "" if upstream else arvo_opt_level(),
                "error": f"{type(e).__name__}: {e}"}
     return {"build_opt_level": rec.get("level"),
             "build_opt_level_source": rec.get("source"),
@@ -279,9 +299,37 @@ def arvo_compile_args(*, image: str, source_dir: str, out_dir: str,
     return args
 
 
+def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
+                          project: str, sanitizer: str, language: str) -> list[str]:
+    """Everything of an upstream `docker run ... compile` after the resource flags.
+
+    OSS-Fuzz's own compile env for the afl engine, nothing more: no FUZZER_LIB /
+    FUZZER (OSS-Fuzz's compile sets LIB_FUZZING_ENGINE itself) and no -O
+    override (the image's CFLAGS are the build). --network none: the image is
+    the artifact of record, so a build may not fetch anything. The fold
+    denylist is the same mechanism and file as ARVO's (see arvo_compile_args).
+    ``source_dir=None`` compiles the image's own $SRC/<project> (onboarding).
+    """
+    args = [
+        "--network", "none",
+        "-e", "FUZZING_ENGINE=afl",
+        "-e", f"SANITIZER={sanitizer}",
+        "-e", "ARCHITECTURE=x86_64",
+        "-e", f"FUZZING_LANGUAGE={language}",
+        "-e", "AFL_LLVM_DENYLIST=/src/aflpp_fold_denylist.txt",
+        "-v", f"{Path(__file__).resolve().parent / 'aflpp_fold_denylist.txt'}"
+              f":/src/aflpp_fold_denylist.txt:ro",
+    ]
+    if source_dir is not None:
+        args += ["-v", f"{Path(source_dir).absolute()}:/src/{project}"]
+    args += ["-v", f"{Path(out_dir).absolute()}:/out", image, "compile"]
+    return args
+
+
 def build_prework_rebuild_command(
     *, image: str, source_dir: str, out_dir: str, project: str,
     cpu: int | str | None = None, ccache_dir: str | None = None,
+    sanitizer: str = "address", language: str = "c++",
 ) -> list[str]:
     """`docker run <prework image> compile` with the modified source mounted.
 
@@ -294,6 +342,9 @@ def build_prework_rebuild_command(
     and no -O override (FuzzBench fixes -O1 for bug, -O3 for coverage).
     ``ccache_dir`` applies to those images only (main + cmplog build cache, see
     prework/fb_ccache.py); ARVO commands never take one.
+
+    Upstream images (bench-upstream/...) compile with upstream_compile_args;
+    ``sanitizer`` and ``language`` apply to those only.
     """
     if is_fuzzbench_image(image):
         return fuzzbench_build_command(
@@ -304,6 +355,11 @@ def build_prework_rebuild_command(
     cmd = ["docker", "run", "--rm", "--privileged"]
     if cpu is not None:
         cmd += ["--cpuset-cpus", str(cpu)]
+    if is_upstream_image(image):
+        cmd += upstream_compile_args(image=image, source_dir=source_dir,
+                                     out_dir=out_dir, project=project,
+                                     sanitizer=sanitizer, language=language)
+        return cmd
     # Env (incl. the -O override), denylist and mounts are arvo_compile_args, the
     # SAME list the broker builds the agent's candidates with.
     cmd += arvo_compile_args(image=image, source_dir=source_dir, out_dir=out_dir,
@@ -346,6 +402,7 @@ def rebuild_with_prework_image(
     cmd = build_prework_rebuild_command(
         image=image, source_dir=source_dir, out_dir=out_dir,
         project=project, cpu=cpu,
+        sanitizer=sanitizer_of(entry), language=language_of(entry),
     )
     logger.info("Rebuilding %s in %s", project, image)
     try:
