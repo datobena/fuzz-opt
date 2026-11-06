@@ -37,6 +37,7 @@ from prework.prework_build import build_opt_provenance, prework_image_for
 from prework import fb_ccache
 from lib import afl
 from lib import afl_launch
+from lib import target_kind
 from lib import corpus as corpus_util
 from lib import tracked_git
 from lib import cpu_ledger, crash_classify, docker_util
@@ -2282,10 +2283,22 @@ def _stage_online_seed_corpus(experiment_dir: str, bin_dir: str,
     <t>_seed_corpus.zip only, 1 MiB limit, sha1 names, `default_seed` ("hi")
     when empty. That corpus lands in merged/ (what phase 3 fuzzes); build/
     gets the same real seeds without default_seed (what phase 2 profiles).
+
+    Upstream entries (``entry["kind"] == "upstream"``) follow OSS-Fuzz's
+    run_fuzzer (lib/corpus.stage_upstream_seed_corpus): <t>_seed_corpus.zip
+    members plus one `input` file (b"input\\n") in merged/; build/ gets the
+    zip members, or only `input` when there is no zip.
     """
     corpus_root = os.path.join(experiment_dir, "seed_corpus")
     build_dir = os.path.join(corpus_root, "build")
     merged_dir = os.path.join(corpus_root, "merged")
+
+    if target_kind.is_upstream(entry):
+        st = corpus_util.stage_upstream_seed_corpus(bin_dir, fuzz_target,
+                                                    merged_dir, build_dir)
+        logger.info("online: upstream seed corpus for %s: %d file(s)%s", fuzz_target,
+                    st["staged"], "" if st["zip"] else " (input only)")
+        return st["staged"]
 
     if afl_launch.is_fuzzbench(entry):
         st = corpus_util.stage_fuzzbench_seed_corpus(bin_dir, fuzz_target, merged_dir)

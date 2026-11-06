@@ -253,3 +253,59 @@ def stage_fuzzbench_seed_corpus(bin_dir: str, fuzz_target: str, dst_dir: str) ->
         stats["default_seed"] = True
     logger.info("fuzzbench seeds for %s: %s", fuzz_target, stats)
     return stats
+
+
+UPSTREAM_INPUT_NAME = "input"
+UPSTREAM_INPUT_CONTENT = b"input\n"
+
+
+def stage_upstream_seed_corpus(bin_dir: str, fuzz_target: str, merged_dir: str,
+                               build_dir: str) -> dict:
+    """Build the seed corpus the way OSS-Fuzz's run_fuzzer does.
+
+    infra/base-images/base-runner/run_fuzzer:
+      1. if $OUT/${FUZZER}_seed_corpus.zip exists (that name only), unzip it
+         into $CORPUS_DIR -- no size limit, no renaming;
+      2. always `echo input > ${CORPUS_DIR}/input` (bytes b"input\\n"; written
+         after the unzip, so it wins over a zip member of the same name).
+    Zip members are flattened to their basenames (directory entries skipped).
+
+    merged_dir (what the trials fuzz) gets zip members + `input`; build_dir
+    (what the optimizer profiles) gets the zip members only, or only `input`
+    when there is no zip, so it is never empty. Both are wiped first.
+    """
+    for d in (merged_dir, build_dir):
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
+
+    seed_zip = os.path.join(bin_dir, f"{fuzz_target}_seed_corpus.zip")
+    has_zip = os.path.isfile(seed_zip)
+    if has_zip:
+        try:
+            with zipfile.ZipFile(seed_zip) as zf:
+                for member in zf.infolist():
+                    if member.filename.endswith("/"):
+                        continue
+                    name = os.path.basename(member.filename)
+                    if not name:
+                        continue
+                    with zf.open(member) as src, \
+                            open(os.path.join(build_dir, name), "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+        except (zipfile.BadZipFile, OSError) as e:
+            logger.warning("upstream seeds: could not unpack %s: %s", seed_zip, e)
+        for f in os.listdir(build_dir):
+            shutil.copy2(os.path.join(build_dir, f), os.path.join(merged_dir, f))
+
+    with open(os.path.join(merged_dir, UPSTREAM_INPUT_NAME), "wb") as fh:
+        fh.write(UPSTREAM_INPUT_CONTENT)
+    if not os.listdir(build_dir):
+        shutil.copy2(os.path.join(merged_dir, UPSTREAM_INPUT_NAME),
+                     os.path.join(build_dir, UPSTREAM_INPUT_NAME))
+
+    stats = {"staged": sum(1 for f in os.listdir(merged_dir)
+                           if os.path.isfile(os.path.join(merged_dir, f))),
+             "zip": has_zip, "input_file": True}
+    logger.info("upstream seeds for %s: %s", fuzz_target, stats)
+    return stats
