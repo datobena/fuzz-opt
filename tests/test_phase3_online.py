@@ -821,7 +821,7 @@ def test_hot_swap_one_signals_only_its_paired_baseline(monkeypatch, tmp_path):
     monkeypatch.setattr(phase3_online.swap_signal, "SIGNAL", sig)
     monkeypatch.setattr(phase3_online, "_stop_one_and_overwrite", lambda *a, **k: None)
     monkeypatch.setattr(phase3_online, "_fuzzer_state", lambda e, t: {})
-    monkeypatch.setattr(phase3_online, "_swap_extra_files", lambda e, f: ())
+    monkeypatch.setattr(phase3_online, "_swap_extra_files", lambda e, f, n=None: ())
     trial = types.SimpleNamespace(trial_id=3, container_id="c",
                                   bin_dir_override=str(tmp_path / "bin_03"))
     ctx = types.SimpleNamespace(trial=trial, iter_n=2, fuzz_target="t", entry={},
@@ -845,7 +845,7 @@ def test_hot_swap_one_signals_only_its_paired_baseline(monkeypatch, tmp_path):
 def _swap_ctx(monkeypatch, tmp_path):
     monkeypatch.setattr(phase3_online, "_stop_one_and_overwrite", lambda *a, **k: None)
     monkeypatch.setattr(phase3_online, "_fuzzer_state", lambda e, t: {"run_time": "980"})
-    monkeypatch.setattr(phase3_online, "_swap_extra_files", lambda e, f: ())
+    monkeypatch.setattr(phase3_online, "_swap_extra_files", lambda e, f, n=None: ())
     monkeypatch.setattr(phase3_online.swap_signal.SIGNAL, "record_swap", lambda *a: 1)
     trial = types.SimpleNamespace(trial_id=3, container_id="c",
                                   bin_dir_override=str(tmp_path / "bin_03"))

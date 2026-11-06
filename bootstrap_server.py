@@ -33,6 +33,10 @@ from prework.build_image import DEFINITION_LABEL, definition_hash, image_tag
 
 REPO = Path(__file__).resolve().parent
 TARGETS_DIR = REPO / "prework" / "targets"
+# Upstream OSS-Fuzz definitions (prework/upstream/<p>/meta.json). Checked here,
+# never built here: tools/onboard_upstream.py onboards them.
+UPSTREAM_TARGETS_DIR = REPO / "prework" / "upstream"
+UPSTREAM_ONBOARD_NOTE = "onboard with tools/onboard_upstream.py"
 AGENT_IMAGE = "bench-sandbox/agent"
 PROXY_IMAGE = "bench-sandbox/egress"
 
@@ -63,8 +67,19 @@ def image_definition_label(image: str) -> str | None:
     return r.stdout.strip() or None
 
 
+def upstream_image_definition_label(image: str) -> str | None:
+    """The definition hash prework.upstream_image stamped on IMAGE (its own
+    label, not build_image's), or None when absent or unstamped."""
+    from prework.upstream_image import DEFINITION_LABEL as UPSTREAM_LABEL
+    r = _run(["docker", "image", "inspect", "-f",
+              f'{{{{index .Config.Labels "{UPSTREAM_LABEL}"}}}}', image])
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip() or None
+
+
 def image_state(tag: str, target_dir: Path, *, exists=_image_exists,
-                label=image_definition_label) -> str:
+                label=image_definition_label, definition=definition_hash) -> str:
     """Asking only whether the tag exists let an image fall behind its
     definition unnoticed (two did on the test box). Compare the stamped hash
     with the definition on disk instead."""
@@ -73,7 +88,7 @@ def image_state(tag: str, target_dir: Path, *, exists=_image_exists,
     stamped = label(tag)
     if stamped is None:
         return UNVERIFIED
-    return OK if stamped == definition_hash(target_dir) else STALE
+    return OK if stamped == definition(target_dir) else STALE
 
 
 def _symbolizer_check() -> tuple[bool, str]:
@@ -218,6 +233,34 @@ def check_images() -> list[tuple[str, str, str]]:
             UNVERIFIED: "unverified: built before stamping; rebuild with --rebuild-unverified",
         }.get(state, target.name)
         rows.append((tag, state, note))
+    rows += _check_upstream_images()
+    return rows
+
+
+def _check_upstream_images() -> list[tuple[str, str, str]]:
+    """One row per prework/upstream/<p>/ definition, keyed on its own label and
+    definition hash. Never built by this script (build_target_images skips them):
+    a missing or stale one is onboarded with tools/onboard_upstream.py."""
+    rows = []
+    if not UPSTREAM_TARGETS_DIR.is_dir():
+        return rows
+    from prework.upstream_image import definition_hash as upstream_definition_hash
+    from prework.upstream_image import upstream_image_tag
+    for target in sorted(UPSTREAM_TARGETS_DIR.iterdir()):
+        if not (target.is_dir() and (target / "meta.json").is_file()):
+            continue
+        meta = json.loads((target / "meta.json").read_text())
+        tag = upstream_image_tag(meta["project"])
+        state = image_state(tag, target, exists=_image_exists,
+                            label=upstream_image_definition_label,
+                            definition=upstream_definition_hash)
+        note = {
+            MISSING: f"upstream {target.name}: {UPSTREAM_ONBOARD_NOTE}",
+            STALE: f"stale: definition changed since the image was built; "
+                   f"{UPSTREAM_ONBOARD_NOTE}",
+            UNVERIFIED: f"unverified: built before stamping; {UPSTREAM_ONBOARD_NOTE}",
+        }.get(state, f"upstream {target.name}")
+        rows.append((tag, state, note))
     return rows
 
 
@@ -247,6 +290,9 @@ def build_target_images(work: str, *, rebuild_unverified: bool = False
 
     A target whose bug no longer reproduces is reported and skipped, not patched
     around -- the benchmark must only measure bugs that exist in the binary.
+
+    Only prework/targets: upstream images (prework/upstream) are never built
+    here; check_images reports them and tools/onboard_upstream.py onboards them.
     """
     results = []
     for target in sorted(TARGETS_DIR.iterdir()):

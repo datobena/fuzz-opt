@@ -24,7 +24,7 @@ import subprocess
 from pathlib import Path
 
 import config
-from lib import afl_launch
+from lib import afl_launch, target_kind
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +49,11 @@ def build_capture_command(
     ``entry`` selects the launch flavour (lib/afl_launch). Without it, or for an
     ARVO entry, the command is exactly what it always was. A FuzzBench entry gets
     FuzzBench's afl-fuzz launch (cwd /out, its env and flags) and the shim is
-    built with the builder image's `clang` (there is no clang-18 there).
+    built with the builder image's `clang` (there is no clang-18 there). An
+    upstream entry takes the same branch: it is written in terms of the launch
+    object, so it gets run_fuzzer's launch and its image's `clang`.
     """
-    if afl_launch.is_fuzzbench(entry):
+    if target_kind.kind_of(entry) != target_kind.ARVO:
         launch = afl_launch.build_afl_launch(
             entry=entry, host_bin_dir=str(Path(out_dir).absolute()),
             fuzz_target=fuzz_target, input_dir="/seeds", output_dir="/work/aflout",

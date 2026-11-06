@@ -258,7 +258,7 @@ def test_preflight_smoke_uses_the_shared_builder(monkeypatch, tmp_path):
 
 def test_preflight_poc_stage_is_skipped_for_fuzzbench(monkeypatch, tmp_path):
     exp = tmp_path / "exp"
-    monkeypatch.setattr(preflight_online, "_entry", lambda p: BUG)
+    monkeypatch.setattr(preflight_online, "_entry", lambda p, i=None: BUG)
     monkeypatch.setattr(preflight_online.phase2_setup, "get_experiment_dir",
                         lambda i, e: str(exp))
     monkeypatch.setattr(preflight_online, "prework_image_for", lambda e: "fb-aflpp/x")
@@ -583,7 +583,7 @@ def test_preflight_tool_runs_the_setup_profile_check(monkeypatch, tmp_path):
     exp = tmp_path / "exp"
     (exp / "baseline" / "bin").mkdir(parents=True)
     (exp / "baseline" / "bin" / BUG["fuzz_target"]).write_bytes(b"x")
-    monkeypatch.setattr(preflight_online, "_entry", lambda p: BUG)
+    monkeypatch.setattr(preflight_online, "_entry", lambda p, i=None: BUG)
     monkeypatch.setattr(preflight_online.phase2_setup, "get_experiment_dir",
                         lambda i, e: str(exp))
     monkeypatch.setattr(preflight_online, "prework_image_for", lambda e: "fb-aflpp/x")

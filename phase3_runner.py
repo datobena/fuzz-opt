@@ -28,6 +28,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 from lib import afl, afl_launch, crash_classify, docker_util, provenance, swap_signal
+from lib import target_kind
 from prework.build_image import image_tag
 
 logging.basicConfig(
@@ -582,15 +583,17 @@ def _resolve_trial_image(trial: Trial) -> Optional[str]:
     """
     candidate_images = []
     entry = _trial_entry(trial)
-    if afl_launch.is_fuzzbench(entry):
+    kind = target_kind.kind_of(entry)
+    if kind in (target_kind.FUZZBENCH, target_kind.UPSTREAM):
         # FuzzBench builds are run in the image that built them
         # (fb-aflpp/<fuzzbench_dir>), never the old bench-aflpp/<p>-arvo-<id>
         # tag, which may still exist on the host from the pre-parity chain.
+        # Upstream builds likewise run in bench-upstream/<ossfuzz_project>.
         from prework.prework_build import prework_image_for
         try:
             candidate_images.append(prework_image_for(entry))
         except (KeyError, ValueError) as e:
-            logger.error("No prework image for fuzzbench trial %s: %s", trial.name, e)
+            logger.error("No prework image for %s trial %s: %s", kind, trial.name, e)
             return None
         img = candidate_images[0]
         check = subprocess.run(["docker", "image", "inspect", img], capture_output=True)
@@ -1122,10 +1125,11 @@ def _trial_env_record(trial=None) -> dict:
 
     For a FuzzBench trial the record is the full launch (argv, env, cwd, which
     optional -x/-c flags were present) as built by lib/afl_launch, since that
-    set varies per benchmark and per build.
+    set varies per benchmark and per build. Upstream trials likewise (their
+    sanitizer options come from the harness's .options file).
     """
     launch = getattr(trial, "_afl_launch", None) if trial is not None else None
-    if launch and launch.get("kind") == "fuzzbench":
+    if launch and launch.get("kind") != "arvo":
         env = launch.get("env") or {}
         return {
             "ASAN_OPTIONS": env.get("ASAN_OPTIONS", config.FUZZ_ASAN_OPTIONS),
@@ -1169,7 +1173,26 @@ def _trial_toolchain(trial) -> dict:
             "cmplog_present": os.path.isfile(os.path.join(bin_dir, "cmplog", target)),
             "aflpp_dict_present": os.path.isfile(os.path.join(bin_dir, "afl++.dict")),
         }
+    elif target_kind.is_upstream(entry) and isinstance(fp, dict):
+        fp = dict(fp)
+        fp["upstream"] = {
+            "sanitizer": target_kind.sanitizer_of(entry),
+            "ossfuzz_project": entry["ossfuzz_project"],
+            "pins": _upstream_pins(entry["ossfuzz_project"]),
+        }
     return fp
+
+
+def _upstream_pins(ossfuzz_project: str):
+    """prework/upstream/<p>/pins.json (the commits the image was built from),
+    or None when absent or unreadable."""
+    from prework import upstream_image
+    path = os.path.join(str(upstream_image.UPSTREAM_DIR), ossfuzz_project, "pins.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 
 def classify_crash(crash_path: str) -> str:

@@ -688,11 +688,12 @@ def _run_main(monkeypatch, tmp_path, argv, state=None):
     seen = {}
 
     def fake_trials(experiment_id, state, duration, max_parallel,
-                    resume=False, project=None):
+                    resume=False, project=None, local_id=None):
         seen[3] = duration
         return True
 
-    def fake_analysis(experiment_id, state, duration=None, project=None):
+    def fake_analysis(experiment_id, state, duration=None, project=None,
+                      local_id=None):
         seen[4] = duration
         return True
 

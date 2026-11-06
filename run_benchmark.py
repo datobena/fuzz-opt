@@ -314,12 +314,32 @@ def run_phase_manifest(experiment_id: str, state: dict) -> bool:
         return False
 
 
+def _select_entries(manifest: list, project: str | None,
+                    local_id: int | None) -> list:
+    """Manifest entries matching --project and --local-id (each only when
+    given; both when both are). Several upstream entries share one project,
+    so --project alone cannot pick one harness."""
+    return [
+        e for e in manifest
+        if (not project or e.get("project") == project)
+        and (local_id is None or _entry_local_id(e) == int(local_id))
+    ]
+
+
+def _entry_local_id(entry: dict):
+    try:
+        return int(entry.get("local_id"))
+    except (TypeError, ValueError):
+        return None
+
+
 def run_phase_setup(
     experiment_id: str, state: dict, project: str = None,
     sample_cves: int = None, sample_seed: int = None,
     phase2_max_parallel: int | None = None,
     baseline_profile_duration: int | None = None,
     refresh_profile_duration: int | None = None,
+    local_id: int | None = None,
 ) -> bool:
     """Phase 2: Build baseline and optimized fuzzers."""
     logger.info("=== Phase 2: Environment Setup ===")
@@ -339,10 +359,7 @@ def run_phase_setup(
                 denylisted,
             )
 
-        filtered_entries = [
-            entry for entry in manifest
-            if not project or entry["project"] == project
-        ]
+        filtered_entries = _select_entries(manifest, project, local_id)
         if not filtered_entries:
             logger.error("No manifest entries selected for phase 2")
             state["errors"].append({
@@ -610,6 +627,7 @@ def run_phase_trials(
     experiment_id: str, state: dict,
     duration: int, max_parallel: int,
     resume: bool = False, project: str = None,
+    local_id: int | None = None,
 ) -> bool:
     """Phase 3: Run fuzzing trials."""
     logger.info("=== Phase 3: Fuzzing Trials ===")
@@ -622,8 +640,7 @@ def run_phase_trials(
         with open(config.MANIFEST_PATH) as f:
             manifest = json.load(f)
 
-        if project:
-            manifest = [e for e in manifest if e["project"] == project]
+        manifest = _select_entries(manifest, project, local_id)
 
         # Online (continuous) optimization: self-contained per-target runs on the
         # LOCAL backend. It extracts the image, starts baseline+online arms, and
@@ -752,6 +769,7 @@ def run_phase_trials(
 def run_phase_analysis(
     experiment_id: str, state: dict,
     duration: int = None, project: str = None,
+    local_id: int | None = None,
 ) -> bool:
     """Phase 4: Statistical analysis and report generation.
 
@@ -768,8 +786,7 @@ def run_phase_analysis(
         with open(config.MANIFEST_PATH) as f:
             manifest = json.load(f)
 
-        if project:
-            manifest = [e for e in manifest if e["project"] == project]
+        manifest = _select_entries(manifest, project, local_id)
 
         report_dir = os.path.join(
             config.RESULTS_DIR, experiment_id, "report"
@@ -871,6 +888,12 @@ def main():
     parser.add_argument(
         "--project", default=None,
         help="Only process a specific project",
+    )
+    parser.add_argument(
+        "--local-id", type=int, default=None,
+        help="Only process the manifest entry with this local_id (with "
+             "--project: the entry must match both). Upstream projects have "
+             "one entry per harness, so --project alone may select several.",
     )
     parser.add_argument(
         "--sample-cves", type=int, default=None,
@@ -977,7 +1000,8 @@ def main():
                                   ),
                                   refresh_profile_duration=(
                                       args.phase2_refresh_profile_duration
-                                  )):
+                                  ),
+                                  local_id=args.local_id):
                 logger.error("Phase 2 failed")
                 overall_success = False
                 break
@@ -989,6 +1013,7 @@ def main():
                 max_parallel=args.max_parallel,
                 resume=args.resume,
                 project=args.project,
+                local_id=args.local_id,
             ):
                 logger.error("Phase 3 failed")
                 overall_success = False
@@ -999,6 +1024,7 @@ def main():
                 experiment_id, state,
                 duration=analysis_duration,
                 project=args.project,
+                local_id=args.local_id,
             ):
                 logger.error("Phase 4 failed")
                 overall_success = False

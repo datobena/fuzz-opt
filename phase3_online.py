@@ -582,20 +582,28 @@ def _overwrite_binary(shared_bin_path, new_bin_path, *, extra_files=()) -> None:
             pass
 
 
-def _swap_extra_files(entry, fuzz_target) -> tuple:
+def _swap_extra_files(entry, fuzz_target, new_bin_dir=None) -> tuple:
     """Companion files swapped with the target: FuzzBench's whole /out set
-    minus the target itself; nothing for ARVO (unchanged single-file swap)."""
-    if not afl_launch.is_fuzzbench(entry):
-        return ()
-    return tuple(afl_launch.fuzzbench_out_set(fuzz_target)[1:])
+    minus the target itself; for upstream, cmplog/<t> and afl++.dict where the
+    new build (``new_bin_dir``) has them; nothing for ARVO (unchanged
+    single-file swap)."""
+    kind = target_kind.kind_of(entry)
+    if kind == target_kind.FUZZBENCH:
+        return tuple(afl_launch.fuzzbench_out_set(fuzz_target)[1:])
+    if kind == target_kind.UPSTREAM:
+        if not new_bin_dir:
+            return ()
+        return tuple(rel for rel in afl_launch.fuzzbench_out_set(fuzz_target)[1:]
+                     if os.path.isfile(os.path.join(str(new_bin_dir), rel)))
+    return ()
 
 
 def _swap_runtime_libs(entry, new_bin_dir, live_bin_dir) -> tuple:
-    """FuzzBench only: the build's runtime shared libraries under /out (main and
-    cmplog), from the new build AND the live set -- so a library the new build
-    no longer has is removed rather than left behind. Swapped together with the
-    target (see afl_launch.fuzzbench_runtime_libs); nothing for ARVO."""
-    if not afl_launch.is_fuzzbench(entry):
+    """FuzzBench and upstream: the build's runtime shared libraries under /out
+    (main and cmplog), from the new build AND the live set -- so a library the
+    new build no longer has is removed rather than left behind. Swapped together
+    with the target (see afl_launch.fuzzbench_runtime_libs); nothing for ARVO."""
+    if target_kind.kind_of(entry) == target_kind.ARVO:
         return ()
     return tuple(sorted(set(afl_launch.fuzzbench_runtime_libs(str(new_bin_dir)))
                         | set(afl_launch.fuzzbench_runtime_libs(str(live_bin_dir)))))
@@ -679,7 +687,7 @@ def hot_swap_one(ctx: RoundContext, state: OnlineState, new_bin_dir):
     new_bin = os.path.join(str(new_bin_dir), ctx.fuzz_target)
     _stop_one_and_overwrite(
         trial, bin_path, new_bin,
-        extra_files=(_swap_extra_files(ctx.entry, ctx.fuzz_target)
+        extra_files=(_swap_extra_files(ctx.entry, ctx.fuzz_target, new_bin_dir)
                      + _swap_runtime_libs(ctx.entry, new_bin_dir,
                                           trial.bin_dir_override)))
     row = {"iter": ctx.iter_n, "ts": time.time(), "trial_id": trial.trial_id,
@@ -2040,7 +2048,7 @@ def hot_swap(ctx: RoundContext, state: OnlineState, new_bin_dir):
         new_bin = os.path.join(str(new_bin_dir), ctx.fuzz_target)
         _stop_all_and_overwrite(
             running, shared_bin, new_bin,
-            extra_files=(_swap_extra_files(ctx.entry, ctx.fuzz_target)
+            extra_files=(_swap_extra_files(ctx.entry, ctx.fuzz_target, new_bin_dir)
                          + _swap_runtime_libs(ctx.entry, new_bin_dir,
                                               ctx.optimized_bin_dir)))
         # Snapshot each trial's fuzzing state at the swap. Without this the
@@ -2240,12 +2248,13 @@ def _extract_online_target(entry, source_tree_root, baseline_bin_dir, poc_dir,
     built /out, and verify the baseline reproduces. The build's source_dir becomes the
     persistent source_root (NOT deleted — the online loop rebuilds from it each round).
     """
-    if entry.get("kind") == "fuzzbench":
+    kind = target_kind.kind_of(entry)
+    if kind in (target_kind.FUZZBENCH, target_kind.UPSTREAM):
         image = prework_image_for(entry)
         src_root = Path(source_tree_root)
         src_root.mkdir(parents=True, exist_ok=True)
         if not phase2_setup.extract_source_from_image(image, str(src_root)):
-            logger.error("online: fuzzbench source extract failed for %s", project)
+            logger.error("online: %s source extract failed for %s", kind, project)
             return False, None, None, source_tree_root
         proj_src = phase2_setup._find_project_source(src_root, project)
         # Strip the shipped repositories BEFORE this build, not after it: this
@@ -2263,12 +2272,12 @@ def _extract_online_target(entry, source_tree_root, baseline_bin_dir, poc_dir,
                                 profile_cpu=cpu, stage="baseline_afl_build",
                                 counts=False)
         if not ok:
-            logger.error("online: fuzzbench baseline build failed for %s", project)
+            logger.error("online: %s baseline build failed for %s", kind, project)
             return False, None, None, source_tree_root
         # No injected bug: no crash, no PoC, no ARVO issue. Downstream gates treat a
         # missing poc_path as bug_survived == "no-poc" (throughput-only).
-        logger.info("online: fuzzbench baseline built for %s (throughput-only, no PoC)",
-                    project)
+        logger.info("online: %s baseline built for %s (throughput-only, no PoC)",
+                    kind, project)
         return False, None, None, source_tree_root
 
     if _is_n132_entry(entry):
@@ -2861,13 +2870,15 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # (the fuzzer must FIND the bug), so `crashed` is always False there and this
     # gate would abort every fuzzbench run before a single trial. For them the
     # run is throughput-only and bug-survival is informational, so skip it.
-    requires_poc = entry.get("kind") != "fuzzbench"
+    # Upstream targets likewise ship no PoC.
+    requires_poc = target_kind.has_poc(entry)
     if requires_poc and not crashed:
         logger.error("online: baseline did not reproduce for %s", entry["cve"])
         return False
     if not requires_poc:
-        logger.info("online: fuzzbench target %s -- skipping PoC gate "
-                    "(throughput-only, bug-survival informational)", entry["cve"])
+        logger.info("online: %s target %s -- skipping PoC gate "
+                    "(throughput-only, bug-survival informational)",
+                    target_kind.kind_of(entry), entry["cve"])
 
     project_src_dir = str(phase2_setup._find_project_source(Path(source_root), project))
 
@@ -2904,7 +2915,8 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     # baseline through the same image, from the already-stripped tree (see
     # _extract_online_target), and there is no PoC to re-verify. Building it
     # again cost one full build (~1.5h on php at one core) for an identical /out.
-    if entry.get("kind") != "fuzzbench" and not _build_afl_baseline(
+    # Upstream likewise: built at extract through its own image, no PoC.
+    if target_kind.has_poc(entry) and not _build_afl_baseline(
                                entry=entry, project_src_dir=project_src_dir,
                                baseline_bin_dir=baseline_bin_dir,
                                fuzz_target=fuzz_target, poc_path=poc_path,

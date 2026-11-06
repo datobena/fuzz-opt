@@ -48,12 +48,21 @@
 #   BUILD_OPT_LEVEL=O3 ./run_online_pertrial.sh libxml2    # ARVO override, see below
 #   DURATION=1800 INTERVAL=300 EXP_PREFIX=smoke ./run_online_pertrial.sh libxml2
 #   EXP_ID=smoke-libxml2-20261019-1430 ./run_online_pertrial.sh libxml2   # exact id
-# The experiment id is ${EXP_PREFIX}-<project>-<YYYYMMDD-HHMM> unless EXP_ID is set.
+#   LOCAL_ID=970002 ./run_online_pertrial.sh libssh   # one harness of a project
+# The experiment id is ${EXP_PREFIX}-<project>-<YYYYMMDD-HHMM> unless EXP_ID is set,
+# or ${EXP_PREFIX}-<project>-<LOCAL_ID>-<YYYYMMDD-HHMM> with LOCAL_ID.
 set -u
 cd "$(dirname "$0")"
 
 PROJ="${1:-}"
 [ -z "$PROJ" ] && { echo "usage: $0 <project>"; exit 2; }
+
+# Upstream projects have one manifest entry PER HARNESS, all with the same
+# project, so the project alone does not pick a campaign: LOCAL_ID selects the
+# entry (run_benchmark.py --local-id, matched together with --project). It is
+# also part of the experiment id, so two harnesses of one project launched in
+# the same minute never share a log or pid file.
+LOCAL_ID=${LOCAL_ID:-}
 
 # Pin the optimizer's model to an EXPLICIT id. Without any pin the CLI resolves
 # its own ACCOUNT DEFAULT, which nothing records (the sandbox gives the agent its
@@ -83,21 +92,31 @@ export BUILD_OPT_LEVEL=${BUILD_OPT_LEVEL-}
 # FuzzBench builds them: -O1 for bug benchmarks, -O3 for coverage ones, set by
 # fuzzers/utils.py. BUILD_OPT_LEVEL must not touch them (prework also guards),
 # so clear it here; campaign_provenance.json records the real per-type level.
-FB_KIND=$(python3 - "$PROJ" <<'PY' 2>/dev/null
+# Upstream targets (manifest "kind": "upstream") likewise build exactly as
+# OSS-Fuzz's compile does (its own CFLAGS for the entry's sanitizer).
+FB_KIND=$(python3 - "$PROJ" "$LOCAL_ID" <<'PY' 2>/dev/null
 import json, sys
 import config
 try:
     entries = json.load(open(config.MANIFEST_PATH))
 except Exception:
     sys.exit(0)
-kinds = {e.get("kind") for e in entries if e.get("project") == sys.argv[1]}
-print("fuzzbench" if "fuzzbench" in kinds else "")
+lid = sys.argv[2] if len(sys.argv) > 2 else ""
+kinds = {e.get("kind") for e in entries if e.get("project") == sys.argv[1]
+         and (not lid or str(e.get("local_id")) == lid)}
+print("fuzzbench" if "fuzzbench" in kinds else
+      "upstream" if "upstream" in kinds else "")
 PY
 )
-if [ "$FB_KIND" = "fuzzbench" ]; then
+if [ "$FB_KIND" = "fuzzbench" ] || [ "$FB_KIND" = "upstream" ]; then
   if [ -n "${BUILD_OPT_LEVEL}" ]; then
-    echo "fuzzbench target: ignoring BUILD_OPT_LEVEL=${BUILD_OPT_LEVEL} (FuzzBench sets -O1 bug / -O3 coverage)"
+    if [ "$FB_KIND" = "fuzzbench" ]; then
+      echo "fuzzbench target: ignoring BUILD_OPT_LEVEL=${BUILD_OPT_LEVEL} (FuzzBench sets -O1 bug / -O3 coverage)"
+    else
+      echo "upstream target: ignoring BUILD_OPT_LEVEL=${BUILD_OPT_LEVEL} (OSS-Fuzz compile sets the flags)"
+    fi
   fi
+  echo "target kind: ${FB_KIND}"
   export BUILD_OPT_LEVEL=
 fi
 
@@ -128,7 +147,11 @@ EXP_PREFIX=${EXP_PREFIX:-online-24h-c1}
 # without EXP_ID. The `> "$log"` below truncates it, and phase 3's stale-state
 # guard only runs after that -- so a reused EXP_ID used to destroy the old
 # campaign's log and only then be refused.
-exp="${EXP_ID:-${EXP_PREFIX}-${PROJ}-$(date +%Y%m%d-%H%M)}"
+if [ -n "$LOCAL_ID" ]; then
+  exp="${EXP_ID:-${EXP_PREFIX}-${PROJ}-${LOCAL_ID}-$(date +%Y%m%d-%H%M)}"
+else
+  exp="${EXP_ID:-${EXP_PREFIX}-${PROJ}-$(date +%Y%m%d-%H%M)}"
+fi
 log=".${exp}.log"
 if [ -e "$log" ]; then
   if [ -n "${EXP_ID:-}" ]; then
@@ -161,7 +184,7 @@ if grep -q "FAIL . refresh token outlives the campaign" <<< "$PREFLIGHT"; then
 fi
 
 echo "launching ${PROJ}: ${TRIALS}+${TRIALS} trials on ${TRIAL_CORES}, "\
-"${TRIALS} optimizers on ${OPT_CORES}, -O level '$( [ "$FB_KIND" = fuzzbench ] && echo 'fuzzbench (-O1 bug / -O3 coverage)' || echo "${BUILD_OPT_LEVEL:-default}")', exp=${exp}"
+"${TRIALS} optimizers on ${OPT_CORES}, -O level '$( case "$FB_KIND" in fuzzbench) echo 'fuzzbench (-O1 bug / -O3 coverage)';; upstream) echo 'upstream (OSS-Fuzz compile)';; *) echo "${BUILD_OPT_LEVEL:-default}";; esac)', exp=${exp}"
 
 NUM_TRIALS="$TRIALS" \
 ONLINE_ENABLED=1 PHASE3_BACKEND=local \
@@ -180,6 +203,7 @@ ONLINE_PROFILE_CPU="$SETUP_CPU" \
 ONLINE_SETUP_BUILD_CPUS="$SETUP_BUILD_CPUS" \
 ONLINE_AGENT_CPUS="$AGENT_CPUS" \
 nohup python3 run_benchmark.py --online --phase 3 --project "$PROJ" \
+  ${LOCAL_ID:+--local-id "$LOCAL_ID"} \
   --duration "$DURATION" --experiment-id "$exp" > "$log" 2>&1 &
 
 pid=$!

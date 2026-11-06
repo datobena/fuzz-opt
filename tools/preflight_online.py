@@ -47,15 +47,21 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import config
 import phase2_setup
 import phase3_online
-from lib import afl_launch, docker_util, tracked_git
+from lib import afl_launch, docker_util, target_kind, tracked_git
 from prework.prework_build import prework_image_for
 
 
-def _entry(project: str) -> dict:
+def _entry(project: str, local_id: int | None = None) -> dict:
+    """The manifest entry for ``project`` (and ``local_id`` when given: an
+    upstream project has one entry per harness, all with the same project)."""
     for e in json.loads(Path(config.MANIFEST_PATH).read_text()):
-        if e["project"] == project:
-            return e
-    raise SystemExit(f"no manifest entry for {project}")
+        if e["project"] != project:
+            continue
+        if local_id is not None and str(e.get("local_id")) != str(int(local_id)):
+            continue
+        return e
+    raise SystemExit(f"no manifest entry for {project}"
+                     + (f" with local_id {local_id}" if local_id is not None else ""))
 
 
 def _count(p: Path) -> int:
@@ -115,8 +121,8 @@ def smoke(entry, exp_dir, fuzz_target, cpu, secs) -> dict:
 
 
 def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
-              build_cpus: str | None = None) -> dict:
-    entry = _entry(project)
+              build_cpus: str | None = None, local_id: int | None = None) -> dict:
+    entry = _entry(project, local_id)
     fuzz_target = entry["fuzz_target"]
     exp_id = f"preflight-{project}"
     exp_dir = phase2_setup.get_experiment_dir(exp_id, entry)
@@ -126,7 +132,12 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
     src_root = os.path.join(online_dir, "source_tree")
     bin_dir = os.path.join(exp_dir, "baseline", "bin")
     poc_dir = os.path.join(exp_dir, "poc")
+    kind = target_kind.kind_of(entry)
+    # The JSON keeps its preflight_<project>.json name; these fields tell apart
+    # the entries (harnesses) of one upstream project.
     res = {"project": project, "cve": entry["cve"], "fuzz_target": fuzz_target,
+           "local_id": entry.get("local_id"), "kind": kind,
+           "sanitizer": target_kind.sanitizer_of(entry),
            "experiment_dir": exp_dir, "stages": {}}
 
     def stage(name, ok, **kw):
@@ -149,10 +160,10 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
             setup_cpus=build_cpus or cpu)
         if not stage("extract", bool(source_root), secs=round(time.time() - t)):
             return res
-        if afl_launch.is_fuzzbench(entry):
-            # FuzzBench benchmarks ship no PoC: the fuzzer has to find the bug.
-            # run_online skips its PoC gate for them too.
-            stage("poc", True, skipped="fuzzbench: no PoC")
+        if not target_kind.has_poc(entry):
+            # FuzzBench benchmarks and upstream targets ship no PoC: the fuzzer
+            # has to find the bug. run_online skips its PoC gate for them too.
+            stage("poc", True, skipped=f"{kind}: no PoC")
         else:
             stage("poc", bool(crashed), reproduces_on_historical=bool(crashed))
 
@@ -180,10 +191,10 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
         stage("stripvcs", True)
 
         t = time.time()
-        if afl_launch.is_fuzzbench(entry):
+        if not target_kind.has_poc(entry):
             # Like run_online: the extract stage already built the AFL++ baseline.
             built = (Path(bin_dir) / fuzz_target).is_file()
-            if not stage("aflbuild", built, skipped="fuzzbench: built at extract"):
+            if not stage("aflbuild", built, skipped=f"{kind}: built at extract"):
                 return res
         else:
             built = phase3_online._build_afl_baseline(
@@ -222,6 +233,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--project", required=True)
+    ap.add_argument("--local-id", type=int, default=None,
+                    help="manifest local_id: picks one harness of a project with "
+                         "several entries (upstream); matched together with --project")
     ap.add_argument("--cpu", type=int, default=3,
                     help="core for the PoC check and the smoke (and builds without --build-cpus)")
     # Same default as run_online_pertrial.sh's SETUP_BUILD_CPUS: like campaign setup,
@@ -231,10 +245,12 @@ def main() -> int:
     ap.add_argument("--smoke-secs", type=int, default=120)
     ap.add_argument("--keep", action="store_true", help="keep the smoke afl_out")
     a = ap.parse_args()
-    print(f"=== preflight {a.project} (cpu {a.cpu}, builds on {a.build_cpus or a.cpu}, "
-          f"smoke {a.smoke_secs}s) ===", flush=True)
+    lid = f" local_id {a.local_id}" if a.local_id is not None else ""
+    print(f"=== preflight {a.project}{lid} (cpu {a.cpu}, builds on "
+          f"{a.build_cpus or a.cpu}, smoke {a.smoke_secs}s) ===", flush=True)
     return 0 if preflight(a.project, a.cpu, a.smoke_secs, a.keep,
-                          build_cpus=a.build_cpus or None)["ok"] else 1
+                          build_cpus=a.build_cpus or None,
+                          local_id=a.local_id)["ok"] else 1
 
 
 if __name__ == "__main__":

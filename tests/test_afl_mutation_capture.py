@@ -86,3 +86,20 @@ def test_phase2_mutation_builder_keeps_the_legacy_path_when_unsandboxed(monkeypa
              "image": "n132/arvo:16505-vul"}
     assert phase2_setup._phase2_mutation_builder(entry) == (
         "n132/arvo:16505-vul", "arvo compile")
+
+
+def test_capture_command_for_upstream_uses_the_launch_branch(tmp_path):
+    from lib import afl_launch
+    from lib.afl_mutation_capture import build_capture_command
+    up = {"project": "libssh", "ossfuzz_project": "libssh", "kind": "upstream",
+          "sanitizer": "address", "language": "c", "fuzz_target": "t",
+          "image": "bench-upstream/libssh", "local_id": 970001, "cve": "upstream-970001"}
+    b = tmp_path / "bin"
+    b.mkdir()
+    (b / "t").write_bytes(b"x")
+    s = build_capture_command(image="i", out_dir=str(b), seeds_dir=str(tmp_path),
+                              work_dir=str(tmp_path), fuzz_target="t", entry=up)[-1]
+    assert afl_launch.shim_compiler(up) == "clang"
+    assert s.startswith("set -e; clang -O2 -shared -fPIC") and "clang-18" not in s
+    assert "cd /out; " in s and "/out/afl-fuzz -m none -t " in s
+    assert "ASAN_OPTIONS=" in s and "-- /out/t >" in s
