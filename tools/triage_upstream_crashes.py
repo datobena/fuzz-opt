@@ -251,6 +251,14 @@ def _group(key: tuple, rows: list[dict], report_field: str) -> dict:
     }
 
 
+def found_on_pristine(record: dict) -> bool:
+    """True when the binary that found the artifact is the pristine binary:
+    the record says so (``found_is_pristine``), or its live binary is
+    ``iter_00`` (lib.live_binary's answer before the first swap, with no swap
+    timeline, or when the swapped-in bin dir is missing)."""
+    return bool(record.get("found_is_pristine")) or record.get("iter") == "iter_00"
+
+
 def summarize(records: Iterable[dict], replay: Callable,
               control: Callable | None = None) -> dict:
     """The 0-day report for one campaign. Pure apart from the injected replays.
@@ -261,12 +269,13 @@ def summarize(records: Iterable[dict], replay: Callable,
     ``{"status": crash|clean|unparsed|infra, "report"|"error"}`` (a single dict
     is one run). ``control(record)`` runs an optimized-arm artifact on the
     binary that found it, same shape; called only when every pristine try was
-    clean. A raised exception is an infra run.
+    clean and that binary is not the pristine one (``found_on_pristine``). A raised exception is an infra run.
     """
     rows: list[dict] = []
     for r in records:
         pr = combine_runs(_runs(replay, r["path"]))
         row = {k: r.get(k) for k in ("arm", "trial", "time_s", "path", "iter")}
+        row["found_is_pristine"] = r.get("arm") == "baseline" or found_on_pristine(r)
         row.update({"pristine_tries": pr["tries"], "pristine_hits": pr["hits"],
                     "pristine_key": None, "found_key": None})
         if pr["verdict"] == "reproduces":
@@ -275,10 +284,19 @@ def summarize(records: Iterable[dict], replay: Callable,
         elif pr["verdict"] == "unverified":
             row.update(verdict="unverified", stage="pristine",
                        reason=pr["reason"], error=pr["error"])
-        elif r["arm"] != "optimized" or control is None:
+        elif r["arm"] != "optimized":
+            row.update(verdict="non_reproducing", reason="clean on every pristine try")
+        elif found_on_pristine(r):
+            # Found before the trial's first swap (or with no live binary on
+            # record): the binary that found it IS the pristine binary, so a
+            # "control" there would be one more pristine try, never evidence
+            # of an optimizer-made crash.
             row.update(verdict="non_reproducing",
-                       reason="clean on every pristine try" + (
-                           "" if r["arm"] != "optimized" else "; no control replay"))
+                       reason="clean on every pristine try; the binary that found it "
+                              "was the pristine binary (iter_00), so no control replay")
+        elif control is None:
+            row.update(verdict="non_reproducing",
+                       reason="clean on every pristine try; no control replay")
         else:
             cr = combine_runs(_runs(control, r))
             row["control_tries"], row["control_hits"] = cr["tries"], cr["hits"]
@@ -321,7 +339,7 @@ def summarize(records: Iterable[dict], replay: Callable,
 
     def art(row):
         a = {k: row.get(k) for k in ("arm", "trial", "time_s", "path", "iter",
-                                      "pristine_tries", "pristine_hits")}
+                                      "found_is_pristine", "pristine_tries", "pristine_hits")}
         for k in ("control_tries", "control_hits", "stage", "reason", "error"):
             if k in row:
                 a[k] = row[k]
@@ -341,7 +359,8 @@ def summarize(records: Iterable[dict], replay: Callable,
 
     arm_names = sorted({a for d in distinct for a in d["trials"]} | set(ARMS), key=_arm_order)
     per_arm = {a: {"distinct": sum(1 for d in distinct if a in d["trials"]),
-                   "artifacts": sum(d["artifacts"].get(a, 0) for d in distinct)}
+                   "artifacts": sum(d["artifacts"].get(a, 0) for d in distinct),
+                   "unverified": sum(1 for u in unverified if u["arm"] == a)}
                for a in arm_names}
     only_opt = [d for d in distinct
                 if "optimized" in d["trials"] and "baseline" not in d["trials"]]
@@ -447,7 +466,9 @@ def render_markdown(report: dict) -> str:
             f"{c['only_optimized_found']} found only by the optimized arm). "
             f"Not counted: {c['optimizer_induced']} optimizer-induced keys, "
             f"{c['non_reproducing']} non-reproducing and {c['unverified']} unverified "
-            f"artifacts ({c['unclassified']} of them unclassified).", "",
+            f"artifacts (baseline arm {pa.get('baseline', {}).get('unverified', 0)}, "
+            f"optimized arm {pa.get('optimized', {}).get('unverified', 0)}; "
+            f"{c['unclassified']} unclassified).", "",
             "## Distinct crashes", ""]
     out += _crash_table(report["distinct"], lambda d: f"reproduces ({d['pristine_hits']}/{d['pristine_tries']} tries)")
     out += ["## Only found by the optimized arm", ""]
@@ -677,7 +698,10 @@ def triage_entry(experiment_id: str, entry: dict, cve_dir: Path, args) -> dict:
         return replay_until_crash(image, own_bin[rec["path"]], target, rec["path"], env,
                                   cpu=cpu_for(0), timeout=args.timeout, tries=args.tries)
 
-    records = [{k: a[k] for k in ("arm", "trial", "time_s", "path", "iter")} for a in arts]
+    pristine_dir = base_bin.resolve()
+    records = [{**{k: a[k] for k in ("arm", "trial", "time_s", "path", "iter")},
+                "found_is_pristine": Path(a["own_bin"]).resolve() == pristine_dir}
+               for a in arts]
     report = summarize(records, replay=lambda path: cache[path], control=control)
     pins, src = _campaign_pins_with_source(cve_dir, entry.get("ossfuzz_project"))
     report.update({
@@ -716,7 +740,8 @@ def main(argv=None) -> int:
         r = triage_entry(args.experiment_id, entry, cve_dir, args)
         c = r["counts"]
         print(f"{cve_dir.name}: {c['distinct']} distinct (only optimized {c['only_optimized_found']}), "
-              f"{c['optimizer_induced']} optimizer-induced, {c['unverified']} unverified, "
+              f"{c['optimizer_induced']} optimizer-induced, {c['non_reproducing']} non-reproducing, "
+              f"{c['unverified']} unverified, "
               f"{c['unclassified']} unclassified -> {cve_dir / 'triage'}")
         done += 1
     if not done:

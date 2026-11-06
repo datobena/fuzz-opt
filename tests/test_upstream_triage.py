@@ -220,8 +220,8 @@ def test_summarize_reports_first_seen_trials_tries_and_earliest_path_per_key():
 def test_summarize_counts_per_arm_exclude_everything_not_distinct():
     c = run()["counts"]
     assert c["distinct"] == 2
-    assert c["per_arm"]["baseline"] == {"distinct": 1, "artifacts": 1}
-    assert c["per_arm"]["optimized"] == {"distinct": 2, "artifacts": 3}
+    assert c["per_arm"]["baseline"] == {"distinct": 1, "artifacts": 1, "unverified": 1}
+    assert c["per_arm"]["optimized"] == {"distinct": 2, "artifacts": 3, "unverified": 1}
     assert (c["optimizer_induced"], c["non_reproducing"], c["unverified"], c["unclassified"]) == (1, 2, 2, 1)
 
 
@@ -400,3 +400,24 @@ def test_replay_once_maps_inner_exit_status(tmp_path, monkeypatch):
     assert got == ["infra", "clean", "crash", "infra", "infra"]
     assert tu.replay_once("img", tmp_path, "t", tmp_path / "missing", {}, cpu=None,
                           timeout=90)["status"] == "infra"
+
+
+def _no_control(x):
+    raise AssertionError("control replay on the pristine binary")
+
+
+@pytest.mark.parametrize("found", [{"iter": "iter_00"}, {"iter": None, "found_is_pristine": True}])
+def test_a_pre_swap_optimized_crash_gets_no_control_and_is_never_induced(found):
+    r = tu.summarize([{**rec("optimized", "trial_00", 5.0, "/o"), **found}],
+                     replay=lambda p: CLEAN3, control=_no_control)
+    assert r["optimizer_induced"] == [] and r["counts"]["optimizer_induced"] == 0
+    (n,) = r["non_reproducing"]
+    assert n["path"] == "/o" and "pristine binary" in n["reason"]
+
+
+def test_a_pre_swap_optimized_crash_that_crashes_on_a_later_pristine_try_is_distinct():
+    r = tu.summarize([rec("optimized", "trial_00", 5.0, "/o", "iter_00")],
+                     replay=lambda p: [CLEAN, CLEAN, crash(C)], control=_no_control)
+    (d,) = r["distinct"]
+    assert d["signature"] == "SEGV:walk_tree<-visit" and (d["pristine_tries"], d["pristine_hits"]) == (3, 1)
+    assert r["optimizer_induced"] == []
