@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -315,22 +316,60 @@ def vcs_dir_for(source_dir: str | Path) -> Path | None:
     return None
 
 
-def _vcs_mount_args(vcs_dir: str | Path, project: str) -> list[str]:
-    """Read-only mounts of every .git preserved for ``project``, plus safe.directory."""
+def _vcs_git_dirs(vcs_dir: str | Path, project: str) -> list[tuple[Path, str]]:
+    """Every .git preserved for ``project``: (host path, path relative to the project root)."""
     base = Path(vcs_dir) / project
     if not base.is_dir():
         return []
-    args: list[str] = []
+    found: list[tuple[Path, str]] = []
     for git in sorted(base.rglob(".git")):
         rel = git.relative_to(base)
         if not git.is_dir() or git.is_symlink() or ".git" in rel.parts[:-1]:
             continue
-        args += ["-v", f"{git.absolute()}:/src/{project}/{rel.as_posix()}:ro"]
+        found.append((git.absolute(), rel.as_posix()))
+    return found
+
+
+# Where an upstream compile sees its inputs, read-only: the tree at
+# STAGING/<project>, the preserved .git dirs at VCS_STAGING/<project>/<rel>.
+# The .git dirs cannot be mounted inside the read-only tree mount: runc has to
+# create each mountpoint there and fails with EROFS (the stripped tree has none).
+_STAGING = "/staging"
+_VCS_STAGING = "/staging-vcs"
+
+
+def _vcs_mount_args(vcs_dir: str | Path, project: str) -> list[str]:
+    """Read-only mounts of every .git preserved for ``project``, plus safe.directory."""
+    args: list[str] = []
+    for git, rel in _vcs_git_dirs(vcs_dir, project):
+        args += ["-v", f"{git}:{_VCS_STAGING}/{project}/{rel}:ro"]
     if args:
-        # The mounted repos are owned by the host user, the compile runs as root.
+        # `cp -a` keeps the host owner on the copies, the compile runs as root.
         args += ["-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
                  "-e", "GIT_CONFIG_VALUE_0=*"]
     return args
+
+
+def _staged_compile_command(project: str, git_rels: list[str] | tuple[str, ...] = ()) -> str:
+    """The bash command of a staged upstream compile: a fresh copy of the
+    read-only tree (and of each preserved .git, ``git_rels`` relative to the
+    project root) at $SRC/<project>, then OSS-Fuzz's `compile`.
+
+    OSS-Fuzz build scripts assume a fresh tree (openvpn's build.sh `sed -i`s its
+    sources, samba's configure writes .git/hooks), so each compile gets one and
+    the host tree is never written. The image's WORKDIR may be $SRC/<project>
+    itself, which `rm -rf` deletes and `cp -a` recreates: hence `cd "$wd"`.
+    """
+    q = shlex.quote
+    src = f"/src/{q(project)}"
+    parts = ["wd=$(pwd)", f"rm -rf {src}", f"cp -a {_STAGING}/{q(project)} {src}"]
+    for rel in git_rels:
+        parent = Path(rel).parent.as_posix()
+        if parent != ".":
+            parts.append(f"mkdir -p {src}/{q(parent)}")
+        parts.append(f"cp -a {_VCS_STAGING}/{q(project)}/{q(rel)} {src}/{q(rel)}")
+    parts += ['cd "$wd"', "exec compile"]
+    return " && ".join(parts)
 
 
 def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
@@ -343,10 +382,17 @@ def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
     override (the image's CFLAGS are the build). --network none: the image is
     the artifact of record, so a build may not fetch anything. The fold
     denylist is the same mechanism and file as ARVO's (see arvo_compile_args).
-    ``source_dir=None`` compiles the image's own $SRC/<project> (onboarding).
-    ``vcs_dir`` (see vcs_dir_for): the project's own repositories, stripped from
-    the mounted tree, mounted back read-only where they were; OSS-Fuzz's build
-    sees its clone's .git too (tpm2-tss's bootstrap runs `git describe`).
+    ``source_dir=None`` compiles the image's own $SRC/<project> (onboarding):
+    the bare `compile`, nothing staged.
+
+    With a ``source_dir`` the tree is mounted read-only at /staging/<project>
+    and copied over $SRC/<project> inside the container (_staged_compile_command),
+    as FuzzBench builds are (fb_build.sh): nothing under $SRC/<project> is a
+    mount, so a build never writes the host tree and every build starts from
+    the same one. ``vcs_dir`` (see vcs_dir_for): the project's own repositories,
+    stripped from the tree, mounted read-only at /staging-vcs/<project> and
+    copied back where they were; OSS-Fuzz's build sees its clone's .git too
+    (tpm2-tss's bootstrap runs `git describe`). /out is the only writable mount.
     """
     args = [
         "--network", "none",
@@ -358,12 +404,15 @@ def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
         "-v", f"{Path(__file__).resolve().parent / 'aflpp_fold_denylist.txt'}"
               f":/src/aflpp_fold_denylist.txt:ro",
     ]
-    if source_dir is not None:
-        args += ["-v", f"{Path(source_dir).absolute()}:/src/{project}"]
-    args += ["-v", f"{Path(out_dir).absolute()}:/out"]
-    if source_dir is not None and vcs_dir is not None:
+    if source_dir is None:
+        return args + ["-v", f"{Path(out_dir).absolute()}:/out", image, "compile"]
+    args += ["-v", f"{Path(source_dir).absolute()}:{_STAGING}/{project}:ro",
+             "-v", f"{Path(out_dir).absolute()}:/out"]
+    git_rels: list[str] = []
+    if vcs_dir is not None:
         args += _vcs_mount_args(vcs_dir, project)
-    args += [image, "compile"]
+        git_rels = [rel for _, rel in _vcs_git_dirs(vcs_dir, project)]
+    args += [image, "bash", "-c", _staged_compile_command(project, git_rels)]
     return args
 
 
@@ -372,11 +421,11 @@ def build_prework_rebuild_command(
     cpu: int | str | None = None, ccache_dir: str | None = None,
     sanitizer: str = "address", language: str = "c++",
 ) -> list[str]:
-    """`docker run <prework image> compile` with the modified source mounted.
+    """`docker run <prework image> compile` of the modified source.
 
-    The source is bind-mounted over $SRC/<project> so the image's own build.sh
-    (curated per target during prework) compiles the optimizer's edits rather
-    than the copy baked into the image.
+    ARVO: the source is bind-mounted over $SRC/<project> so the image's own
+    build.sh (curated per target during prework) compiles the optimizer's edits
+    rather than the copy baked into the image.
 
     FuzzBench-parity images (fb-aflpp/...) take a different command entirely:
     copy-in of the tree and FuzzBench's own fuzzer.build() via /fold/fb_build.sh,
@@ -384,8 +433,10 @@ def build_prework_rebuild_command(
     ``ccache_dir`` applies to those images only (main + cmplog build cache, see
     prework/fb_ccache.py); ARVO commands never take one.
 
-    Upstream images (bench-upstream/...) compile with upstream_compile_args;
-    ``sanitizer`` and ``language`` apply to those only.
+    Upstream images (bench-upstream/...) compile with upstream_compile_args: the
+    source is mounted read-only and copied over $SRC/<project> inside the
+    container, so the host tree is never written; ``sanitizer`` and
+    ``language`` apply to those only.
     """
     if is_fuzzbench_image(image):
         return fuzzbench_build_command(

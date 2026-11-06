@@ -79,7 +79,8 @@ def strip_vcs_metadata(tree: str | Path,
     With ``preserve_dir`` (outside ``tree``) each one is MOVED to
     ``<preserve_dir>/<path under tree>`` instead: upstream builds read their
     own .git (tpm2-tss's bootstrap runs `git describe`), so the compile mounts
-    it back read-only (prework_build.upstream_compile_args). A stale copy at
+    it read-only and copies it back into its in-container copy of the tree
+    (prework_build.upstream_compile_args). A stale copy at
     the destination is replaced. A preserve_dir is marked, and any later strip
     leaves a marked directory's contents alone.
     """

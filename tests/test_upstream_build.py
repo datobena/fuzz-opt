@@ -131,15 +131,27 @@ def test_upstream_compile_args_are_oss_fuzz_compile_without_network(tmp_path):
     args = pb.upstream_compile_args(image="bench-upstream/libssh", source_dir=str(tmp_path/"s"), out_dir=str(tmp_path/"o"),
                                     project="libssh", sanitizer="memory", language="c")
     assert args[:2] == ["--network", "none"] and "SANITIZER=memory" in args and "FUZZING_LANGUAGE=c" in args
-    assert not any(a.startswith(("FUZZER_LIB=", "FUZZER=", "CFLAGS=")) for a in args) and args[-2:] == ["bench-upstream/libssh", "compile"]
+    assert not any(a.startswith(("FUZZER_LIB=", "FUZZER=", "CFLAGS=")) for a in args) and args[-4:-1] == ["bench-upstream/libssh", "bash", "-c"]
     assert args == [
         "--network", "none",
         "-e", "FUZZING_ENGINE=afl", "-e", "SANITIZER=memory", "-e", "ARCHITECTURE=x86_64",
         "-e", "FUZZING_LANGUAGE=c", "-e", "AFL_LLVM_DENYLIST=/src/aflpp_fold_denylist.txt",
         "-v", DENYLIST,
-        "-v", f"{tmp_path / 's'}:/src/libssh",
+        "-v", f"{tmp_path / 's'}:/staging/libssh:ro",
         "-v", f"{tmp_path / 'o'}:/out",
-        "bench-upstream/libssh", "compile"]
+        "bench-upstream/libssh", "bash", "-c", pb._staged_compile_command("libssh")]
+    # Nothing under /src/libssh is a mount: the host tree is never written.
+    assert not any(":/src/libssh" in a for a in args)
+
+
+def test_staged_compile_command_copies_the_read_only_tree_in():
+    assert pb._staged_compile_command("libssh") == (
+        "wd=$(pwd) && rm -rf /src/libssh && cp -a /staging/libssh /src/libssh"
+        ' && cd "$wd" && exec compile')
+    # The project name is shell-quoted.
+    assert "rm -rf '/src/a b'" not in pb._staged_compile_command("a b")
+    assert "rm -rf /src/'a b' && cp -a /staging/'a b' /src/'a b'" in \
+        pb._staged_compile_command("a b")
 
 
 def test_upstream_compile_args_without_source_compiles_the_image_tree(tmp_path):
@@ -148,6 +160,12 @@ def test_upstream_compile_args_without_source_compiles_the_image_tree(tmp_path):
                                     sanitizer="address", language="c++")
     assert not any(a.endswith(":/src/libssh") for a in args)
     assert args[-4:] == ["-v", f"{tmp_path / 'o'}:/out", "bench-upstream/libssh", "compile"]
+    # Byte-identical to the pre-staging onboarding argv: the bare `compile`.
+    assert args == [
+        "--network", "none",
+        "-e", "FUZZING_ENGINE=afl", "-e", "SANITIZER=address", "-e", "ARCHITECTURE=x86_64",
+        "-e", "FUZZING_LANGUAGE=c++", "-e", "AFL_LLVM_DENYLIST=/src/aflpp_fold_denylist.txt",
+        "-v", DENYLIST, "-v", f"{tmp_path / 'o'}:/out", "bench-upstream/libssh", "compile"]
 
 
 def test_upstream_compile_args_ignore_build_opt_level(monkeypatch, tmp_path):
@@ -241,7 +259,7 @@ def test_build_command_uses_the_vendored_tree_as_context(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# The project's own .git: moved aside at extract, mounted back read-only
+# The project's own .git: moved aside at extract, mounted read-only, copied in
 # --------------------------------------------------------------------------- #
 GIT_ENV = ["-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
            "-e", "GIT_CONFIG_VALUE_0=*"]
@@ -276,11 +294,29 @@ def test_upstream_compile_args_mount_the_preserved_git_dirs(tmp_path):
               out_dir=str(tmp_path / "o"), project="tpm2-tss", sanitizer="address",
               language="c")
     plain = pb.upstream_compile_args(**kw)
+    assert not any("GIT_CONFIG" in a for a in plain)
     args = pb.upstream_compile_args(**kw, vcs_dir=vcs)
-    assert args == plain[:-2] + [
-        "-v", f"{vcs / 'tpm2-tss' / '.git'}:/src/tpm2-tss/.git:ro",
-        "-v", f"{vcs / 'tpm2-tss' / 'deps' / 'x' / '.git'}:/src/tpm2-tss/deps/x/.git:ro",
-        *GIT_ENV, "bench-upstream/tpm2-tss", "compile"]
+    # Mounted beside the read-only tree, not inside it: runc cannot create a
+    # mountpoint in a read-only bind mount (and the stripped tree has none).
+    assert args == plain[:-4] + [
+        "-v", f"{vcs / 'tpm2-tss' / '.git'}:/staging-vcs/tpm2-tss/.git:ro",
+        "-v", f"{vcs / 'tpm2-tss' / 'deps' / 'x' / '.git'}"
+              ":/staging-vcs/tpm2-tss/deps/x/.git:ro",
+        *GIT_ENV, "bench-upstream/tpm2-tss", "bash", "-c",
+        pb._staged_compile_command("tpm2-tss", [".git", "deps/x/.git"])]
+    assert f"{tmp_path / 's'}:/staging/tpm2-tss:ro" in args
+    out = args.index(f"{tmp_path / 'o'}:/out")       # read-write, no :ro
+    assert args[out - 1] == "-v"
+    assert not any(":/src/tpm2-tss" in a for a in args)
+
+
+def test_staged_compile_command_copies_the_preserved_git_dirs_in():
+    assert pb._staged_compile_command("tpm2-tss", [".git", "deps/x/.git"]) == (
+        "wd=$(pwd) && rm -rf /src/tpm2-tss && cp -a /staging/tpm2-tss /src/tpm2-tss"
+        " && cp -a /staging-vcs/tpm2-tss/.git /src/tpm2-tss/.git"
+        " && mkdir -p /src/tpm2-tss/deps/x"
+        " && cp -a /staging-vcs/tpm2-tss/deps/x/.git /src/tpm2-tss/deps/x/.git"
+        ' && cd "$wd" && exec compile')
 
 
 def test_upstream_compile_args_unchanged_without_preserved_git(tmp_path):
@@ -313,9 +349,11 @@ def test_rebuild_command_mounts_the_source_trees_git(tmp_path):
               sanitizer="address", language="c")
     without = pb.build_prework_rebuild_command(**kw)
     assert not any(a.endswith(":ro") and "/.git" in a for a in without)
+    assert f"{src}:/staging/tpm2-tss:ro" in without
     (st / "vcs" / "tpm2-tss" / ".git").mkdir(parents=True)
     cmd = pb.build_prework_rebuild_command(**kw)
-    assert f"{st / 'vcs' / 'tpm2-tss' / '.git'}:/src/tpm2-tss/.git:ro" in cmd
+    assert f"{st / 'vcs' / 'tpm2-tss' / '.git'}:/staging-vcs/tpm2-tss/.git:ro" in cmd
+    assert cmd[-1] == pb._staged_compile_command("tpm2-tss", [".git"])
     assert cmd.index("GIT_CONFIG_COUNT=1") < cmd.index("bench-upstream/tpm2-tss")
 
 
@@ -331,5 +369,6 @@ def test_broker_build_mounts_the_live_source_trees_git(tmp_path):
                                fuzz_target="t", project="tpm2-tss", cpu=3)
     ctx.build_source_dir = str(tmp_path / "snap" / "tpm2-tss")
     cmd = broker._build_command(ctx)
-    assert f"{tmp_path / 'snap' / 'tpm2-tss'}:/src/tpm2-tss" in cmd
-    assert f"{st / 'vcs' / 'tpm2-tss' / '.git'}:/src/tpm2-tss/.git:ro" in cmd
+    assert f"{tmp_path / 'snap' / 'tpm2-tss'}:/staging/tpm2-tss:ro" in cmd
+    assert f"{st / 'vcs' / 'tpm2-tss' / '.git'}:/staging-vcs/tpm2-tss/.git:ro" in cmd
+    assert not any(":/src/tpm2-tss" in a for a in cmd)

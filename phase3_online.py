@@ -2288,8 +2288,9 @@ def _extract_online_target(entry, source_tree_root, baseline_bin_dir, poc_dir,
         if target_kind.is_upstream(entry):
             # Moved aside, not deleted: upstream builds read their clone's .git
             # (tpm2-tss's bootstrap: `git describe`), and every upstream compile
-            # mounts source_tree/vcs/<project>/.git back read-only
-            # (prework_build.vcs_dir_for). The extract put everything under src/.
+            # mounts source_tree/vcs/<project>/.git read-only and copies it back
+            # into its in-container copy of the tree (prework_build.vcs_dir_for,
+            # upstream_compile_args). The extract put everything under src/.
             tracked_git.strip_vcs_metadata(src_root / "src",
                                            preserve_dir=src_root / "vcs")
         else:
