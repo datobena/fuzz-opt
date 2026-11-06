@@ -421,3 +421,31 @@ def test_a_pre_swap_optimized_crash_that_crashes_on_a_later_pristine_try_is_dist
     (d,) = r["distinct"]
     assert d["signature"] == "SEGV:walk_tree<-visit" and (d["pristine_tries"], d["pristine_hits"]) == (3, 1)
     assert r["optimizer_induced"] == []
+
+
+def test_a_post_swap_crash_whose_bin_is_missing_is_unverified_at_control():
+    """The timeline says iter_01 but iter_01/bin is gone: never "found on
+    pristine", never non_reproducing, never optimizer_induced."""
+    r = tu.summarize([{**rec("optimized", "trial_00", 5.0, "/o", "iter_01"),
+                       "bin_missing": True}],
+                     replay=lambda p: CLEAN3, control=_no_control)
+    assert r["non_reproducing"] == [] and r["optimizer_induced"] == []
+    (u,) = r["unverified"]
+    assert u["stage"] == "control" and u["reason"] == "found binary iter_01/bin missing"
+    assert u["found_is_pristine"] is False
+    assert tu.found_on_pristine({"iter": "iter_01", "bin_missing": True}) is False
+
+
+def test_campaign_artifacts_flags_a_missing_swapped_in_bin(tmp_path):
+    cve = tmp_path / "libssh-upstream-970001"
+    _artifact(cve / "optimized/trial_00/afl_out/default/crashes",
+              "id:000000,sig:11,src:000002,time:120000,execs:9")
+    t = cve / "optimized/online/trials/trial_00"
+    t.mkdir(parents=True)
+    (t / "swap_timeline.json").write_text(json.dumps(
+        [{"trial_id": 0, "iter": 1, "ts": 1, "state_at_swap": {"run_time": "60"}}]))
+    (a,) = tu.campaign_artifacts(cve)
+    assert a["iter"] == "iter_01" and a["bin_missing"] is True and a["own_bin"] is None
+    (t / "iter_01" / "bin").mkdir(parents=True)          # present: the normal answer
+    (a,) = tu.campaign_artifacts(cve)
+    assert a["bin_missing"] is False and Path(a["own_bin"]) == t / "iter_01" / "bin"

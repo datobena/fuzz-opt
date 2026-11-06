@@ -53,6 +53,29 @@ def _swap_run_time(entry: dict) -> float | None:
         return None
 
 
+def live_iter(online_dir: str | os.PathLike, trial_start: float,
+              crash_t: float) -> str:
+    """The iteration (``iter_NN``) the swap timeline says the trial was
+    executing at ``crash_t``, ``iter_00`` before its first swap -- whether or
+    not that iteration's archived bin dir still exists. See live_binary."""
+    online_dir = Path(online_dir)
+    wall = trial_start + crash_t
+    try:
+        timeline = json.loads((online_dir / "swap_timeline.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        timeline = []
+    m = re.fullmatch(r"trial_(\d+)", online_dir.name)
+    if m:
+        tid = int(m.group(1))
+        timeline = [e for e in timeline if e.get("trial_id", tid) == tid]
+    live = None
+    for entry in sorted(timeline, key=lambda e: e.get("ts", 0)):
+        rt = _swap_run_time(entry)
+        if (crash_t >= rt) if rt is not None else (entry.get("ts", 0) <= wall):
+            live = entry.get("iter")
+    return "iter_00" if live is None else f"iter_{int(live):02d}"
+
+
 def live_binary(online_dir: str | os.PathLike, trial_start: float,
                 crash_t: float,
                 baseline_bin: str | os.PathLike) -> tuple[Path, str]:
@@ -83,24 +106,14 @@ def live_binary(online_dir: str | os.PathLike, trial_start: float,
     (php r2 trial_02's run_time fell 60 s, 305 s, 574 s behind wall-clock at
     its three swaps). A crash in the first minutes after a swap can then
     resolve to the previous round. Never the other way round.
+
+    A swap whose ``iter_NN/bin`` is missing also answers ``(baseline_bin,
+    "iter_00")``; callers that must tell that apart use live_iter.
     """
     online_dir = Path(online_dir)
     baseline_bin = Path(baseline_bin)
-    wall = trial_start + crash_t
-    try:
-        timeline = json.loads((online_dir / "swap_timeline.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        timeline = []
-    m = re.fullmatch(r"trial_(\d+)", online_dir.name)
-    if m:
-        tid = int(m.group(1))
-        timeline = [e for e in timeline if e.get("trial_id", tid) == tid]
-    live = None
-    for entry in sorted(timeline, key=lambda e: e.get("ts", 0)):
-        rt = _swap_run_time(entry)
-        if (crash_t >= rt) if rt is not None else (entry.get("ts", 0) <= wall):
-            live = entry.get("iter")
-    if live is None:
+    it = live_iter(online_dir, trial_start, crash_t)
+    if it == "iter_00":
         return baseline_bin, "iter_00"
-    d = online_dir / f"iter_{int(live):02d}" / "bin"
-    return (d, f"iter_{int(live):02d}") if d.is_dir() else (baseline_bin, "iter_00")
+    d = online_dir / it / "bin"
+    return (d, it) if d.is_dir() else (baseline_bin, "iter_00")

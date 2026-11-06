@@ -65,7 +65,7 @@ from lib import afl  # noqa: E402
 from lib import target_kind  # noqa: E402
 from lib.crash_classify import (ASAN_REPLAY_OPTIONS, docker_env_args,  # noqa: E402
                                 replay_sanitizer_env, sanitizer_identity)
-from lib.live_binary import live_binary, trial_online_dir  # noqa: E402
+from lib.live_binary import live_binary, live_iter, trial_online_dir  # noqa: E402
 from lib.provenance import _FRAME, _OPTIMIZER_INSERTED, _RUNTIME  # noqa: E402
 
 logger = logging.getLogger("triage_upstream")
@@ -254,8 +254,11 @@ def _group(key: tuple, rows: list[dict], report_field: str) -> dict:
 def found_on_pristine(record: dict) -> bool:
     """True when the binary that found the artifact is the pristine binary:
     the record says so (``found_is_pristine``), or its live binary is
-    ``iter_00`` (lib.live_binary's answer before the first swap, with no swap
-    timeline, or when the swapped-in bin dir is missing)."""
+    ``iter_00`` (lib.live_binary's answer before the first swap or with no swap
+    timeline). A record whose swapped-in bin dir is missing (``bin_missing``)
+    is never found on pristine: the binary that found it is unknown."""
+    if record.get("bin_missing"):
+        return False
     return bool(record.get("found_is_pristine")) or record.get("iter") == "iter_00"
 
 
@@ -264,7 +267,9 @@ def summarize(records: Iterable[dict], replay: Callable,
     """The 0-day report for one campaign. Pure apart from the injected replays.
 
     ``records``: per-artifact ``{"arm", "trial", "time_s", "path"}`` (optional
-    ``"iter"``: the optimized arm's live binary id). ``replay(path)`` runs the
+    ``"iter"``: the optimized arm's live binary id; ``"bin_missing"``: that
+    iteration's archived ``bin`` dir is gone, so the artifact is ``unverified``
+    at the control stage when clean on pristine). ``replay(path)`` runs the
     artifact on the PRISTINE binary and returns its runs, a list of
     ``{"status": crash|clean|unparsed|infra, "report"|"error"}`` (a single dict
     is one run). ``control(record)`` runs an optimized-arm artifact on the
@@ -286,6 +291,11 @@ def summarize(records: Iterable[dict], replay: Callable,
                        reason=pr["reason"], error=pr["error"])
         elif r["arm"] != "optimized":
             row.update(verdict="non_reproducing", reason="clean on every pristine try")
+        elif r.get("bin_missing"):
+            # Post-swap, but the binary that found it is gone: no control is
+            # possible, and it was not the pristine binary.
+            row.update(verdict="unverified", stage="control",
+                       reason=f"found binary {r.get('iter')}/bin missing", error=None)
         elif found_on_pristine(r):
             # Found before the trial's first swap (or with no live binary on
             # record): the binary that found it IS the pristine binary, so a
@@ -522,13 +532,20 @@ def campaign_artifacts(cve_dir: str | Path) -> list[dict]:
                 p = next(iter(sorted(default.glob(f"crashes*/{glob_escape(a['artifact'])}"))), None)
                 if p is None:
                     continue
+                missing = False
                 if arm == "optimized":
-                    own, it = live_binary(trial_online_dir(online, trial.name),
-                                          meta.get("start_time", 0) or 0, a["timestamp_s"], base_bin)
+                    tdir = trial_online_dir(online, trial.name)
+                    t0 = meta.get("start_time", 0) or 0
+                    own, it = live_binary(tdir, t0, a["timestamp_s"], base_bin)
+                    want = live_iter(tdir, t0, a["timestamp_s"])
+                    if want != it:
+                        # Swapped in, but its archived bin dir is gone.
+                        own, it, missing = None, want, True
                 else:
                     own, it = base_bin, None
                 out.append({"arm": arm, "trial": trial.name, "time_s": a["timestamp_s"],
-                            "path": str(p), "own_bin": str(own), "iter": it})
+                            "path": str(p), "own_bin": None if own is None else str(own),
+                            "iter": it, "bin_missing": missing})
     return sorted(out, key=lambda r: (r["arm"] != "baseline", r["trial"], r["time_s"]))
 
 
@@ -699,8 +716,10 @@ def triage_entry(experiment_id: str, entry: dict, cve_dir: Path, args) -> dict:
                                   cpu=cpu_for(0), timeout=args.timeout, tries=args.tries)
 
     pristine_dir = base_bin.resolve()
-    records = [{**{k: a[k] for k in ("arm", "trial", "time_s", "path", "iter")},
-                "found_is_pristine": Path(a["own_bin"]).resolve() == pristine_dir}
+    records = [{**{k: a[k] for k in ("arm", "trial", "time_s", "path", "iter",
+                                     "bin_missing")},
+                "found_is_pristine": bool(a["own_bin"])
+                and Path(a["own_bin"]).resolve() == pristine_dir}
                for a in arts]
     report = summarize(records, replay=lambda path: cache[path], control=control)
     pins, src = _campaign_pins_with_source(cve_dir, entry.get("ossfuzz_project"))
