@@ -541,3 +541,30 @@ def test_main_forwards_local_id_to_phases_3_and_4(monkeypatch, tmp_path):
                                       "--local-id", "970002"])
     run_benchmark.main()
     assert seen == {3: ("libssh", 970002), 4: ("libssh", 970002)}
+
+
+# --------------------------------------------------------------------------- #
+# round provenance records what the gate / crash filter / profiler ran under
+# --------------------------------------------------------------------------- #
+def test_round_sanitizer_record_upstream_and_arvo(tmp_path):
+    (tmp_path / "t.options").write_text("[asan]\nfoo=1\n")
+    entry = {"kind": "upstream", "sanitizer": "address", "language": "c++"}
+    rec = phase3_online.round_sanitizer_record(
+        phase3_online.upstream_round_env(entry, "t", str(tmp_path)))
+    assert rec["sanitizer"] == "address" and rec["language"] == "c++"
+    assert rec["sanitizer_env"] == dict(
+        afl_launch.upstream_sanitizer_env(str(tmp_path), "t", "address"))
+    assert rec["sanitizer_env"]["ASAN_OPTIONS"].endswith("detect_leaks=0")
+    for e in ({"kind": "arvo"}, {"kind": "fuzzbench"}):
+        assert phase3_online.round_sanitizer_record(
+            phase3_online.upstream_round_env(e, "t", str(tmp_path))) == {
+            "sanitizer": None, "language": None, "sanitizer_env": None}
+
+
+def test_every_round_provenance_write_carries_the_sanitizer_record():
+    import inspect
+    import re
+    src = inspect.getsource(phase3_online)
+    writes = len(re.findall(r"write_json\(os\.path\.join\([^\n]*round_provenance\.json", src))
+    assert writes == 5
+    assert src.count("**ctx.round_sanitizer,") == writes

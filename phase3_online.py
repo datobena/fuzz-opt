@@ -969,6 +969,17 @@ def round_sanitizer_env(round_env: dict) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+def round_sanitizer_record(round_env: dict) -> dict:
+    """What a round's gate, crash filter and profiler ran under, for
+    round_provenance.json: ``sanitizer``, ``language`` and ``sanitizer_env``
+    (the dict round_sanitizer_env hands them). All None for ARVO and
+    FuzzBench, which pass none of these and keep their defaults."""
+    round_env = round_env or {}
+    return {"sanitizer": round_env.get("PHASE2_SANITIZER"),
+            "language": round_env.get("PHASE2_FUZZING_LANGUAGE"),
+            "sanitizer_env": round_sanitizer_env(round_env)}
+
+
 def _san_kw(sanitizer_env: dict | None) -> dict:
     """``{"sanitizer_env": ...}`` only when there is one: ARVO/FuzzBench calls
     keep their exact argument lists."""
@@ -1112,6 +1123,9 @@ class RoundContext:
     # agent-not-removed-wait): not attempts, so the campaign record counts them
     # apart (rounds_attempted / rounds_waiting_for_orphans).
     orphan_wait_rounds: int = 0
+    # The current round's round_sanitizer_record, written into every
+    # round_provenance.json it produces.
+    round_sanitizer: dict = field(default_factory=lambda: round_sanitizer_record({}))
 
 
 @dataclass
@@ -1350,6 +1364,7 @@ def _end_agent_not_removed_round(ctx: RoundContext, iter_n: int, *, diff_dir: st
     iter_dir = os.path.dirname(diff_dir)
     provenance.write_json(os.path.join(iter_dir, "round_provenance.json"), {
         "iter": iter_n,
+        **ctx.round_sanitizer,
         "outcome": AGENT_NOT_REMOVED_OUTCOME,
         "speedup": None,
         "applied": False,
@@ -1409,6 +1424,7 @@ def _orphans_cleared(ctx: RoundContext, iter_n: int) -> bool:
         iter_dir = os.path.join(ctx.online_dir, f"iter_{iter_n:02d}")
         provenance.write_json(os.path.join(iter_dir, "round_provenance.json"), {
             "iter": iter_n,
+            **ctx.round_sanitizer,
             "outcome": AGENT_NOT_REMOVED_WAIT_OUTCOME,
             "speedup": None, "applied": False, "built": False,
             "agent_started": False,
@@ -1461,6 +1477,7 @@ def _end_prebuild_failed_round(ctx: RoundContext, iter_n: int, *, diff_dir: str,
     bug_survived = "no-poc" if not ctx.poc_path else "unchecked"
     provenance.write_json(os.path.join(iter_dir, "round_provenance.json"), {
         "iter": iter_n,
+        **ctx.round_sanitizer,
         "outcome": outcome,
         "speedup": None,
         "applied": False,
@@ -1516,6 +1533,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     # None for ARVO and FuzzBench.
     upstream_env = upstream_round_env(ctx.entry, ctx.fuzz_target, ctx.optimized_bin_dir)
     sanitizer_env = round_sanitizer_env(upstream_env)
+    ctx.round_sanitizer = round_sanitizer_record(upstream_env)
     # Tag every ledger row this round writes with ITS trial and round, on this
     # thread. Thread-local beats the environment, and _drive tags the thread
     # iter=0 before the first round -- so the old set_round(env) here never took
@@ -1763,6 +1781,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         # No source-tree operation: a previous writer may still be alive.
         provenance.write_json(os.path.join(iter_dir, 'round_provenance.json'), {
             'iter': iter_n, 'outcome': 'source-scope-quarantined',
+            **ctx.round_sanitizer,
             'applied': False, 'built': False, 'reason': str(exc)})
         _record_ledger(ctx, iter_n, diff_dir, 'source-scope-quarantined', None)
         logger.error('online iter %d: %s; stopping this optimizer', iter_n, exc)
@@ -1915,6 +1934,7 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
     # round is evidence about the target and is currently discarded.
     provenance.write_json(os.path.join(diff_dir, "..", "round_provenance.json"), {
         "iter": iter_n,
+        **ctx.round_sanitizer,
         "outcome": outcome,
         "speedup": speedup,
         "applied": opt_applied,

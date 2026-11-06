@@ -132,7 +132,8 @@ def test_replay_profile_reuses_real_fuzzer_profile_helpers():
     assert hasattr(profile.rfp, "_write_perf_reports")
 
 
-def test_run_replay_profile_writes_reports_and_metadata(tmp_path, monkeypatch):
+@pytest.mark.parametrize("upstream", [False, True])
+def test_run_replay_profile_writes_reports_and_metadata(tmp_path, monkeypatch, upstream):
     profile = _load_module("replay_fuzzer_profile")
 
     corpus = tmp_path / "fixed"
@@ -169,10 +170,23 @@ def test_run_replay_profile_writes_reports_and_metadata(tmp_path, monkeypatch):
         memory="4g",
         shm_size="2g",
     )
+    if upstream:
+        args.sanitizer, args.language = "undefined", "c"
+        args.sanitizer_env = ["ASAN_OPTIONS=x=1:detect_leaks=0", "UBSAN_OPTIONS=u=1"]
 
     rc = profile.run_replay_profile(args)
     assert rc == 0
     assert "hashtab_map" in (artifact_dir / "flat.txt").read_text()
+    md = json.loads((artifact_dir / "metadata.json").read_text())
+    # What the profile ran under: the exported options, defaults included.
+    if upstream:
+        assert (md["sanitizer"], md["language"]) == ("undefined", "c")
+        assert md["sanitizer_env"]["ASAN_OPTIONS"] == "x=1:detect_leaks=0"
+        assert md["sanitizer_env"]["UBSAN_OPTIONS"] == "u=1"
+        assert md["sanitizer_env"]["MSAN_OPTIONS"] == "symbolize=0"
+    else:
+        assert (md["sanitizer"], md["language"]) == (None, None)
+        assert md["sanitizer_env"] == profile.profile_sanitizer_env()
     assert (artifact_dir / "callgraph.txt").read_text() == "callgraph"
 
     metadata = json.loads((artifact_dir / "metadata.json").read_text())

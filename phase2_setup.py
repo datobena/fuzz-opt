@@ -1630,6 +1630,11 @@ def run_baseline_profile(*, replay_profile, out_dir, corpus_dir, profile_dir,
         # same ones the broker gate exports, so hotspots and gate agree.
         for name, value in sorted(json.loads(env["PHASE2_SANITIZER_ENV"]).items()):
             cmd += ["--sanitizer-env", f"{name}={value}"]
+    # Recorded in the profile's metadata.json (upstream rounds only).
+    if env.get("PHASE2_SANITIZER"):
+        cmd += ["--sanitizer", env["PHASE2_SANITIZER"]]
+    if env.get("PHASE2_FUZZING_LANGUAGE"):
+        cmd += ["--language", env["PHASE2_FUZZING_LANGUAGE"]]
     rp = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
                         env=proc_env if proc_env is not None else dict(os.environ),
                         timeout=int(min_sample_seconds) + 1800)

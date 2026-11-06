@@ -207,6 +207,12 @@ def test_phase2_profiler_call_passes_the_kinds_sanitizer_env(monkeypatch, tmp_pa
     assert cmd[len(plain):] == ["--sanitizer-env", "ASAN_OPTIONS=a=1",
                                 "--sanitizer-env", "MSAN_OPTIONS=m=1",
                                 "--sanitizer-env", "UBSAN_OPTIONS=u=1"]
+    assert "--sanitizer" not in plain and "--language" not in plain
+    cmd = _profile_argv(monkeypatch, tmp_path, {
+        "PHASE2_SANITIZER": "memory", "PHASE2_FUZZING_LANGUAGE": "c",
+        "PHASE2_SANITIZER_ENV": json.dumps({"ASAN_OPTIONS": "a=1"})})
+    assert cmd[len(plain):] == ["--sanitizer-env", "ASAN_OPTIONS=a=1",
+                                "--sanitizer", "memory", "--language", "c"]
 
 
 def test_phase2_sandboxed_call_passes_sanitizer_context(monkeypatch):

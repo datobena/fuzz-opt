@@ -1135,10 +1135,13 @@ def _prebuild_round_ctx(tmp_path):
     return ctx
 
 
-def test_prebuild_failure_ends_the_round_without_an_agent(monkeypatch, tmp_path):
+@pytest.mark.parametrize("kind", ["arvo", "upstream"])
+def test_prebuild_failure_ends_the_round_without_an_agent(monkeypatch, tmp_path, kind):
     """optimize_and_build raises PrebuildFailedError before any agent session;
     run_round must record outcome prebuild-failed in every place a measured
-    round records its outcome, and report it as NOT evidence."""
+    round records its outcome, and report it as NOT evidence. The round's
+    sanitizer record is in its provenance (upstream: the entry's sanitizer and
+    the trials' options; ARVO: null)."""
     monkeypatch.setattr(phase3_online.config, "ONLINE_FIXED_MUTATION_CORPUS", True)
     rc = {k: 1 for k in ("harvested", "checked_count", "crashers_removed",
                          "tuning_count", "units_per_s", "budget_secs", "smoke_count")}
@@ -1164,8 +1167,27 @@ def test_prebuild_failure_ends_the_round_without_an_agent(monkeypatch, tmp_path)
     monkeypatch.setattr(phase2_setup, "optimize_and_build", no_prebuild)
 
     ctx = _prebuild_round_ctx(tmp_path)
+    if kind == "upstream":
+        live = tmp_path / "live_bin"
+        live.mkdir()
+        (live / "xml.options").write_text("[asan]\nallocator_may_return_null=1\n")
+        ctx.entry = {**ctx.entry, "kind": "upstream", "sanitizer": "undefined",
+                     "language": "c"}
+        ctx.optimized_bin_dir = str(live)
     result = phase3_online.run_round(ctx, phase3_online.OnlineState(), 4)
 
+    prov = json.loads((tmp_path / "trial_02" / "iter_04" / "round_provenance.json")
+                      .read_text())
+    if kind == "upstream":
+        from lib import afl_launch
+        assert prov["sanitizer"] == "undefined" and prov["language"] == "c"
+        assert prov["sanitizer_env"] == dict(
+            afl_launch.upstream_sanitizer_env(str(live), "xml", "undefined"))
+        assert prov["sanitizer_env"]["ASAN_OPTIONS"].endswith("detect_leaks=0")
+        assert "allocator_may_return_null=1" in prov["sanitizer_env"]["ASAN_OPTIONS"]
+    else:
+        assert (prov["sanitizer"], prov["language"], prov["sanitizer_env"]) == \
+            (None, None, None)
     assert result == (False, None, False, False)  # rejected, not evidence, keep going
     assert reverted == [False]
     assert summaries == [4]
