@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -156,10 +157,36 @@ def _write(entry: dict, a, verdict: dict) -> dict:
     return verdict
 
 
-def write_group_failed(entry: dict, a) -> dict:
+def failure_reason(verdict: dict) -> str:
+    """Why a verdict failed: its driver error (e.g. "timeout"), else the first
+    failed stage's name and reason."""
+    st = verdict.get("stages") or {}
+    drv = st.get("driver") or {}
+    if drv and not drv.get("ok") and drv.get("error"):
+        return str(drv["error"])
+    for name, v in st.items():
+        if not (v or {}).get("ok"):
+            why = v.get("reason") or v.get("error")
+            return f"{name}: {why}" if why else name
+    return "no stage recorded"
+
+
+def write_group_failed(entry: dict, a, builder: str = "?",
+                       builder_error: str = "?") -> dict:
     """NOT READY without running: the group's builder could not build the baseline."""
     return _write(entry, a, {"ok": False, "driver_secs": 0, "stages": {
-        "driver": {"ok": False, "error": GROUP_FAILED}}})
+        "driver": {"ok": False, "error": GROUP_FAILED, "builder": builder,
+                   "builder_error": builder_error}}})
+
+
+class WorkersDied(RuntimeError):
+    """A worker died outside one entry's run; raised by collect after the
+    cleanup, carrying the (entry, ok) list so the summary is still printed."""
+
+    def __init__(self, errors: list[BaseException], done: list):
+        super().__init__(f"{len(errors)} worker(s) died: "
+                         + "; ".join(f"{type(e).__name__}: {e}" for e in errors))
+        self.errors, self.done = errors, done
 
 
 def run_one(entry: dict, core: int, a, build_cpus: str | None = None,
@@ -261,6 +288,7 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
     builder = {k: g[0] for k, g in groups.items()}   # the group's current builder
     status: dict[tuple, str] = {}                     # "ok" | "failed"; absent = waiting
     source: dict[tuple, Path] = {}
+    failed_by: dict[tuple, tuple[str, str]] = {}      # builder fuzz_target, reason
     kept: list[dict] = []                             # builder dirs, deleted at the end
     done: list[tuple[dict, bool]] = []
     running = [0]
@@ -270,6 +298,7 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
         """The group's builder ``b`` has finished with ``verdict`` (lock held)."""
         if not build_ok(verdict):
             status[k] = "failed"
+            failed_by[k] = (b["fuzz_target"], failure_reason(verdict))
             return
         d = exp_dir_for(b, results)
         if (d / "baseline" / "bin" / b["fuzz_target"]).is_file():
@@ -320,7 +349,7 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
             verdict, ok = {}, False
             try:
                 if mode == "failed":
-                    verdict = write_group_failed(e, a)
+                    verdict = write_group_failed(e, a, *failed_by[k])
                 else:
                     try:
                         verdict = runner(e, core, a, build_cpus=bc, baseline_from=src)
@@ -338,8 +367,8 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
                         resolve(k, e, verdict)
                     cv.notify_all()
             done.append((e, ok))
-            how = (" (group build failed, not run)" if mode == "failed"
-                   else " (reused baseline)" if src else "")
+            how = (" (group build failed: builder %s: %s; not run)" % failed_by[k]
+                   if mode == "failed" else " (reused baseline)" if src else "")
             print(f"{'READY' if ok else 'NOT READY'}  {e['ossfuzz_project']}  "
                   f"{e['sanitizer']}  {e['fuzz_target']}  {round(time.time() - t0)}s{how}",
                   flush=True)
@@ -349,7 +378,10 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
     def guarded(i: int) -> None:
         try:
             work(i)
-        except BaseException as ex:  # noqa: BLE001 - re-raised below
+        except BaseException as ex:  # noqa: BLE001 - re-raised after the cleanup
+            print(f"[worker {i}] died: {type(ex).__name__}: {ex}", flush=True)
+            traceback.print_exc()
+            sys.stderr.flush()
             errors.append(ex)
             with cv:
                 cv.notify_all()
@@ -360,8 +392,6 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
         t.start()
     for t in threads:
         t.join()
-    if errors:
-        raise errors[0]
     if not keep:
         for b in kept:
             delete_exp_dir(b, results)
@@ -369,6 +399,8 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
     for e in ordered:
         if id(e) not in ran:
             done.append((e, bool(_stored_verdict(a, e).get("ok"))))
+    if errors:
+        raise WorkersDied(errors, done)
     return done
 
 
@@ -403,7 +435,12 @@ def main() -> int:
                   f"\t{e['local_id']}")
         return 0
 
-    done = collect(ordered, todo, a)
+    try:
+        done = collect(ordered, todo, a)
+    except WorkersDied as e:
+        print(summarize(e.done))
+        print(f"error: {e}", file=sys.stderr, flush=True)
+        return 1
     print(summarize(done))
     return 0
 

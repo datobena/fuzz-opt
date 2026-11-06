@@ -329,7 +329,8 @@ def test_builder_failed_dependents_written_without_running(tmp_path, monkeypatch
         e = next(e for e in G if e["fuzz_target"] == t)
         v = pub.json.loads(pub.result_path_for(a.out_dir, e).read_text())
         assert v["ok"] is False
-        assert v["stages"]["driver"] == {"ok": False, "error": "group baseline build failed"}
+        assert v["stages"]["driver"] == {"ok": False, "error": "group baseline build failed",
+                                         "builder": "a1", "builder_error": "extract"}
     assert dict((e["fuzz_target"], ok) for e, ok in done)["b2"] is True
 
 
@@ -404,3 +405,85 @@ def test_runner_exception_is_one_not_ready_entry(tmp_path, monkeypatch):
     assert "RuntimeError: bad" in v["stages"]["driver"]["error"]
     # b1's build "failed" (no verdict stages): b2 written without running.
     assert [ok for _, ok in done] == [False, False]
+
+
+def test_failure_reason():
+    assert pub.failure_reason({"stages": {"driver": {"ok": False, "error": "timeout"}}}) \
+        == "timeout"
+    assert pub.failure_reason({"stages": {"image": {"ok": True}, "extract": {
+        "ok": False, "reason": "extract failed or baseline build failed; see log"}}}) \
+        == "extract: extract failed or baseline build failed; see log"
+    assert pub.failure_reason({"stages": {"aflbuild": {"ok": False}}}) == "aflbuild"
+    assert pub.failure_reason({}) == "no stage recorded"
+
+
+def test_builder_timeout_named_in_dependents(tmp_path, monkeypatch, capsys):
+    inner = _Runner(tmp_path, delay=0)
+
+    def runner(e, core, a, **k):
+        if e["fuzz_target"] == "a1":
+            return {"ok": False, "stages": {"driver": {"ok": False, "error": "timeout"}}}
+        return inner(e, core, a, **k)
+    _, _, a = _run(tmp_path, G[:3], monkeypatch, runner=runner)
+    for e in G[1:3]:
+        drv = pub.json.loads(pub.result_path_for(a.out_dir, e).read_text())["stages"]["driver"]
+        assert drv["error"] == "group baseline build failed"
+        assert drv["builder"] == "a1" and drv["builder_error"] == "timeout"
+    out = capsys.readouterr().out
+    assert "a2" in out and "builder a1: timeout" in out
+
+
+def test_dead_worker_logged_at_once_rest_still_run(tmp_path, monkeypatch, capsys):
+    # b1 fails its build, so b2 is written without running -- and that write
+    # raises: b2's worker dies outside any runner. a1 (on the other worker)
+    # only finishes once the death has been printed, so the line is printed at
+    # once, not at join.
+    real = pub._write
+
+    def write(e, a, v):
+        if e["fuzz_target"] == "b2":
+            raise OSError("disk full")
+        return real(e, a, v)
+    monkeypatch.setattr(pub, "_write", write)
+    inner = _Runner(tmp_path, fail={"b1"}, delay=0)
+    out, err, seen = [], [], []
+
+    def runner(e, core, a, **k):
+        if e["fuzz_target"] == "a1":
+            for _ in range(500):
+                o, x = capsys.readouterr()
+                out.append(o)
+                err.append(x)
+                if "died" in "".join(out):
+                    seen.append(True)
+                    break
+                pub.time.sleep(0.01)
+        return inner(e, core, a, **k)
+    monkeypatch.setattr(pub, "ROOT", tmp_path)
+    a = _A(tmp_path, smoke_cpus="0,1")
+    ordered = pub.order_entries(G[:5])
+    with pytest.raises(pub.WorkersDied) as ei:
+        pub.collect(ordered, pub.pending(ordered, a.out_dir, False), a, runner=runner)
+    o, x = capsys.readouterr()
+    out, err = "".join(out) + o, "".join(err) + x
+    assert seen == [True]                      # printed while a1 was still running
+    assert "] died: OSError: disk full" in out and "Traceback" in err
+    # The surviving worker finished group a; the summary still has it.
+    oks = dict((e["fuzz_target"], ok) for e, ok in ei.value.done)
+    assert oks["a1"] and oks["a2"] and oks["a3"] and not oks["b1"] and not oks["b2"]
+    assert "a: 3" in pub.summarize(ei.value.done)
+    # Cleanup still ran: a's builder dir is gone.
+    assert not pub.exp_dir_for(G[0], tmp_path / "results").exists()
+
+
+def test_main_prints_summary_then_exits_1_when_a_worker_died(tmp_path, monkeypatch, capsys):
+    m = tmp_path / "m.json"
+    m.write_text(pub.json.dumps(G[:2]))
+    done = [(G[0], True), (G[1], False)]
+    monkeypatch.setattr(pub, "collect", lambda *a, **k: (_ for _ in ()).throw(
+        pub.WorkersDied([OSError("x")], done)))
+    monkeypatch.setattr(sys, "argv", ["p", "--manifest", str(m),
+                                      "--out-dir", str(tmp_path / "out")])
+    assert pub.main() == 1
+    out, err = capsys.readouterr()
+    assert "a: 1 READY" in out and "worker(s) died" in err
