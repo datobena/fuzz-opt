@@ -360,6 +360,99 @@ def test_preflight_extract_fails_when_the_baseline_build_fails(monkeypatch, tmp_
                       )["stages"]["extract"]["ok"] is False
 
 
+def _builder_exp(root, fuzz_target=UP2["fuzz_target"]):
+    """A fake builder experiment dir: a built baseline and an extracted tree."""
+    src = root / "results" / "preflight-libssh" / "libssh-upstream-970001"
+    (src / "baseline" / "bin").mkdir(parents=True)
+    (src / "baseline" / "bin" / fuzz_target).write_bytes(b"bin")
+    (src / "baseline" / "bin" / "other_fuzzer").write_bytes(b"bin2")
+    tree = src / "optimized" / "online" / "source_tree"
+    (tree / "src" / "libssh").mkdir(parents=True)
+    (tree / "src" / "libssh" / "a.c").write_text("int a;\n")
+    (tree / "src" / "libssh" / "link").symlink_to("a.c")
+    (tree / "vcs" / "libssh" / ".git").mkdir(parents=True)
+    (tree / "vcs" / "libssh" / ".git" / "HEAD").write_text("ref\n")
+    (tree / "vcs" / preflight_online.tracked_git.PRESERVED_MARKER).touch()
+    return src
+
+
+def _snapshot(d):
+    return sorted((str(p.relative_to(d)), p.is_symlink(),
+                   p.read_bytes() if p.is_file() and not p.is_symlink() else None)
+                  for p in d.rglob("*"))
+
+
+def test_preflight_baseline_from_copies_and_leaves_the_source(monkeypatch, tmp_path):
+    src = _builder_exp(tmp_path)
+    before = _snapshot(src)
+    exp = tmp_path / "results" / "preflight-libssh" / "libssh-upstream-970002"
+    _preflight_stubs(monkeypatch, exp)
+    monkeypatch.setattr(preflight_online.phase3_online, "_extract_online_target",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("extracted")))
+    seen = {}
+
+    def seeds(exp_dir, bin_dir, t, entry=None):
+        seen["seeds"] = bin_dir
+        m = Path(exp_dir) / "seed_corpus" / "merged"
+        m.mkdir(parents=True)
+        (m / "input").write_bytes(b"input\n")
+        return 0
+    monkeypatch.setattr(preflight_online.phase3_online, "_stage_online_seed_corpus", seeds)
+    monkeypatch.setattr(preflight_online.phase3_online, "_preflight_profile",
+                        lambda **k: seen.setdefault("profile", k) and (False, "stop"))
+    res = preflight_online.preflight("libssh", 3, 5, False, local_id=970002,
+                                     baseline_from=str(src))
+    ex = res["stages"]["extract"]
+    assert ex["ok"] is True and ex["reused_from"] == str(src)
+    tree = exp / "optimized" / "online" / "source_tree"
+    assert (exp / "baseline" / "bin" / UP2["fuzz_target"]).read_bytes() == b"bin"
+    assert (tree / "src" / "libssh" / "link").is_symlink()          # symlinks kept
+    assert (tree / "vcs" / "libssh" / ".git" / "HEAD").is_file()    # vcs/ copied
+    # Real copies, not hardlinks.
+    assert (tree / "src" / "libssh" / "a.c").stat().st_ino != \
+        (src / "optimized" / "online" / "source_tree" / "src" / "libssh" / "a.c").stat().st_ino
+    # Seeds, source, profile run as before, on this entry's own copies.
+    assert res["stages"]["source"]["ok"] and res["stages"]["seeds"]["ok"]
+    assert seen["seeds"] == str(exp / "baseline" / "bin")
+    assert seen["profile"]["baseline_bin_dir"] == str(exp / "baseline" / "bin")
+    assert res["stages"]["profile"]["ok"] is False
+    # The source dir is untouched (stripvcs ran on the copy).
+    assert _snapshot(src) == before
+
+
+def test_preflight_baseline_from_lacking_the_harness_fails_extract(monkeypatch, tmp_path):
+    src = _builder_exp(tmp_path, fuzz_target="other")
+    exp = tmp_path / "results" / "preflight-libssh" / "libssh-upstream-970002"
+    _preflight_stubs(monkeypatch, exp)
+    res = preflight_online.preflight("libssh", 3, 5, False, local_id=970002,
+                                     baseline_from=str(src))
+    ex = res["stages"]["extract"]
+    assert ex["ok"] is False and ex["reused_from"] == str(src)
+    assert ex["reason"] == f"reused baseline lacks {UP2['fuzz_target']}"
+    assert list(res["stages"]) == ["image", "extract"]
+
+
+def test_preflight_baseline_from_missing_dir_or_self(monkeypatch, tmp_path):
+    exp = tmp_path / "results" / "preflight-libssh" / "libssh-upstream-970002"
+    _preflight_stubs(monkeypatch, exp)
+    res = preflight_online.preflight("libssh", 3, 5, False, local_id=970002,
+                                     baseline_from=str(tmp_path / "nope"))
+    assert res["stages"]["extract"]["ok"] is False
+    assert "baseline copy failed" in res["stages"]["extract"]["reason"]
+    res = preflight_online.preflight("libssh", 3, 5, False, local_id=970002,
+                                     baseline_from=str(exp))
+    assert "own experiment dir" in res["stages"]["extract"]["reason"]
+
+
+def test_preflight_baseline_from_is_upstream_only(monkeypatch, tmp_path):
+    exp = tmp_path / "results" / "preflight-mruby" / "x"
+    _preflight_stubs(monkeypatch, exp, entry=FB)
+    res = preflight_online.preflight("mruby", 3, 5, False,
+                                     baseline_from=str(_builder_exp(tmp_path)))
+    assert res["ok"] is False and "extract" not in res["stages"]
+    assert "upstream entries only" in res["stages"]["exception"]["error"]
+
+
 # --------------------------------------------------------------------------- #
 # bootstrap
 # --------------------------------------------------------------------------- #

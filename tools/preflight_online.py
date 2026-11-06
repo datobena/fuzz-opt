@@ -7,6 +7,8 @@ reporting where it breaks:
 
   1. prework image present
   2. extract  -- baseline bin + editable source + PoC out of the ARVO image
+                 (upstream with --baseline-from: copied from an already-built
+                 harness of the same project and sanitizer)
   3. poc      -- the PoC reproduces on the HISTORICAL binary
   4. source   -- the extracted tree holds real project source, not just engine dirs
   5. seeds    -- a non-empty seed corpus (AFL aborts at startup on an empty -i)
@@ -141,8 +143,23 @@ def smoke(entry, exp_dir, fuzz_target, cpu, secs) -> dict:
             "stderr_tail": (r.stderr or "")[-400:] if execs == 0 else ""}
 
 
+def reuse_baseline(src_exp: str, exp_dir: str) -> None:
+    """Copy another entry's built baseline into ``exp_dir``: baseline/bin and
+    optimized/online/source_tree, as real copies (the tree carries vcs/ and is
+    edited later; a hardlink would edit the source too). Reads ``src_exp`` only."""
+    if Path(src_exp).resolve() == Path(exp_dir).resolve():
+        raise ValueError(f"--baseline-from is this entry's own experiment dir: {src_exp}")
+    for rel in (("baseline", "bin"), ("optimized", "online", "source_tree")):
+        src, dst = Path(src_exp).joinpath(*rel), Path(exp_dir).joinpath(*rel)
+        if dst.exists() or dst.is_symlink():
+            shutil.rmtree(dst)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src, dst, symlinks=True)
+
+
 def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
-              build_cpus: str | None = None, local_id: int | None = None) -> dict:
+              build_cpus: str | None = None, local_id: int | None = None,
+              baseline_from: str | None = None) -> dict:
     entry = _entry(project, local_id)
     fuzz_target = entry["fuzz_target"]
     exp_id = f"preflight-{project}"
@@ -176,13 +193,37 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
             return res
 
         t = time.time()
-        crashed, poc_path, issue, source_root = phase3_online._extract_online_target(
-            entry, src_root, bin_dir, poc_dir, fuzz_target, project, cpu=cpu,
-            setup_cpus=build_cpus or cpu)
-        if not stage("extract", bool(source_root), secs=round(time.time() - t),
-                     **({} if source_root else
-                        {"reason": "extract failed or baseline build failed; see log"})):
-            return res
+        if baseline_from:
+            # Every harness of one (project, sanitizer) builds the same baseline
+            # (the whole project's build.sh): copy the group builder's instead of
+            # compiling it again. Nothing below writes into baseline_from.
+            if not target_kind.is_upstream(entry):
+                raise ValueError(f"--baseline-from is for upstream entries only "
+                                 f"({kind})")
+            crashed, poc_path = False, None
+            try:
+                reuse_baseline(baseline_from, exp_dir)
+            except (OSError, shutil.Error, ValueError) as e:
+                stage("extract", False, secs=round(time.time() - t),
+                      reused_from=baseline_from,
+                      reason=f"baseline copy failed: {type(e).__name__}: {e}"[:2000])
+                return res
+            have_bin = (Path(bin_dir) / fuzz_target).is_file()
+            source_root = src_root if have_bin else None
+            if not stage("extract", have_bin, secs=round(time.time() - t),
+                         reused_from=baseline_from,
+                         **({} if have_bin else
+                            {"reason": f"reused baseline lacks {fuzz_target}"})):
+                return res
+        else:
+            crashed, poc_path, issue, source_root = phase3_online._extract_online_target(
+                entry, src_root, bin_dir, poc_dir, fuzz_target, project, cpu=cpu,
+                setup_cpus=build_cpus or cpu)
+            if not stage("extract", bool(source_root), secs=round(time.time() - t),
+                         **({} if source_root else
+                            {"reason": "extract failed or baseline build failed; "
+                                       "see log"})):
+                return res
         if not target_kind.has_poc(entry):
             # FuzzBench benchmarks and upstream targets ship no PoC: the fuzzer
             # has to find the bug. run_online skips its PoC gate for them too.
@@ -217,7 +258,8 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
         if not target_kind.has_poc(entry):
             # Like run_online: the extract stage already built the AFL++ baseline.
             built = (Path(bin_dir) / fuzz_target).is_file()
-            if not stage("aflbuild", built, skipped=f"{kind}: built at extract"):
+            how = f"reused from {baseline_from}" if baseline_from else "built at extract"
+            if not stage("aflbuild", built, skipped=f"{kind}: {how}"):
                 return res
         else:
             built = phase3_online._build_afl_baseline(
@@ -267,13 +309,19 @@ def main() -> int:
                     help="cpuset for the setup builds ('' = --cpu only)")
     ap.add_argument("--smoke-secs", type=int, default=120)
     ap.add_argument("--keep", action="store_true", help="keep the smoke afl_out")
+    ap.add_argument("--baseline-from", default=None, metavar="EXP_DIR",
+                    help="upstream only: instead of extract + baseline build, copy "
+                         "EXP_DIR/baseline/bin and EXP_DIR/optimized/online/source_tree "
+                         "(another harness of the same project and sanitizer, already "
+                         "built); EXP_DIR is only read")
     a = ap.parse_args()
     lid = f" local_id {a.local_id}" if a.local_id is not None else ""
     print(f"=== preflight {a.project}{lid} (cpu {a.cpu}, builds on "
           f"{a.build_cpus or a.cpu}, smoke {a.smoke_secs}s) ===", flush=True)
     return 0 if preflight(a.project, a.cpu, a.smoke_secs, a.keep,
                           build_cpus=a.build_cpus or None,
-                          local_id=a.local_id)["ok"] else 1
+                          local_id=a.local_id,
+                          baseline_from=a.baseline_from)["ok"] else 1
 
 
 if __name__ == "__main__":
