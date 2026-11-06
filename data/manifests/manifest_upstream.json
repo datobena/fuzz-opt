@@ -10019,5 +10019,27 @@
     "image": "bench-upstream/samba",
     "local_id": 970911,
     "cve": "upstream-970911"
+  },
+  {
+    "project": "tink-cc",
+    "ossfuzz_project": "tink-cc",
+    "kind": "upstream",
+    "sanitizer": "address",
+    "language": "c++",
+    "fuzz_target": "tink_encrypt_fuzzer",
+    "image": "bench-upstream/tink-cc",
+    "local_id": 970912,
+    "cve": "upstream-970912"
+  },
+  {
+    "project": "tink-cc",
+    "ossfuzz_project": "tink-cc",
+    "kind": "upstream",
+    "sanitizer": "memory",
+    "language": "c++",
+    "fuzz_target": "tink_encrypt_fuzzer",
+    "image": "bench-upstream/tink-cc",
+    "local_id": 970913,
+    "cve": "upstream-970913"
   }
 ]

@@ -4,5 +4,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 add_subdirectory(.. tink-cc)
 
+add_compile_definitions(BORINGSSL_PREFIX=bssl_tink)
 add_executable(tink_encrypt_fuzzer tink_encrypt_decrypt_fuzzer.cc)
 target_link_libraries(tink_encrypt_fuzzer tink::static $ENV{LIB_FUZZING_ENGINE})

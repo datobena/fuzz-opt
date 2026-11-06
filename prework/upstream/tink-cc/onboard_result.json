@@ -1,0 +1,33 @@
+{
+  "project": "tink-cc",
+  "image": "bench-upstream/tink-cc",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "tink_encrypt_fuzzer"
+      ],
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/tink-cc/address/compile.log",
+      "returncode": 0,
+      "secs": 936,
+      "timeout": 21600
+    },
+    "memory": {
+      "status": "compiled",
+      "harnesses": [
+        "tink_encrypt_fuzzer"
+      ],
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/tink-cc/memory/compile.log",
+      "returncode": 0,
+      "secs": 3270,
+      "timeout": 21600
+    }
+  },
+  "build_log": "results/upstream-onboarding-20261105/tink-cc/build.log",
+  "definition_hash": "2c669db898a397414205a4a0b7fb9c61049976bc593d0aaa81c709e6c2ba655c",
+  "status": "compiled",
+  "updated": "2026-11-05T21:39:34-0700",
+  "compile_timeout": 21600
+}

@@ -410,6 +410,8 @@
   "strongswan/undefined/fuzz_radius": 970054,
   "strongswan/undefined/fuzz_tls": 970055,
   "strongswan/undefined/fuzz_vici": 970056,
+  "tink-cc/address/tink_encrypt_fuzzer": 970912,
+  "tink-cc/memory/tink_encrypt_fuzzer": 970913,
   "tor/address/oss-fuzz-address": 970623,
   "tor/address/oss-fuzz-addressPTR": 970624,
   "tor/address/oss-fuzz-consensus": 970625,

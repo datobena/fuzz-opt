@@ -6,6 +6,32 @@
     "address",
     "memory"
   ],
-  "harnesses": {},
-  "deviations": []
+  "harnesses": {
+    "address": [
+      "tink_encrypt_fuzzer"
+    ],
+    "memory": [
+      "tink_encrypt_fuzzer"
+    ]
+  },
+  "deviations": [
+    {
+      "what": "Dockerfile pre-fetches abseil (abseil-cpp-20260817.0.tar.gz), BoringSSL (boringssl-0.20260929.0.tar.gz) and protobuf (protobuf-36.2.zip) into $SRC/tink_deps/<name>, from the exact URLs and SHA256s declared in tink-cc's cmake/TinkWorkspace.cmake and cmake/TinkBoringSSL.cmake (sha256sum -c verified); build.sh's `cmake .` gains -DFETCHCONTENT_SOURCE_DIR_{ABSEIL,TINK_BORINGSSL,PROTOBUF} pointing at them.",
+      "why": "Policy A2: tink-cc's http_archive() wrapper calls FetchContent_Populate at configure time, which fails under compile's --network none (abseil download: Could not resolve host github.com).",
+      "affects_measurement": false,
+      "rationale": "Same dependency versions and bytes OSS-Fuzz downloads (hash-verified); only where the sources come from changes. No compile/sanitizer flags, harness, or tink-cc source touched. googletest/benchmark/wycheproof are only fetched when TINK_BUILD_TESTS=ON (off here) so they are not pre-fetched."
+    },
+    {
+      "what": "ossfuzz/fuzzing_CMake gains one line `add_compile_definitions(BORINGSSL_PREFIX=bssl_tink)`, placed after `add_subdirectory(.. tink-cc)` and immediately before `add_executable(tink_encrypt_fuzzer ...)`, so it applies only to the harness target.",
+      "why": "Policy A3, ruling R9: tink-cc HEAD builds a private BoringSSL with symbol prefix bssl_tink (cmake/TinkBoringSSL.cmake:35) and applies the matching define only to its own directory (CMakeLists.txt:54-55); the OSS-Fuzz glue has not caught up, so the harness's inline SecretData/SecretBuffer code referenced unprefixed OPENSSL_cleanse and the link failed.",
+      "affects_measurement": false,
+      "rationale": "The symbol-prefix define only renames the BoringSSL symbols the harness links against (to the same prefix tink-cc compiles itself with); no sanitizer/optimization/instrumentation flag, nothing added to CFLAGS/CXXFLAGS in build.sh, no harness or tink-cc source change."
+    },
+    {
+      "what": "ossfuzz/build.sh: the coverage 'include alias' hack (rm the __include_alias/tink symlink, copy the source tree in its place) is wrapped in `if [ -L /src/tink-cc/fuzzing/tink-cc/__include_alias/tink ]; then ... fi`; the four lines inside are unchanged.",
+      "why": "Policy A3 (same build-drift class as ruling R9): tink-cc HEAD no longer creates the __include_alias/tink symlink (add_directory_alias is now used only for wycheproof test vectors under TINK_BUILD_TESTS), so the unguarded `rm` failed under bash -eu after the harness was already built and copied to $OUT.",
+      "affects_measurement": false,
+      "rationale": "The hack runs after the harness is built and moved to $OUT and only rewrites source paths for coverage reports; with no symlink, includes resolve through the real /src/tink-cc tree, so there is nothing to replace. When the symlink exists, the hack runs exactly as before. No flags, harness or tink-cc source touched."
+    }
+  ]
 }
