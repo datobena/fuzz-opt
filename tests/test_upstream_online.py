@@ -51,7 +51,8 @@ def test_extract_takes_the_image_extract_path(monkeypatch, tmp_path):
     monkeypatch.setattr(phase2_setup, "_find_project_source",
                         lambda root, p: Path(root) / p)
     monkeypatch.setattr(phase3_online.tracked_git, "strip_vcs_metadata",
-                        lambda r: seen.setdefault("stripped", str(r)))
+                        lambda r, preserve_dir=None: seen.setdefault(
+                            "stripped", (str(r), preserve_dir)))
     monkeypatch.setattr(phase3_online, "_setup_build",
                         lambda **k: seen.setdefault("build", k) and (True, ""))
     monkeypatch.setattr(phase2_setup, "_lazy_import_arvo",
@@ -62,8 +63,26 @@ def test_extract_takes_the_image_extract_path(monkeypatch, tmp_path):
         "libssh", cpu=3, setup_cpus="2-39")
     assert got == (False, None, None, root)
     assert seen["image"] == "bench-upstream/libssh"
-    assert seen["stripped"] == root
+    # The project's .git is moved beside src/, not deleted: the build reads it.
+    assert seen["stripped"] == (str(Path(root) / "src"), Path(root) / "vcs")
     assert seen["build"]["entry"] is UP and seen["build"]["setup_cpus"] == "2-39"
+
+
+def test_extract_fuzzbench_keeps_the_plain_strip(monkeypatch, tmp_path):
+    import phase2_setup
+    seen = []
+    monkeypatch.setattr(phase3_online, "prework_image_for", lambda e: "fb-aflpp/mruby")
+    monkeypatch.setattr(phase2_setup, "extract_source_from_image", lambda img, dst: True)
+    monkeypatch.setattr(phase2_setup, "_find_project_source",
+                        lambda root, p: Path(root) / p)
+    monkeypatch.setattr(phase3_online.tracked_git, "strip_vcs_metadata",
+                        lambda r, **kw: seen.append((str(r), kw)))
+    monkeypatch.setattr(phase3_online, "_setup_build", lambda **k: (True, ""))
+    root = str(tmp_path / "src")
+    phase3_online._extract_online_target(
+        FB, root, str(tmp_path / "bin"), str(tmp_path / "poc"), FB["fuzz_target"],
+        "mruby", cpu=3, setup_cpus="2-39")
+    assert seen == [(root, {})]
 
 
 def test_run_online_skips_poc_gate_and_afl_rebuild(monkeypatch, tmp_path, caplog):

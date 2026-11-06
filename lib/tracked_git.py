@@ -54,17 +54,68 @@ def git_cmd(work_tree: str | Path) -> list[str]:
     return ["git", f"--git-dir={git_dir_for(wt)}", f"--work-tree={wt}"]
 
 
-def strip_vcs_metadata(tree: str | Path) -> list[str]:
+# Written into a preserve_dir: a later strip of a tree that contains it leaves
+# everything under it alone (run_online strips the whole source_tree, vcs/ too).
+PRESERVED_MARKER = ".bench-preserved-vcs"
+
+
+def _under_preserved(path: Path, root: Path) -> bool:
+    for parent in path.parents:
+        if (parent / PRESERVED_MARKER).is_file():
+            return True
+        if parent == root:
+            return False
+    return False
+
+
+def strip_vcs_metadata(tree: str | Path,
+                       preserve_dir: str | Path | None = None) -> list[str]:
     """Remove any VCS directory the extracted tree shipped. Returns what it removed.
 
     Called on the source root, so it also catches sibling checkouts: wolfssl's
     tree carries six of them (wolfssl, wolfssh, wolf-ssl-ssh-fuzzers,
     fuzzing-headers, fuzz-targets, afl), and the build copies siblings in.
+
+    With ``preserve_dir`` (outside ``tree``) each one is MOVED to
+    ``<preserve_dir>/<path under tree>`` instead: upstream builds read their
+    own .git (tpm2-tss's bootstrap runs `git describe`), so the compile mounts
+    it back read-only (prework_build.upstream_compile_args). A stale copy at
+    the destination is replaced. A preserve_dir is marked, and any later strip
+    leaves a marked directory's contents alone.
     """
     removed: list[str] = []
     root = Path(tree)
+    keep = None
+    if preserve_dir is not None:
+        keep = Path(preserve_dir)
+        if keep.resolve().is_relative_to(root.resolve()):
+            raise ValueError(f"preserve_dir {keep} is inside the stripped tree {root}")
     if not root.is_dir():
         return removed
+    for path in sorted(root.rglob("*")):
+        if path.name in VCS_DIRS and path.is_dir() and not path.is_symlink():
+            if _under_preserved(path, root):
+                continue
+            rel = path.relative_to(root)
+            if keep is None:
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                dest = keep / rel
+                if dest.exists() or dest.is_symlink():
+                    if dest.is_dir() and not dest.is_symlink():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                (keep / PRESERVED_MARKER).touch()
+                shutil.move(str(path), str(dest))
+            removed.append(str(rel))
+    if removed:
+        logger.info("%s %d VCS director%s from %s%s: %s",
+                    "stripped" if keep is None else "moved",
+                    len(removed), "y" if len(removed) == 1 else "ies", root,
+                    "" if keep is None else f" to {keep}", ", ".join(removed[:8]))
+    return removed
     for path in sorted(root.rglob("*")):
         if path.name in VCS_DIRS and path.is_dir() and not path.is_symlink():
             shutil.rmtree(path, ignore_errors=True)

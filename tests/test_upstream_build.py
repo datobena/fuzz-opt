@@ -238,3 +238,98 @@ def test_build_command_uses_the_vendored_tree_as_context(tmp_path):
     cmd = ui.build_command(tmp_path, "bench-upstream/libssh")
     assert cmd[-3:] == ["-f", f"{tmp_path}/Dockerfile", str(tmp_path / "ossfuzz")]
     assert f"bench-upstream.definition-sha256={ui.definition_hash(tmp_path)}" in cmd
+
+
+# --------------------------------------------------------------------------- #
+# The project's own .git: moved aside at extract, mounted back read-only
+# --------------------------------------------------------------------------- #
+GIT_ENV = ["-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
+           "-e", "GIT_CONFIG_VALUE_0=*"]
+
+
+def test_vcs_dir_for_finds_the_source_trees_vcs(tmp_path):
+    st = tmp_path / "online" / "source_tree"
+    src = st / "src" / "tpm2-tss"
+    src.mkdir(parents=True)
+    assert pb.vcs_dir_for(src) is None
+    (st / "vcs").mkdir()
+    assert pb.vcs_dir_for(src) == st / "vcs"
+    assert pb.vcs_dir_for(str(src)) == st / "vcs"
+    assert pb.vcs_dir_for(tmp_path / "elsewhere" / "src" / "tpm2-tss") is None
+
+
+def test_vcs_dir_for_finds_a_per_trial_copy(tmp_path):
+    """Per-trial trees are copies of source_tree named source_root."""
+    sr = tmp_path / "trials" / "trial_00" / "source_root"
+    (sr / "src" / "tpm2-tss").mkdir(parents=True)
+    (sr / "vcs").mkdir()
+    assert pb.vcs_dir_for(sr / "src" / "tpm2-tss") == sr / "vcs"
+
+
+def test_upstream_compile_args_mount_the_preserved_git_dirs(tmp_path):
+    vcs = tmp_path / "vcs"
+    (vcs / "tpm2-tss" / ".git" / "refs").mkdir(parents=True)
+    (vcs / "tpm2-tss" / "deps" / "x" / ".git").mkdir(parents=True)
+    (vcs / "tpm2-tss" / "deps" / ".hg").mkdir(parents=True)
+    (vcs / "other" / ".git").mkdir(parents=True)
+    kw = dict(image="bench-upstream/tpm2-tss", source_dir=str(tmp_path / "s"),
+              out_dir=str(tmp_path / "o"), project="tpm2-tss", sanitizer="address",
+              language="c")
+    plain = pb.upstream_compile_args(**kw)
+    args = pb.upstream_compile_args(**kw, vcs_dir=vcs)
+    assert args == plain[:-2] + [
+        "-v", f"{vcs / 'tpm2-tss' / '.git'}:/src/tpm2-tss/.git:ro",
+        "-v", f"{vcs / 'tpm2-tss' / 'deps' / 'x' / '.git'}:/src/tpm2-tss/deps/x/.git:ro",
+        *GIT_ENV, "bench-upstream/tpm2-tss", "compile"]
+
+
+def test_upstream_compile_args_unchanged_without_preserved_git(tmp_path):
+    kw = dict(image="bench-upstream/libssh", source_dir=str(tmp_path / "s"),
+              out_dir=str(tmp_path / "o"), project="libssh", sanitizer="address",
+              language="c")
+    plain = pb.upstream_compile_args(**kw)
+    (tmp_path / "vcs").mkdir()
+    assert pb.upstream_compile_args(**kw, vcs_dir=tmp_path / "vcs") == plain
+    assert pb.upstream_compile_args(**kw, vcs_dir=tmp_path / "missing") == plain
+    assert pb.upstream_compile_args(**kw, vcs_dir=None) == plain
+
+
+def test_upstream_compile_args_no_mount_without_source_dir(tmp_path):
+    """Onboarding compiles the image's own tree (source_dir=None): its .git is there."""
+    (tmp_path / "vcs" / "libssh" / ".git").mkdir(parents=True)
+    kw = dict(image="bench-upstream/libssh", source_dir=None,
+              out_dir=str(tmp_path / "o"), project="libssh", sanitizer="address",
+              language="c")
+    assert pb.upstream_compile_args(**kw, vcs_dir=tmp_path / "vcs") == \
+        pb.upstream_compile_args(**kw)
+
+
+def test_rebuild_command_mounts_the_source_trees_git(tmp_path):
+    st = tmp_path / "source_tree"
+    src = st / "src" / "tpm2-tss"
+    src.mkdir(parents=True)
+    kw = dict(image="bench-upstream/tpm2-tss", source_dir=str(src),
+              out_dir=str(tmp_path / "o"), project="tpm2-tss", cpu=2,
+              sanitizer="address", language="c")
+    without = pb.build_prework_rebuild_command(**kw)
+    assert not any(a.endswith(":ro") and "/.git" in a for a in without)
+    (st / "vcs" / "tpm2-tss" / ".git").mkdir(parents=True)
+    cmd = pb.build_prework_rebuild_command(**kw)
+    assert f"{st / 'vcs' / 'tpm2-tss' / '.git'}:/src/tpm2-tss/.git:ro" in cmd
+    assert cmd.index("GIT_CONFIG_COUNT=1") < cmd.index("bench-upstream/tpm2-tss")
+
+
+def test_broker_build_mounts_the_live_source_trees_git(tmp_path):
+    """The broker compiles a private snapshot; the .git comes from beside the live tree."""
+    from sandbox import broker
+    st = tmp_path / "source_tree"
+    src = st / "src" / "tpm2-tss"
+    src.mkdir(parents=True)
+    (st / "vcs" / "tpm2-tss" / ".git").mkdir(parents=True)
+    ctx = broker.BrokerContext(image="bench-upstream/tpm2-tss", source_dir=str(src),
+                               out_dir=str(tmp_path / "o"), corpus_dir=str(tmp_path / "c"),
+                               fuzz_target="t", project="tpm2-tss", cpu=3)
+    ctx.build_source_dir = str(tmp_path / "snap" / "tpm2-tss")
+    cmd = broker._build_command(ctx)
+    assert f"{tmp_path / 'snap' / 'tpm2-tss'}:/src/tpm2-tss" in cmd
+    assert f"{st / 'vcs' / 'tpm2-tss' / '.git'}:/src/tpm2-tss/.git:ro" in cmd

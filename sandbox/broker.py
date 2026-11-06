@@ -43,7 +43,7 @@ from lib.core_lock import core_lock
 from prework.fuzzbench_image import fuzzbench_build_command, is_fuzzbench_image
 from lib.target_kind import is_upstream_image
 from prework.prework_build import (arvo_compile_args, ownership_command,
-                                   upstream_compile_args)
+                                   upstream_compile_args, vcs_dir_for)
 from sandbox import launch
 from sandbox.launch import LABEL_ROLE, label_args, launcher_labels
 
@@ -295,7 +295,10 @@ def _build_command(ctx: BrokerContext) -> list[str]:
             *upstream_compile_args(image=ctx.image,
                                    source_dir=(ctx.build_source_dir or ctx.source_dir),
                                    out_dir=ctx.out_dir, project=ctx.project,
-                                   sanitizer=ctx.sanitizer, language=ctx.language),
+                                   sanitizer=ctx.sanitizer, language=ctx.language,
+                                   # From the LIVE tree: the snapshot is a bare
+                                   # copy of the project dir, without vcs/ beside it.
+                                   vcs_dir=vcs_dir_for(ctx.source_dir)),
         ]
     return [
         "docker", "run", "--rm", "--privileged",

@@ -2262,7 +2262,15 @@ def _extract_online_target(entry, source_tree_root, baseline_bin_dir, poc_dir,
         # FuzzBench target), and every later rebuild compiles the stripped tree,
         # so a build that reads .git (version strings) must see the same tree
         # here. run_online strips again; that is a no-op.
-        tracked_git.strip_vcs_metadata(src_root)
+        if target_kind.is_upstream(entry):
+            # Moved aside, not deleted: upstream builds read their clone's .git
+            # (tpm2-tss's bootstrap: `git describe`), and every upstream compile
+            # mounts source_tree/vcs/<project>/.git back read-only
+            # (prework_build.vcs_dir_for). The extract put everything under src/.
+            tracked_git.strip_vcs_metadata(src_root / "src",
+                                           preserve_dir=src_root / "vcs")
+        else:
+            tracked_git.strip_vcs_metadata(src_root)
         # Pinned like every other harness build: unpinned, build.sh's
         # `make -j$(nproc)` spread over every host core, trials included. Setup
         # runs before any trial, so it gets the setup cpuset, not one core.

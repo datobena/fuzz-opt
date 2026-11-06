@@ -299,8 +299,43 @@ def arvo_compile_args(*, image: str, source_dir: str, out_dir: str,
     return args
 
 
+# Ancestors that hold a target's extracted tree: <root>/src/<project> is the
+# source, <root>/vcs/<project> the repositories set aside from it
+# (phase3_online._extract_online_target). Per-trial trees are copies of
+# source_tree named source_root.
+_SOURCE_TREE_NAMES = ("source_tree", "source_root")
+
+
+def vcs_dir_for(source_dir: str | Path) -> Path | None:
+    """The VCS dirs set aside from ``source_dir``'s tree, or None if there are none."""
+    for parent in Path(source_dir).absolute().parents:
+        if parent.name in _SOURCE_TREE_NAMES:
+            vcs = parent / "vcs"
+            return vcs if vcs.is_dir() else None
+    return None
+
+
+def _vcs_mount_args(vcs_dir: str | Path, project: str) -> list[str]:
+    """Read-only mounts of every .git preserved for ``project``, plus safe.directory."""
+    base = Path(vcs_dir) / project
+    if not base.is_dir():
+        return []
+    args: list[str] = []
+    for git in sorted(base.rglob(".git")):
+        rel = git.relative_to(base)
+        if not git.is_dir() or git.is_symlink() or ".git" in rel.parts[:-1]:
+            continue
+        args += ["-v", f"{git.absolute()}:/src/{project}/{rel.as_posix()}:ro"]
+    if args:
+        # The mounted repos are owned by the host user, the compile runs as root.
+        args += ["-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
+                 "-e", "GIT_CONFIG_VALUE_0=*"]
+    return args
+
+
 def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
-                          project: str, sanitizer: str, language: str) -> list[str]:
+                          project: str, sanitizer: str, language: str,
+                          vcs_dir: str | Path | None = None) -> list[str]:
     """Everything of an upstream `docker run ... compile` after the resource flags.
 
     OSS-Fuzz's own compile env for the afl engine, nothing more: no FUZZER_LIB /
@@ -309,6 +344,9 @@ def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
     the artifact of record, so a build may not fetch anything. The fold
     denylist is the same mechanism and file as ARVO's (see arvo_compile_args).
     ``source_dir=None`` compiles the image's own $SRC/<project> (onboarding).
+    ``vcs_dir`` (see vcs_dir_for): the project's own repositories, stripped from
+    the mounted tree, mounted back read-only where they were; OSS-Fuzz's build
+    sees its clone's .git too (tpm2-tss's bootstrap runs `git describe`).
     """
     args = [
         "--network", "none",
@@ -322,7 +360,10 @@ def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
     ]
     if source_dir is not None:
         args += ["-v", f"{Path(source_dir).absolute()}:/src/{project}"]
-    args += ["-v", f"{Path(out_dir).absolute()}:/out", image, "compile"]
+    args += ["-v", f"{Path(out_dir).absolute()}:/out"]
+    if source_dir is not None and vcs_dir is not None:
+        args += _vcs_mount_args(vcs_dir, project)
+    args += [image, "compile"]
     return args
 
 
@@ -358,7 +399,8 @@ def build_prework_rebuild_command(
     if is_upstream_image(image):
         cmd += upstream_compile_args(image=image, source_dir=source_dir,
                                      out_dir=out_dir, project=project,
-                                     sanitizer=sanitizer, language=language)
+                                     sanitizer=sanitizer, language=language,
+                                     vcs_dir=vcs_dir_for(source_dir))
         return cmd
     # Env (incl. the -O override), denylist and mounts are arvo_compile_args, the
     # SAME list the broker builds the agent's candidates with.
