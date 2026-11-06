@@ -48,21 +48,31 @@ build asks for them (verified: a stock compile emits neither). The image environ
 carries `SANITIZER=address FUZZING_ENGINE=libfuzzer ARCHITECTURE=x86_64
 UBSAN_OPTIONS=silence_unsigned_overflow=1` and no `ASAN_OPTIONS`.
 
-**Run** (`run_fuzzer`, afl branch): working directory `$OUT`, `PATH=$OUT:$PATH`;
+**Run** (`run_fuzzer`, afl branch, executed inside base-runner, whose image environment
+is part of what it sets): working directory `$OUT`, `PATH=$OUT:$PATH`;
 
 ```
-afl-fuzz [-c $OUT/<t> if $OUT/afl_cmplog.txt exists] [-x $OUT/afl++.dict if it exists] \
+afl-fuzz -m none [-c $OUT/<t> if $OUT/afl_cmplog.txt exists] [-x $OUT/afl++.dict if it exists] \
          -t 5000+ -i <corpus> -o <out> [-x <dict from <t>.options or <t>.dict>] -- $OUT/<t>
 ```
 
-env `AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 AFL_SKIP_CPUFREQ=1 AFL_TRY_AFFINITY=1
+(`-m none` comes from base-runner's `ENV AFL_FUZZER_ARGS="-m none"`; the script appends to
+it.) env `AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 AFL_SKIP_CPUFREQ=1 AFL_TRY_AFFINITY=1
 AFL_FAST_CAL=1 AFL_CMPLOG_ONLY_NEW=1 AFL_FORKSRV_INIT_TMOUT=30000 AFL_IGNORE_PROBLEMS=1
-AFL_IGNORE_UNKNOWN_ENVS=1`; `ASAN_OPTIONS` = the image's value plus
-`abort_on_error=1:symbolize=0:detect_odr_violation=0` plus the `[asan]` section of
-`<t>.options` (`key=value` joined by `:`); `UBSAN_OPTIONS` plus `symbolize=0` and the
-`[ubsan]` section; `MSAN_OPTIONS` plus `exit_code=86:symbolize=0`. The corpus is
-`<t>_seed_corpus.zip` unpacked plus one file named `input` containing `input`. No `-m`
-(AFL++ defaults to no memory limit), no persistent-mode count argument.
+AFL_IGNORE_UNKNOWN_ENVS=1`. Sanitizer options are composed on top of base-runner's image
+defaults (read from `gcr.io/oss-fuzz-base/base-runner`, 2026-07-09):
+
+- `ASAN_OPTIONS` = `alloc_dealloc_mismatch=0:allocator_may_return_null=1:allocator_release_to_os_interval_ms=500:check_malloc_usable_size=0:detect_container_overflow=1:detect_odr_violation=0:detect_leaks=1:detect_stack_use_after_return=1:fast_unwind_on_fatal=0:handle_abort=1:handle_segv=1:handle_sigill=1:max_uar_stack_size_log=16:print_scariness=1:quarantine_size_mb=10:strict_memcmp=1:strip_path_prefix=/workspace/:symbolize=1:use_sigaltstack=1:dedup_token_length=3`
+  then the `[asan]` section of `<t>.options`, then `abort_on_error=1:symbolize=0:detect_odr_violation=0`
+  (a later key overrides an earlier one, so `symbolize` ends up `0`);
+- `MSAN_OPTIONS` = `print_stats=1:strip_path_prefix=/workspace/:symbolize=1:dedup_token_length=3`
+  then the `[msan]` section, then `exit_code=86:symbolize=0`;
+- `UBSAN_OPTIONS` = `print_stacktrace=1:print_summary=1:silence_unsigned_overflow=1:strip_path_prefix=/workspace/:symbolize=1:dedup_token_length=3`
+  then the `[ubsan]` section, then `symbolize=0`.
+
+The corpus is `<t>_seed_corpus.zip` unpacked plus one file named `input` containing
+`input`. No persistent-mode count argument. (An earlier draft of this section quoted the
+builder image's environment instead of base-runner's; the task-2 audit caught it.)
 
 Note: this is OSS-Fuzz's in-image runner, what `infra/helper.py run_fuzzer` executes.
 Production ClusterFuzz layers randomized per-run strategy choices on top; those are not
@@ -129,8 +139,8 @@ project's own builder image (as the FuzzBench kind does), working directory `/ou
 `AFL_AUTORESUME=1`, the container's core pin and limits, and the mutation-capture shim
 on optimized trials. Two settings deviate from `run_fuzzer`, by the user's decision, and are
 recorded in the launch record: `-t 1000` (fixed) in place of `-t 5000+`, and
-`detect_leaks=0` appended to `ASAN_OPTIONS` (which also stops AFL++ from exporting its
-slow `LSAN_OPTIONS` unwind). The pipeline's `FUZZ_ASAN_OPTIONS` / `FUZZ_UBSAN_OPTIONS`
+`detect_leaks=0` appended last to `ASAN_OPTIONS`, overriding base-runner's `detect_leaks=1`
+(which also stops AFL++ from exporting its slow `LSAN_OPTIONS` unwind). The pipeline's `FUZZ_ASAN_OPTIONS` / `FUZZ_UBSAN_OPTIONS`
 strings do not apply to this kind; `BENCHMARK_AFL_TIMEOUT` still provides the `1000`.
 
 **The gate, the smoke, the profiler and the trials of an upstream target all run under
