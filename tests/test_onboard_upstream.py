@@ -418,3 +418,47 @@ def test_compile_timeout_is_passed_and_recorded(tmp_path, monkeypatch):
     assert seen == [123]
     assert res["compile_timeout"] == 123 and res["sanitizers"]["address"]["timeout"] == 123
     assert ob.COMPILE_TIMEOUT == 21600
+
+
+def _verdict(d, project, san, target, lid, **kw):
+    f = d / project / san
+    f.mkdir(parents=True, exist_ok=True)
+    (f / f"{target}.json").write_text(json.dumps(
+        {"project": project, "fuzz_target": target, "sanitizer": san, "local_id": lid, **kw}))
+
+
+def test_preflights_reads_driver_layout_and_skips_corrupt(tmp_path):
+    pf = tmp_path / "pf"
+    _verdict(pf, "foo", "address", "t1", 1, ok=True,
+             stages={"smoke": {"ok": True, "execs_per_sec": 507.9}})
+    _verdict(pf, "foo", "address", "t2", 2, ok=False,
+             stages={"image": {"ok": True}, "smoke": {"ok": False, "reason": "no execs"}})
+    _verdict(pf, "foo", "undefined", "t1", 3, ok=False,
+             stages={"driver": {"ok": False, "error": "worker died"}})
+    (pf / "foo" / "bad.json").write_text("{not json")
+    got = ob._preflights(pf)
+    assert sorted(got) == ["1", "2", "3"]
+    assert ob._preflight_cells(got["1"]) == ("READY", "507.9")
+    assert ob._preflight_cells(got["2"]) == ("NOT READY: smoke: no execs", "-")
+    assert ob._preflight_cells(got["3"]) == ("NOT READY: driver: worker died", "-")
+    assert ob._preflight_cells(None) == ("-", "-")
+
+
+def test_report_lists_dropped_and_summarises(tmp_path):
+    up = tmp_path / "up"
+    _meta(up, "foo", {"address": ["t1", "t2"], "undefined": ["t1"]})
+    d = _meta(up, "gone", {})
+    m = json.loads((d / "meta.json").read_text())
+    m["dropped"] = {"when": "2026-11-05", "reason": "broke upstream"}
+    (d / "meta.json").write_text(json.dumps(m))
+    (up / "local_ids.json").write_text(json.dumps(
+        {"foo/address/t1": 1, "foo/address/t2": 2, "foo/undefined/t1": 3}))
+    pf = tmp_path / "pf"
+    _verdict(pf, "foo", "address", "t1", 1, ok=True, stages={})
+    _verdict(pf, "foo", "address", "t2", 2, ok=False, stages={"smoke": {"ok": False}})
+    text = ob.render_report(upstream_dir=up, preflight_dir=pf)
+    assert "## Dropped projects\\n\\n- **gone** (2026-11-05): broke upstream" in text.replace("\n", "\\n")
+    assert "foo: 1 / 3 harness verdicts READY (address 1/2, undefined 0/1, memory 0/0)" in text
+    assert "gone: no preflight" in text
+    assert text.index("## Summary") < text.index("| Project")
+    assert any(l.startswith("| gone") and "dropped" in l for l in text.splitlines())
