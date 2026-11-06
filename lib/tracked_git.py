@@ -116,12 +116,3 @@ def strip_vcs_metadata(tree: str | Path,
                     len(removed), "y" if len(removed) == 1 else "ies", root,
                     "" if keep is None else f" to {keep}", ", ".join(removed[:8]))
     return removed
-    for path in sorted(root.rglob("*")):
-        if path.name in VCS_DIRS and path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path, ignore_errors=True)
-            removed.append(str(path.relative_to(root)))
-    if removed:
-        logger.info("stripped %d VCS director%s from %s: %s",
-                    len(removed), "y" if len(removed) == 1 else "ies",
-                    root, ", ".join(removed[:8]))
-    return removed
