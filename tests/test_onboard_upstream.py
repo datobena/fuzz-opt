@@ -97,11 +97,19 @@ def test_vendor_two_sanitizers_defaults_and_srcdir_override(tmp_path):
     assert json.loads((up / "foo" / "meta.json").read_text())["srcdir"] == "tink-cc"
 
 
-def test_vendor_without_sanitizers_defaults_to_address(tmp_path):
+def test_vendor_without_sanitizers_uses_the_oss_fuzz_default(tmp_path):
     repo, _ = _fake_oss_fuzz(tmp_path, "main_repo: https://github.com/x/foo\n")
     up = _bases_file(tmp_path)
     ob.vendor("foo", oss_fuzz=repo, commit="HEAD", upstream_dir=up)
-    assert json.loads((up / "foo" / "meta.json").read_text())["sanitizers"] == ["address"]
+    assert json.loads((up / "foo" / "meta.json").read_text())["sanitizers"] == \
+        ["address", "undefined"]
+
+
+def test_sanitizers_of():
+    assert ob.sanitizers_of({}) == ["address", "undefined"]
+    assert ob.sanitizers_of({"sanitizers": ["memory"]}) == ["address", "memory"]
+    assert ob.sanitizers_of({"sanitizers": ["undefined", "address", "thread"]}) == \
+        ["address", "undefined"]
 
 
 def test_vendor_refuses_an_unknown_base(tmp_path):
@@ -372,3 +380,41 @@ def test_a_second_run_does_not_rebuild(tmp_path, monkeypatch):
     monkeypatch.setattr(ob, "build_image", lambda pdir, cpuset=None: built.append(pdir))
     res = ob.run_project("foo", sanitizers="address", work=work, upstream_dir=up)
     assert built == [] and res["status"] == "compiled"
+
+
+def test_run_does_not_retry_a_recorded_non_address_failure(tmp_path, monkeypatch):
+    up, work = tmp_path / "up", tmp_path / "work"
+    _ready_project(up, work)                       # address already compiled
+    calls = _fake_docker(monkeypatch, up, compile_ok=lambda s: s != "memory")
+    res = ob.run_project("foo", sanitizers="all", work=work, upstream_dir=up)
+    assert len(calls) == 1 and res["sanitizers"]["memory"]["status"] == "compile_failed"
+    res = ob.run_project("foo", sanitizers="all", work=work, upstream_dir=up)
+    assert len(calls) == 1 and res["sanitizers"]["memory"]["status"] == "compile_failed"
+    assert res["status"] == "compiled"
+    ob.run_project("foo", sanitizers="all", work=work, upstream_dir=up, retry_failed=True)
+    assert len(calls) == 2 and "SANITIZER=memory" in calls[1]
+
+
+def test_run_always_retries_a_failed_address(tmp_path, monkeypatch):
+    up, work = tmp_path / "up", tmp_path / "work"
+    _ready_project(up, work, harness_files=())
+    calls = _fake_docker(monkeypatch, up, compile_ok=lambda s: False)
+    assert ob.run_project("foo", sanitizers="all", work=work,
+                          upstream_dir=up)["status"] == "compile_failed"
+    ob.run_project("foo", sanitizers="all", work=work, upstream_dir=up)
+    assert len(calls) == 2 and all("SANITIZER=address" in c for c in calls)
+
+
+def test_compile_timeout_is_passed_and_recorded(tmp_path, monkeypatch):
+    up, work = tmp_path / "up", tmp_path / "work"
+    _ready_project(up, work, harness_files=())
+    _fake_docker(monkeypatch, up, compile_ok=lambda s: True)
+    seen = []
+    inner = ob.run_logged
+    monkeypatch.setattr(ob, "run_logged",
+                        lambda cmd, log, timeout: (seen.append(timeout), inner(cmd, log, timeout))[1])
+    res = ob.run_project("foo", sanitizers="address", work=work, upstream_dir=up,
+                         compile_timeout=123)
+    assert seen == [123]
+    assert res["compile_timeout"] == 123 and res["sanitizers"]["address"]["timeout"] == 123
+    assert ob.COMPILE_TIMEOUT == 21600

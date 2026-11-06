@@ -66,7 +66,12 @@ BASE_REFS = (
 SANITIZERS = ("address", "undefined", "memory")
 LOCAL_IDS_FILE = "local_ids.json"
 FIRST_LOCAL_ID = 970001
-COMPILE_TIMEOUT = 5400
+# OSS-Fuzz allows a build 20 h; samba, botan under MSan and the projects that
+# build Botan from source exceed 1.5 h on 5 CPUs.
+COMPILE_TIMEOUT = 21600
+# project.yaml without a `sanitizers:` key: OSS-Fuzz's default
+# (infra/build/functions/build_project.py).
+DEFAULT_SANITIZERS = ("address", "undefined")
 HARNESS_SYMBOL = b"LLVMFuzzerTestOneInput"
 
 # `pins`: one "<dir> <revision>" line per checkout under $SRC; an empty
@@ -183,9 +188,11 @@ def write_bases(path: Path = BASES_FILE, *, refresh: bool = False) -> dict:
 
 def sanitizers_of(project_yaml: dict) -> list[str]:
     """project.yaml's sanitizers (an entry may be ``{memory: {experimental:
-    true}}``), only those this benchmark builds, ``address`` first."""
+    true}}``), only those this benchmark builds, ``address`` first. No
+    ``sanitizers:`` key means OSS-Fuzz's default, address and undefined."""
     listed = []
-    for s in project_yaml.get("sanitizers") or []:
+    declared = project_yaml.get("sanitizers")
+    for s in (DEFAULT_SANITIZERS if declared is None else declared or []):
         name = next(iter(s)) if isinstance(s, dict) else str(s)
         if name in SANITIZERS and name not in listed:
             listed.append(name)
@@ -355,7 +362,8 @@ def _set_harnesses(d: Path, sanitizer: str, harnesses: list[str] | None) -> None
 
 def compile_sanitizer(project: str, sanitizer: str, *, work: str | Path,
                       upstream_dir: Path = UPSTREAM_DIR,
-                      cpuset: str | None = None) -> dict:
+                      cpuset: str | None = None,
+                      timeout: int = COMPILE_TIMEOUT) -> dict:
     d = Path(upstream_dir) / project
     meta = load_meta(d)
     tag = upstream_image_tag(project)
@@ -378,13 +386,14 @@ def compile_sanitizer(project: str, sanitizer: str, *, work: str | Path,
                                    project=meta["srcdir"], sanitizer=sanitizer,
                                    language=meta.get("language") or "c++")]
     t0 = time.time()
-    rc = run_logged(cmd, log, COMPILE_TIMEOUT)
+    rc = run_logged(cmd, log, timeout)
     secs = round(time.time() - t0)
     restore_out_ownership(tag, out)
-    rec = {"srcdir_verified": True, "log": str(log), "returncode": rc, "secs": secs}
+    rec = {"srcdir_verified": True, "log": str(log), "returncode": rc, "secs": secs,
+           "timeout": timeout}
     if rc != 0:
         _set_harnesses(d, sanitizer, None)
-        why = "timed out" if rc is None else f"compile exited {rc}"
+        why = f"timed out after {timeout}s" if rc is None else f"compile exited {rc}"
         return {"status": "compile_failed", "reason": why, **rec}
     harnesses = discover_harnesses(out)
     if not harnesses:
@@ -398,10 +407,15 @@ def compile_sanitizer(project: str, sanitizer: str, *, work: str | Path,
 def run_project(project: str, *, sanitizers: str, work: str | Path,
                 upstream_dir: Path = UPSTREAM_DIR, oss_fuzz: str | Path | None = None,
                 commit: str | None = None, srcdir: str | None = None,
-                cpuset: str | None = None) -> dict:
+                cpuset: str | None = None, compile_timeout: int = COMPILE_TIMEOUT,
+                retry_failed: bool = False) -> dict:
     """vendor -> build -> pins -> compile, each step skipped when its output
     exists. A (re)build invalidates what was derived from the old image: the
-    checkouts and every sanitizer's harnesses.json."""
+    checkouts and every sanitizer's harnesses.json and recorded result.
+
+    A non-address sanitizer already recorded ``compile_failed`` is not
+    re-attempted unless ``retry_failed`` (box time); address always is, since
+    its failure is the project's and the fix rounds re-run it."""
     upstream_dir, work = Path(upstream_dir), Path(work)
     d, wd = upstream_dir / project, work / project
     wd.mkdir(parents=True, exist_ok=True)
@@ -468,8 +482,13 @@ def run_project(project: str, *, sanitizers: str, work: str | Path,
             res["sanitizers"][s] = {**prev, "harnesses": hs}
             _set_harnesses(d, s, hs)
             continue
+        if (s != "address" and not retry_failed
+                and (res["sanitizers"].get(s) or {}).get("status") == "compile_failed"):
+            continue
+        res["compile_timeout"] = compile_timeout
         res["sanitizers"][s] = compile_sanitizer(project, s, work=work,
-                                                 upstream_dir=upstream_dir, cpuset=cpuset)
+                                                 upstream_dir=upstream_dir, cpuset=cpuset,
+                                                 timeout=compile_timeout)
         save()
         if s == "address" and res["sanitizers"][s]["status"] != "compiled":
             return save(res["sanitizers"][s]["status"])
@@ -590,7 +609,11 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--cpuset", default=None)
     for p in (c, r):
         p.add_argument("--work", required=True)
+        p.add_argument("--compile-timeout", type=int, default=COMPILE_TIMEOUT,
+                       help=f"seconds per compile (default {COMPILE_TIMEOUT})")
     r.add_argument("--sanitizers", choices=("all", "address"), default="all")
+    r.add_argument("--retry-failed", action="store_true",
+                   help="re-attempt a non-address sanitizer recorded compile_failed")
     proj("pins", help="record $SRC checkout revisions -> pins.json")
     m = sub.add_parser("manifest", help="write the upstream manifest")
     m.add_argument("--projects", required=True, help="comma-separated")
@@ -612,7 +635,8 @@ def main(argv: list[str] | None = None) -> int:
         print(out[-4000:])
         return 0 if ok else 1
     elif a.cmd == "compile":
-        rec = compile_sanitizer(a.project, a.sanitizer, work=a.work, cpuset=a.cpuset)
+        rec = compile_sanitizer(a.project, a.sanitizer, work=a.work, cpuset=a.cpuset,
+                                timeout=a.compile_timeout)
         print(json.dumps(rec, indent=2))
         return 0 if rec["status"] == "compiled" else 1
     elif a.cmd == "pins":
@@ -623,7 +647,8 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "run":
         res = run_project(a.project, sanitizers=a.sanitizers, work=a.work,
                           oss_fuzz=a.oss_fuzz, commit=a.commit, srcdir=a.srcdir,
-                          cpuset=a.cpuset)
+                          cpuset=a.cpuset, compile_timeout=a.compile_timeout,
+                          retry_failed=a.retry_failed)
         print(json.dumps(res, indent=2))
         return 0 if res["status"] == "compiled" else 1
     elif a.cmd == "report":

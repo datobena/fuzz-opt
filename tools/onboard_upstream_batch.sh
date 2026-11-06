@@ -9,6 +9,8 @@
 # Env: PARALLEL (default 8, at most 8), SANITIZERS (all|address, default all),
 #      OSS_FUZZ (the OSS-Fuzz checkout), COMMIT (default origin/master; resolved
 #      to one sha up front so every project is vendored from the same commit).
+#      COMPILE_TIMEOUT (seconds per compile, default 21600), RETRY_FAILED=1
+#      (re-attempt non-address sanitizers recorded compile_failed).
 # Logs: <work-dir>/<project>/batch.log. Every step is resumable: re-running the
 # same command skips what is already done.
 set -u
@@ -17,6 +19,8 @@ WORK=$(realpath -m "$1"); shift
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 PARALLEL=${PARALLEL:-8}
 SANITIZERS=${SANITIZERS:-all}
+COMPILE_TIMEOUT=${COMPILE_TIMEOUT:-21600}
+RETRY=(); [ "${RETRY_FAILED:-0}" = 1 ] && RETRY=(--retry-failed)
 OSS_FUZZ=${OSS_FUZZ:-/home/sefcom/asu/project/oss-fuzz}
 COMMIT=$(git -C "$OSS_FUZZ" rev-parse --verify "${COMMIT:-origin/master}^{commit}") || exit 2
 if [ "$PARALLEL" -lt 1 ] || [ "$PARALLEL" -gt 8 ]; then
@@ -33,7 +37,8 @@ run_one() {  # slot spec
     mkdir -p "$WORK/$p"
     python3 "$HERE/tools/onboard_upstream.py" run --project "$p" --work "$WORK" \
         --sanitizers "$SANITIZERS" --oss-fuzz "$OSS_FUZZ" --commit "$COMMIT" \
-        --cpuset "$lo-$hi" ${srcdir:+--srcdir "$srcdir"} \
+        --cpuset "$lo-$hi" --compile-timeout "$COMPILE_TIMEOUT" "${RETRY[@]}" \
+        ${srcdir:+--srcdir "$srcdir"} \
         >"$WORK/$p/batch.log" 2>&1
 }
 
