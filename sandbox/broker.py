@@ -270,7 +270,11 @@ def _sanitizer_exports(ctx: BrokerContext, *, msan: bool = True) -> str:
 
 
 def _build_command(ctx: BrokerContext) -> list[str]:
-    """OSS-Fuzz `compile` with the agent's current source bind-mounted over $SRC.
+    """OSS-Fuzz `compile` of the agent's current source (its private snapshot).
+
+    ARVO: the snapshot is bind-mounted over $SRC/<project>. Upstream: it is
+    mounted read-only and copied over $SRC/<project> inside the container
+    (prework_build.upstream_compile_args), so the build never writes it.
 
     A FuzzBench-parity image (fb-aflpp/..., the only thing the broker knows about
     the target) instead gets FuzzBench's own aflplusplus build with the tree copied
@@ -409,10 +413,13 @@ def _run_build_snapshot(ctx: BrokerContext) -> tuple[bool, str]:
     with core_lock(ctx.cpu):
         rc, blob = _run(_build_command(ctx), BUILD_TIMEOUT_SECS, ctx)
     _audit(ctx, "build", blob)
-    # `compile` runs as root through a bind mount, so it leaves root-owned objects
-    # in the tree the AGENT (uid 1000) is editing and the orchestrator later has to
-    # `git clean` when a round is rejected. Restored on failure too: a build that
-    # died halfway leaves exactly the artifacts that have to be cleanable.
+    # `compile` runs as root through its writable mounts. An ARVO build writes
+    # the bind-mounted tree, leaving root-owned objects the AGENT (uid 1000) is
+    # editing and the orchestrator later has to `git clean` when a round is
+    # rejected. An upstream or FuzzBench build copies its read-only source in, so
+    # only /out (and the ccache dir) is written as root. Restored on failure too:
+    # a build that died halfway leaves exactly the artifacts that have to be
+    # cleanable.
     #
     # Not once the session has stopped: an untracked chown would then outlive
     # the session it belongs to. The session's teardown runs it instead, after

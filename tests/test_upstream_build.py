@@ -313,10 +313,63 @@ def test_upstream_compile_args_mount_the_preserved_git_dirs(tmp_path):
 def test_staged_compile_command_copies_the_preserved_git_dirs_in():
     assert pb._staged_compile_command("tpm2-tss", [".git", "deps/x/.git"]) == (
         "wd=$(pwd) && rm -rf /src/tpm2-tss && cp -a /staging/tpm2-tss /src/tpm2-tss"
+        " && rm -rf /src/tpm2-tss/.git"
         " && cp -a /staging-vcs/tpm2-tss/.git /src/tpm2-tss/.git"
         " && mkdir -p /src/tpm2-tss/deps/x"
+        " && rm -rf /src/tpm2-tss/deps/x/.git"
         " && cp -a /staging-vcs/tpm2-tss/deps/x/.git /src/tpm2-tss/deps/x/.git"
         ' && cd "$wd" && exec compile')
+
+
+def test_staged_compile_command_quotes_a_git_rel():
+    cmd = pb._staged_compile_command("p", ["sub dir/it's/.git"])
+    q = "'sub dir/it'\"'\"'s/.git'"
+    assert f" && rm -rf /src/p/{q} && cp -a /staging-vcs/p/{q} /src/p/{q}" in cmd
+    assert "mkdir -p /src/p/'sub dir/it'\"'\"'s'" in cmd
+
+
+def _run_staged(tmp_path, project, git_rels, *, pre_existing_git):
+    """Run the generated command with bash under a tmp prefix; `compile` is a stub."""
+    import subprocess
+    root = tmp_path / "root"
+    staging, vcs, src = root / "staging", root / "staging-vcs", root / "src"
+    tree = staging / project
+    (tree / "deps" / "x").mkdir(parents=True)
+    (tree / "file").write_text("f\n")
+    for rel in git_rels:
+        (vcs / project / rel).mkdir(parents=True)
+        (vcs / project / rel / "HEAD").write_text(f"{rel}\n")
+        if pre_existing_git:
+            (tree / rel).mkdir(parents=True)          # an empty .git in the tree
+    (src / project).mkdir(parents=True)
+    (src / project / "stale").write_text("old\n")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "compile").write_text('#!/bin/sh\npwd > "$OUTF"\n')
+    (bindir / "compile").chmod(0o755)
+    cmd = pb._staged_compile_command(project, git_rels, src_root=str(src),
+                                     staging=str(staging), vcs_staging=str(vcs))
+    import os
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}",
+           "OUTF": str(tmp_path / "pwd")}
+    r = subprocess.run(["bash", "-c", cmd], cwd=src / project, env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return src / project, (tmp_path / "pwd").read_text().strip()
+
+
+@pytest.mark.parametrize("pre_existing_git", [False, True], ids=["absent", "empty-dir"])
+def test_staged_compile_command_lands_each_git_at_its_place(tmp_path, pre_existing_git):
+    rels = [".git", "deps/x/.git", "sub dir/it's/.git"]
+    dst, wd = _run_staged(tmp_path, "p q", rels, pre_existing_git=pre_existing_git)
+    assert wd == str(dst)                       # cd "$wd" after rm -rf / cp -a
+    assert not (dst / "stale").exists() and (dst / "file").read_text() == "f\n"
+    for rel in rels:
+        assert (dst / rel / "HEAD").read_text() == f"{rel}\n"
+        assert not (dst / rel / ".git").exists()  # not nested as .git/.git
+    # The staged (read-only in the container) tree is untouched.
+    assert sorted(p.name for p in (tmp_path / "root" / "staging" / "p q").iterdir()) == \
+        sorted(["deps", "file"] + ([".git", "sub dir"] if pre_existing_git else []))
 
 
 def test_upstream_compile_args_unchanged_without_preserved_git(tmp_path):

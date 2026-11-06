@@ -350,7 +350,9 @@ def _vcs_mount_args(vcs_dir: str | Path, project: str) -> list[str]:
     return args
 
 
-def _staged_compile_command(project: str, git_rels: list[str] | tuple[str, ...] = ()) -> str:
+def _staged_compile_command(project: str, git_rels: list[str] | tuple[str, ...] = (), *,
+                            src_root: str = "/src", staging: str = _STAGING,
+                            vcs_staging: str = _VCS_STAGING) -> str:
     """The bash command of a staged upstream compile: a fresh copy of the
     read-only tree (and of each preserved .git, ``git_rels`` relative to the
     project root) at $SRC/<project>, then OSS-Fuzz's `compile`.
@@ -359,15 +361,19 @@ def _staged_compile_command(project: str, git_rels: list[str] | tuple[str, ...] 
     sources, samba's configure writes .git/hooks), so each compile gets one and
     the host tree is never written. The image's WORKDIR may be $SRC/<project>
     itself, which `rm -rf` deletes and `cp -a` recreates: hence `cd "$wd"`.
+    Each .git destination is removed first: a tree that already holds a (maybe
+    empty) .git there would otherwise get the copy nested as .git/.git.
+    The three roots are parameters for tests only.
     """
     q = shlex.quote
-    src = f"/src/{q(project)}"
-    parts = ["wd=$(pwd)", f"rm -rf {src}", f"cp -a {_STAGING}/{q(project)} {src}"]
+    src = f"{q(src_root)}/{q(project)}"
+    parts = ["wd=$(pwd)", f"rm -rf {src}", f"cp -a {q(staging)}/{q(project)} {src}"]
     for rel in git_rels:
         parent = Path(rel).parent.as_posix()
         if parent != ".":
             parts.append(f"mkdir -p {src}/{q(parent)}")
-        parts.append(f"cp -a {_VCS_STAGING}/{q(project)}/{q(rel)} {src}/{q(rel)}")
+        dst = f"{src}/{q(rel)}"
+        parts += [f"rm -rf {dst}", f"cp -a {q(vcs_staging)}/{q(project)}/{q(rel)} {dst}"]
     parts += ['cd "$wd"', "exec compile"]
     return " && ".join(parts)
 
