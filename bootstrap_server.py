@@ -239,7 +239,8 @@ def check_images() -> list[tuple[str, str, str]]:
 
 def _check_upstream_images() -> list[tuple[str, str, str]]:
     """One row per prework/upstream/<p>/ definition, keyed on its own label and
-    definition hash. Never built by this script (build_target_images skips them):
+    definition hash (Dockerfile + ossfuzz/, what the image is built from; the
+    meta.json/pins.json onboarding writes after the build are not in it). Never built by this script (build_target_images skips them):
     a missing or stale one is onboarded with tools/onboard_upstream.py."""
     rows = []
     if not UPSTREAM_TARGETS_DIR.is_dir():

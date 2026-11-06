@@ -349,10 +349,6 @@ def test_report_renders_a_row_per_harness(tmp_path):
     assert "dropped -Werror" in text
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "definition_hash covers meta.json and pins.json, which pins/compile write "
-    "AFTER the build: the stamped label goes stale, so the next run rebuilds and "
-    "bootstrap_server reports STALE. Needs a definition_hash ruling (Task 3)."))
 def test_a_second_run_does_not_rebuild(tmp_path, monkeypatch):
     up, work = tmp_path / "up", tmp_path / "work"
     d = _ready_project(up, work, harness_files=())
@@ -369,4 +365,10 @@ def test_a_second_run_does_not_rebuild(tmp_path, monkeypatch):
     monkeypatch.setattr(ob, "build_image", build_image)
     monkeypatch.setattr(ob, "image_checkouts_output", lambda tag: "foo abc\n")
     ob.run_project("foo", sanitizers="address", work=work, upstream_dir=up)
+    # pins and compile wrote meta.json/pins.json after the build: still current
     assert stamped["label"] == ui.definition_hash(d)
+    assert json.loads((d / "meta.json").read_text())["harnesses"] == {"address": ["t"]}
+    built = []
+    monkeypatch.setattr(ob, "build_image", lambda pdir, cpuset=None: built.append(pdir))
+    res = ob.run_project("foo", sanitizers="address", work=work, upstream_dir=up)
+    assert built == [] and res["status"] == "compiled"

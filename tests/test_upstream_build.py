@@ -52,25 +52,58 @@ def test_pinned_dockerfile_keeps_flags_case_comments_and_missing_newline():
         "COPY build.sh $SRC/")
 
 
-def test_definition_hash_covers_every_file_and_ignores_results(tmp_path):
+def _expected_hash(*files):
+    h = hashlib.sha256()
+    for rel, data in sorted(files):
+        h.update(rel.encode() + b"\0" + hashlib.sha256(data).hexdigest().encode() + b"\n")
+    return h.hexdigest()
+
+
+def test_definition_hash_without_ossfuzz_covers_every_file_but_results(tmp_path):
+    """A hand-written definition (no vendored tree): every file, results excluded."""
     (tmp_path / "Dockerfile").write_text("FROM a@sha256:1\n")
-    (tmp_path / "ossfuzz").mkdir()
-    (tmp_path / "ossfuzz" / "build.sh").write_text("make\n")
-    expected = hashlib.sha256()
-    for rel, data in (("Dockerfile", b"FROM a@sha256:1\n"), ("ossfuzz/build.sh", b"make\n")):
-        expected.update(rel.encode() + b"\0" + hashlib.sha256(data).hexdigest().encode() + b"\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "build.sh").write_text("make\n")
+    (tmp_path / "meta.json").write_text("{}")
     h0 = ui.definition_hash(tmp_path)
-    assert h0 == expected.hexdigest()
+    assert h0 == _expected_hash(("Dockerfile", b"FROM a@sha256:1\n"),
+                                ("src/build.sh", b"make\n"), ("meta.json", b"{}"))
 
     (tmp_path / "onboard_result.json").write_text("{}")
-    (tmp_path / "ossfuzz" / "onboard_result.json").write_text("{}")
+    (tmp_path / "src" / "onboard_result.json").write_text("{}")
     assert ui.definition_hash(tmp_path) == h0
 
-    (tmp_path / "ossfuzz" / "build.sh").write_text("make -j\n")
+    (tmp_path / "src" / "build.sh").write_text("make -j\n")
     h1 = ui.definition_hash(tmp_path)
     assert h1 != h0
-    (tmp_path / "ossfuzz" / "project.yaml").write_text("language: c\n")
+    (tmp_path / "meta.json").write_text('{"x": 1}')
     assert ui.definition_hash(tmp_path) not in (h0, h1)
+
+
+def test_definition_hash_with_ossfuzz_covers_only_the_build_inputs(tmp_path):
+    """The onboarded layout: the -f Dockerfile plus the ossfuzz/ context, and
+    nothing of the metadata onboarding writes around the build."""
+    (tmp_path / "Dockerfile").write_text("FROM a@sha256:1\n")
+    (tmp_path / "ossfuzz" / "sub").mkdir(parents=True)
+    (tmp_path / "ossfuzz" / "build.sh").write_text("make\n")
+    (tmp_path / "ossfuzz" / "sub" / "f.c").write_text("int x;\n")
+    h0 = ui.definition_hash(tmp_path)
+    assert h0 == _expected_hash(("Dockerfile", b"FROM a@sha256:1\n"),
+                                ("ossfuzz/build.sh", b"make\n"),
+                                ("ossfuzz/sub/f.c", b"int x;\n"))
+
+    for name in ("meta.json", "pins.json", "onboard_result.json", "notes.txt"):
+        (tmp_path / name).write_text('{"harnesses": {"address": ["t"]}}')
+    assert ui.definition_hash(tmp_path) == h0
+
+    (tmp_path / "ossfuzz" / "sub" / "f.c").write_text("int y;\n")
+    h1 = ui.definition_hash(tmp_path)
+    assert h1 != h0
+    (tmp_path / "Dockerfile").write_text("FROM a@sha256:2\n")
+    h2 = ui.definition_hash(tmp_path)
+    assert h2 not in (h0, h1)
+    (tmp_path / "ossfuzz" / "project.yaml").write_text("language: c\n")
+    assert ui.definition_hash(tmp_path) not in (h0, h1, h2)
 
 
 def test_build_command_labels_the_definition(tmp_path):

@@ -45,14 +45,26 @@ def load_pins(project_dir: str | Path) -> dict:
 
 
 def definition_hash(project_dir: str | Path) -> str:
-    """sha256 over every regular file under ``project_dir`` (the whole build
-    context), sorted by relative POSIX path, each fed as
-    ``relpath \\0 sha256(bytes) \\n``. onboard_result.json is excluded wherever it
-    sits: it records what a build did, not what it was built from."""
+    """sha256 over exactly what the image is built from, each file fed as
+    ``relpath \\0 sha256(bytes) \\n`` in sorted relative-POSIX-path order.
+
+    With a vendored ``ossfuzz/`` tree (the onboarded layout): ``Dockerfile`` at
+    the root plus every regular file under ``ossfuzz/``, recursively -- the -f
+    file and the build context. meta.json, pins.json, onboard_result.json and
+    anything else at the root are metadata written around the build (pins and
+    compile fill them in after it) and are excluded, or every onboarding would
+    leave its own image stale.
+
+    Without ``ossfuzz/`` (a hand-written definition): every regular file under
+    ``project_dir``, onboard_result.json excluded wherever it sits."""
     root = Path(project_dir)
+    if (root / "ossfuzz").is_dir():
+        candidates = [root / "Dockerfile", *(root / "ossfuzz").rglob("*")]
+    else:
+        candidates = [p for p in root.rglob("*") if p.name != RESULT_FILE]
     files = sorted(
-        (p.relative_to(root).as_posix(), p) for p in root.rglob("*")
-        if p.is_file() and not p.is_symlink() and p.name != RESULT_FILE
+        (p.relative_to(root).as_posix(), p) for p in candidates
+        if p.is_file() and not p.is_symlink()
     )
     h = hashlib.sha256()
     for rel, path in files:
@@ -94,8 +106,8 @@ def pinned_dockerfile(text: str, bases: dict) -> str:
 def build_command(project_dir: str | Path, tag: str) -> list[str]:
     """The context is the vendored ossfuzz/ tree when there is one: OSS-Fuzz
     Dockerfiles ``COPY build.sh $SRC/`` relative to their own directory, and the
-    pinned Dockerfile next to that tree is passed with -f. The label still
-    hashes all of ``project_dir``, Dockerfile and meta included."""
+    pinned Dockerfile next to that tree is passed with -f. The label hashes
+    exactly those two (definition_hash)."""
     project_dir = Path(project_dir)
     context = project_dir / "ossfuzz"
     if not context.is_dir():
