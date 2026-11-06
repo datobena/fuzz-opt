@@ -1,0 +1,20 @@
+{
+  "project": "relic",
+  "image": "bench-upstream/relic",
+  "sanitizers": {
+    "address": {
+      "status": "compile_failed",
+      "reason": "compile exited 2",
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/relic/address/compile.log",
+      "returncode": 2,
+      "secs": 719,
+      "timeout": 21600
+    }
+  },
+  "build_log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/relic/build.log",
+  "definition_hash": "5c6a1e82e8ba13effe0cb8a776053178ddd9de4346320bdf5bef915efa46bae4",
+  "status": "compile_failed",
+  "updated": "2026-11-05T19:31:07-0700",
+  "compile_timeout": 21600
+}

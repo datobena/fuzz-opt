@@ -6,6 +6,36 @@
     "address",
     "undefined"
   ],
-  "harnesses": {},
-  "deviations": []
+  "harnesses": {
+    "address": [
+      "xmlsec_dsig_verify_fuzzer",
+      "xmlsec_enc_fuzzer",
+      "xmlsec_fuzzer",
+      "xmlsec_keyinfo_fuzzer",
+      "xmlsec_keyload_fuzzer",
+      "xmlsec_relationship_fuzzer"
+    ],
+    "undefined": [
+      "xmlsec_dsig_verify_fuzzer",
+      "xmlsec_enc_fuzzer",
+      "xmlsec_fuzzer",
+      "xmlsec_keyinfo_fuzzer",
+      "xmlsec_keyload_fuzzer",
+      "xmlsec_relationship_fuzzer"
+    ]
+  },
+  "deviations": [
+    {
+      "what": "ossfuzz/build.sh: xmlsec ./configure gains --disable-hardening",
+      "why": "A3 (toolchain drift). xmlsec HEAD (1.3.13 dev) now enables hardening flags by default, incl. -fcf-protection=full. The pinned base image's AFL++ afl-cc treats any -fcf-protection* argument as a CFI-sanitizer request (src/afl-cc.c: '-fcf-protection' -> have_cfisan), so it injects -flto -fvisibility=hidden and emits LLVM bitcode objects; the non-LTO libtool link of libxmlsec1.la then fails with '.libs/app.o: file not recognized'. Verified in the image: adding only -fcf-protection=full to an afl-clang-fast compile of src/app.c turns ELF output into LLVM IR bitcode.",
+      "affects_measurement": true,
+      "rationale": "Uses xmlsec's own supported configure switch; no source or harness change and no change to OSS-Fuzz-composed CFLAGS/sanitizer/-O. It drops xmlsec's project-added hardening set (-fstack-protector-strong, -fPIE, -fcf-protection=full, -fstack-clash-protection, -D_FORTIFY_SOURCE=2, -pie/-z relro/-z now), which restores the flag set OSS-Fuzz built xmlsec with before the hardening default landed. There is no narrower knob for -fcf-protection alone short of patching configure.ac (F3) or afl-cc (F5). Reviewer: confirm dropping the whole hardening set is acceptable (ASan supersedes stack-protector/FORTIFY detection). Controller ruling R7: marked affects_measurement=true because xmlsec's own default hardening flags (-fcf-protection, -fstack-protector-strong, _FORTIFY_SOURCE, ...) are off in this build, so the compiled code differs from what xmlsec's configure would produce; OSS-Fuzz's own xmlsec build has been broken since 2026-09-30 with the same toolchain, so no OSS-Fuzz-exact build exists to match. A crash found on this build should be re-checked on a hardening-enabled build at write-up time."
+    },
+    {
+      "what": "Dockerfile fetches xml.dict (same URL) into $SRC/xml.dict; build.sh copies it to $OUT instead of wget at compile time",
+      "why": "A2: compile runs with --network none; build.sh line 77 fetched https://raw.githubusercontent.com/mirrorer/afl/master/dictionaries/xml.dict at compile time.",
+      "affects_measurement": false,
+      "rationale": "Same file from the same URL, fetched at image-build time; the dictionary shipped in $OUT is unchanged."
+    }
+  ]
 }

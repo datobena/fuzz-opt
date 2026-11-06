@@ -1,0 +1,43 @@
+{
+  "project": "xmlsec",
+  "image": "bench-upstream/xmlsec",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "xmlsec_dsig_verify_fuzzer",
+        "xmlsec_enc_fuzzer",
+        "xmlsec_fuzzer",
+        "xmlsec_keyinfo_fuzzer",
+        "xmlsec_keyload_fuzzer",
+        "xmlsec_relationship_fuzzer"
+      ],
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/xmlsec/address/compile.log",
+      "returncode": 0,
+      "secs": 165,
+      "timeout": 21600
+    },
+    "undefined": {
+      "status": "compiled",
+      "harnesses": [
+        "xmlsec_dsig_verify_fuzzer",
+        "xmlsec_enc_fuzzer",
+        "xmlsec_fuzzer",
+        "xmlsec_keyinfo_fuzzer",
+        "xmlsec_keyload_fuzzer",
+        "xmlsec_relationship_fuzzer"
+      ],
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/xmlsec/undefined/compile.log",
+      "returncode": 0,
+      "secs": 186,
+      "timeout": 21600
+    }
+  },
+  "build_log": "results/upstream-onboarding-20261105/xmlsec/build.log",
+  "definition_hash": "bb2024e8e05472c34e378577d81de67eea54ef28b63e52c877a3353b73bb2679",
+  "status": "compiled",
+  "updated": "2026-11-05T20:03:50-0700",
+  "compile_timeout": 21600
+}

@@ -7,5 +7,9 @@
     "undefined"
   ],
   "harnesses": {},
-  "deviations": []
+  "deviations": [],
+  "dropped": {
+    "when": "2026-11-05",
+    "reason": "relic HEAD 98f51ef (2026-11-03) removed Pseudo-Mersenne reduction (cmake/bn.cmake rejects BN_METHD=PMERS; bn_mod_pre_pmers/bn_mod_pmers gone); cryptofuzz HEAD 6f1e497 modules/relic/bn_ops.cpp:431 still calls them. Fixing requires editing the cryptofuzz module (fix policy F2) or pinning relic below HEAD (F4). Spare project; not needed to reach ten."
+  }
 }

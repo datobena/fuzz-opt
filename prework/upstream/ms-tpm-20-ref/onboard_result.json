@@ -1,0 +1,21 @@
+{
+  "project": "ms-tpm-20-ref",
+  "image": "bench-upstream/ms-tpm-20-ref",
+  "sanitizers": {
+    "address": {
+      "status": "compile_failed",
+      "reason": "compile exited 2",
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/ms-tpm-20-ref/address/compile.log",
+      "returncode": 2,
+      "secs": 9,
+      "timeout": 21600
+    }
+  },
+  "build_log": "results/upstream-onboarding-20261105/ms-tpm-20-ref/build.log",
+  "reason": "ERROR: failed to build: failed to solve: process \"/bin/sh -c cd ms-tpm-20-ref && git apply $SRC/libfuzzer.patch\" did not complete successfully: exit code: 1",
+  "status": "compile_failed",
+  "updated": "2026-11-05T19:55:20-0700",
+  "definition_hash": "d5913a9a5b34084409a5a747f3650a80945e6253a3808c6d0520cd12ffd49a3c",
+  "compile_timeout": 21600
+}

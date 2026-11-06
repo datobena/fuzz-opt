@@ -3,5 +3,9 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder:ubuntu-24-04": "gcr.io/oss-fuzz-base/base-builder@sha256:415ccd95bff8714ae7bd5b6989f2cbc159e9715f27284f763ddfae88b5e9997b"
   },
-  "checkouts": {}
+  "checkouts": {
+    "ada-fuzzers": "87026e03ca7404dd3fa7f1b3f7726b917daa743e",
+    "wolfssh": "fed79308c58837b6cc68ac065bb81abfce4d5795",
+    "wolfssl": "2b0874883c8456ee9b7cd4dd2ae1d58f8c02e101"
+  }
 }

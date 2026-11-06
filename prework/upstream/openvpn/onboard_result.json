@@ -1,0 +1,49 @@
+{
+  "project": "openvpn",
+  "image": "bench-upstream/openvpn",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz_base64",
+        "fuzz_buffer",
+        "fuzz_dhcp",
+        "fuzz_misc",
+        "fuzz_mroute",
+        "fuzz_packet_id",
+        "fuzz_proxy",
+        "fuzz_route",
+        "fuzz_verify_cert"
+      ],
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/openvpn/address/compile.log",
+      "returncode": 0,
+      "secs": 91,
+      "timeout": 21600
+    },
+    "undefined": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz_base64",
+        "fuzz_buffer",
+        "fuzz_dhcp",
+        "fuzz_misc",
+        "fuzz_mroute",
+        "fuzz_packet_id",
+        "fuzz_proxy",
+        "fuzz_route",
+        "fuzz_verify_cert"
+      ],
+      "srcdir_verified": true,
+      "log": "results/upstream-onboarding-20261105/openvpn/undefined/compile.log",
+      "returncode": 0,
+      "secs": 78,
+      "timeout": 21600
+    }
+  },
+  "build_log": "results/upstream-onboarding-20261105/openvpn/build.log",
+  "definition_hash": "9460ee035a623a23363fc02185f521dd8235352e2ebe9fd35f451ef654b84063",
+  "status": "compiled",
+  "updated": "2026-11-05T19:57:41-0700",
+  "compile_timeout": 21600
+}

@@ -1,0 +1,33 @@
+{
+  "project": "wolfssh",
+  "image": "bench-upstream/wolfssh",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz_server"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/wolfssh/address/compile.log",
+      "returncode": 0,
+      "secs": 109,
+      "timeout": 21600
+    },
+    "undefined": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz_server"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/wolfssh/undefined/compile.log",
+      "returncode": 0,
+      "secs": 84,
+      "timeout": 21600
+    }
+  },
+  "build_log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/wolfssh/build.log",
+  "definition_hash": "2ec54a0bab402b55eb2c424b3707181c42955993c040766a8a924e63df96d223",
+  "status": "compiled",
+  "updated": "2026-11-05T19:28:41-0700",
+  "compile_timeout": 21600
+}

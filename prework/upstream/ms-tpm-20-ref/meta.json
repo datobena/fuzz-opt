@@ -7,5 +7,9 @@
     "undefined"
   ],
   "harnesses": {},
-  "deviations": []
+  "deviations": [],
+  "dropped": {
+    "when": "2026-11-05",
+    "reason": "OSS-Fuzz harness fuzzer/tpm_cmd.c does not compile against ms-tpm-20-ref HEAD ee21db0a941d: TpmBuildSwitches.h moved out of the harness's include path, Platform_fp.h no longer exists, _plat__NVEnable now takes 2 arguments. A6 rebase of libfuzzer.patch (context-only) made the image build, but the harness itself needs editing (fix policy F2); the rebase was reverted so the vendored config stays verbatim. Spare project; not needed to reach ten."
+  }
 }

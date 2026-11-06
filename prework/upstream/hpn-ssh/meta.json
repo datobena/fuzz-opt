@@ -6,6 +6,27 @@
     "address",
     "undefined"
   ],
-  "harnesses": {},
+  "harnesses": {
+    "address": [
+      "agent_fuzz",
+      "authopt_fuzz",
+      "kex_fuzz",
+      "privkey_fuzz",
+      "pubkey_fuzz",
+      "sig_fuzz",
+      "sshsig_fuzz",
+      "sshsigopt_fuzz"
+    ],
+    "undefined": [
+      "agent_fuzz",
+      "authopt_fuzz",
+      "kex_fuzz",
+      "privkey_fuzz",
+      "pubkey_fuzz",
+      "sig_fuzz",
+      "sshsig_fuzz",
+      "sshsigopt_fuzz"
+    ]
+  },
   "deviations": []
 }

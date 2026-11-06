@@ -3,5 +3,7 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder:ubuntu-24-04": "gcr.io/oss-fuzz-base/base-builder@sha256:415ccd95bff8714ae7bd5b6989f2cbc159e9715f27284f763ddfae88b5e9997b"
   },
-  "checkouts": {}
+  "checkouts": {
+    "strongswan": "2d856cb1a588a8d83cf92d220276a1ef8476e4da"
+  }
 }

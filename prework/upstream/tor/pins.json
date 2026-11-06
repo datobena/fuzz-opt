@@ -3,5 +3,11 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder": "gcr.io/oss-fuzz-base/base-builder@sha256:8b4a73d83374b298a0a771eeec9a1d44ceff3416a678b7d7946303389d022aca"
   },
-  "checkouts": {}
+  "checkouts": {
+    "libevent": "d82464a277d0f42703702c4dfd9af6af38595a83",
+    "openssl": "8ba9860b555e35f6bdfaf80eeaa087e65fdcca11",
+    "tor-fuzz-corpora": "eb33d7ca85fb1ff74e09f68fe3aeb5e3123abb8a",
+    "tor": "a1bfab3ffb289224a93c5c9ff49eb9931b1f0057",
+    "zlib": "99623ef7097352da7993ba614161fd6a311e046e"
+  }
 }

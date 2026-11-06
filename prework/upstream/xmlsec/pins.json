@@ -3,5 +3,9 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder:ubuntu-24-04": "gcr.io/oss-fuzz-base/base-builder@sha256:415ccd95bff8714ae7bd5b6989f2cbc159e9715f27284f763ddfae88b5e9997b"
   },
-  "checkouts": {}
+  "checkouts": {
+    "libxml2": "febeb5c91fffeca92b84162d57a1832fe5a60b09",
+    "libxslt": "d4ca6edc9b85534c586260db61068083798ca8ed",
+    "xmlsec": "cfd9afa35520e562ab6e643d025cd396f9300630"
+  }
 }

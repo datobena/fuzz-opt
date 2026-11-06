@@ -1,0 +1,47 @@
+{
+  "project": "hpn-ssh",
+  "image": "bench-upstream/hpn-ssh",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "agent_fuzz",
+        "authopt_fuzz",
+        "kex_fuzz",
+        "privkey_fuzz",
+        "pubkey_fuzz",
+        "sig_fuzz",
+        "sshsig_fuzz",
+        "sshsigopt_fuzz"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/hpn-ssh/address/compile.log",
+      "returncode": 0,
+      "secs": 99,
+      "timeout": 21600
+    },
+    "undefined": {
+      "status": "compiled",
+      "harnesses": [
+        "agent_fuzz",
+        "authopt_fuzz",
+        "kex_fuzz",
+        "privkey_fuzz",
+        "pubkey_fuzz",
+        "sig_fuzz",
+        "sshsig_fuzz",
+        "sshsigopt_fuzz"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/hpn-ssh/undefined/compile.log",
+      "returncode": 0,
+      "secs": 88,
+      "timeout": 21600
+    }
+  },
+  "build_log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/hpn-ssh/build.log",
+  "definition_hash": "485d84e43d4349a9778cba8c106aad4762b8a9cb6be095e1f34106533a3e1fb9",
+  "status": "compiled",
+  "updated": "2026-11-05T19:31:05-0700",
+  "compile_timeout": 21600
+}

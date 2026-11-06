@@ -3,5 +3,9 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder": "gcr.io/oss-fuzz-base/base-builder@sha256:8b4a73d83374b298a0a771eeec9a1d44ceff3416a678b7d7946303389d022aca"
   },
-  "checkouts": {}
+  "checkouts": {
+    "botan": "c06967092edd9baa2b42f89135380912113ae209",
+    "cryptofuzz": "6f1e4970288ecaf8d2fa34643fb4b19fa0adc626",
+    "relic": "98f51efe23841dc8696cad245d50053bdf308fdc"
+  }
 }

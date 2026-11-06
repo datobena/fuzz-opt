@@ -1,0 +1,33 @@
+{
+  "project": "libtpms",
+  "image": "bench-upstream/libtpms",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/libtpms/address/compile.log",
+      "returncode": 0,
+      "secs": 60,
+      "timeout": 21600
+    },
+    "undefined": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/libtpms/undefined/compile.log",
+      "returncode": 0,
+      "secs": 59,
+      "timeout": 21600
+    }
+  },
+  "build_log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/libtpms/build.log",
+  "definition_hash": "505447c8cc88e1ac5f89fbbede0a3385202076347f98bbaa1611b423d026abff",
+  "status": "compiled",
+  "updated": "2026-11-05T19:23:22-0700",
+  "compile_timeout": 21600
+}

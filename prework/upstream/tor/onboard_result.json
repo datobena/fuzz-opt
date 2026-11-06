@@ -1,0 +1,89 @@
+{
+  "project": "tor",
+  "image": "bench-upstream/tor",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "oss-fuzz-address",
+        "oss-fuzz-addressPTR",
+        "oss-fuzz-consensus",
+        "oss-fuzz-descriptor",
+        "oss-fuzz-diff",
+        "oss-fuzz-diff-apply",
+        "oss-fuzz-extrainfo",
+        "oss-fuzz-hsdescv3",
+        "oss-fuzz-hsdescv3-inner",
+        "oss-fuzz-hsdescv3-middle",
+        "oss-fuzz-http",
+        "oss-fuzz-http-connect",
+        "oss-fuzz-microdesc",
+        "oss-fuzz-socks",
+        "oss-fuzz-strops",
+        "oss-fuzz-vrs"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/tor/address/compile.log",
+      "returncode": 0,
+      "secs": 836,
+      "timeout": 21600
+    },
+    "memory": {
+      "status": "compiled",
+      "harnesses": [
+        "oss-fuzz-address",
+        "oss-fuzz-addressPTR",
+        "oss-fuzz-consensus",
+        "oss-fuzz-descriptor",
+        "oss-fuzz-diff",
+        "oss-fuzz-diff-apply",
+        "oss-fuzz-extrainfo",
+        "oss-fuzz-hsdescv3",
+        "oss-fuzz-hsdescv3-inner",
+        "oss-fuzz-hsdescv3-middle",
+        "oss-fuzz-http",
+        "oss-fuzz-http-connect",
+        "oss-fuzz-microdesc",
+        "oss-fuzz-socks",
+        "oss-fuzz-strops",
+        "oss-fuzz-vrs"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/tor/memory/compile.log",
+      "returncode": 0,
+      "secs": 764,
+      "timeout": 21600
+    },
+    "undefined": {
+      "status": "compiled",
+      "harnesses": [
+        "oss-fuzz-address",
+        "oss-fuzz-addressPTR",
+        "oss-fuzz-consensus",
+        "oss-fuzz-descriptor",
+        "oss-fuzz-diff",
+        "oss-fuzz-diff-apply",
+        "oss-fuzz-extrainfo",
+        "oss-fuzz-hsdescv3",
+        "oss-fuzz-hsdescv3-inner",
+        "oss-fuzz-hsdescv3-middle",
+        "oss-fuzz-http",
+        "oss-fuzz-http-connect",
+        "oss-fuzz-microdesc",
+        "oss-fuzz-socks",
+        "oss-fuzz-strops",
+        "oss-fuzz-vrs"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/tor/undefined/compile.log",
+      "returncode": 0,
+      "secs": 539,
+      "timeout": 21600
+    }
+  },
+  "build_log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/tor/build.log",
+  "definition_hash": "68d6d4b3a59952dbe25048b69053aa93d62a7590baf3f72e4306482a20ca8743",
+  "status": "compiled",
+  "updated": "2026-11-05T19:55:20-0700",
+  "compile_timeout": 21600
+}

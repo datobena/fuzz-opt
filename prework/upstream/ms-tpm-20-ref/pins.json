@@ -3,5 +3,8 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder:ubuntu-24-04": "gcr.io/oss-fuzz-base/base-builder@sha256:415ccd95bff8714ae7bd5b6989f2cbc159e9715f27284f763ddfae88b5e9997b"
   },
-  "checkouts": {}
+  "checkouts": {
+    "ms-tpm-20-ref": "ee21db0a941decd3cac67925ea3310873af60ab3",
+    "tpm2-command-corpus": "44bd6c8f2dd11b9f87e54ef2ffe4fc1b342db229"
+  }
 }

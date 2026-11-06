@@ -7,6 +7,61 @@
     "memory",
     "undefined"
   ],
-  "harnesses": {},
+  "harnesses": {
+    "address": [
+      "oss-fuzz-address",
+      "oss-fuzz-addressPTR",
+      "oss-fuzz-consensus",
+      "oss-fuzz-descriptor",
+      "oss-fuzz-diff",
+      "oss-fuzz-diff-apply",
+      "oss-fuzz-extrainfo",
+      "oss-fuzz-hsdescv3",
+      "oss-fuzz-hsdescv3-inner",
+      "oss-fuzz-hsdescv3-middle",
+      "oss-fuzz-http",
+      "oss-fuzz-http-connect",
+      "oss-fuzz-microdesc",
+      "oss-fuzz-socks",
+      "oss-fuzz-strops",
+      "oss-fuzz-vrs"
+    ],
+    "memory": [
+      "oss-fuzz-address",
+      "oss-fuzz-addressPTR",
+      "oss-fuzz-consensus",
+      "oss-fuzz-descriptor",
+      "oss-fuzz-diff",
+      "oss-fuzz-diff-apply",
+      "oss-fuzz-extrainfo",
+      "oss-fuzz-hsdescv3",
+      "oss-fuzz-hsdescv3-inner",
+      "oss-fuzz-hsdescv3-middle",
+      "oss-fuzz-http",
+      "oss-fuzz-http-connect",
+      "oss-fuzz-microdesc",
+      "oss-fuzz-socks",
+      "oss-fuzz-strops",
+      "oss-fuzz-vrs"
+    ],
+    "undefined": [
+      "oss-fuzz-address",
+      "oss-fuzz-addressPTR",
+      "oss-fuzz-consensus",
+      "oss-fuzz-descriptor",
+      "oss-fuzz-diff",
+      "oss-fuzz-diff-apply",
+      "oss-fuzz-extrainfo",
+      "oss-fuzz-hsdescv3",
+      "oss-fuzz-hsdescv3-inner",
+      "oss-fuzz-hsdescv3-middle",
+      "oss-fuzz-http",
+      "oss-fuzz-http-connect",
+      "oss-fuzz-microdesc",
+      "oss-fuzz-socks",
+      "oss-fuzz-strops",
+      "oss-fuzz-vrs"
+    ]
+  },
   "deviations": []
 }

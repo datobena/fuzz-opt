@@ -3,5 +3,8 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder": "gcr.io/oss-fuzz-base/base-builder@sha256:8b4a73d83374b298a0a771eeec9a1d44ceff3416a678b7d7946303389d022aca"
   },
-  "checkouts": {}
+  "checkouts": {
+    "boringssl": "b69a6175320af9b6fca7295fdbb4fb130f4804a2",
+    "openvpn": "41889e72a604e500c33392df93a62ef60c14d1f1"
+  }
 }

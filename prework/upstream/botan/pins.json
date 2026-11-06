@@ -3,5 +3,8 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder": "gcr.io/oss-fuzz-base/base-builder@sha256:8b4a73d83374b298a0a771eeec9a1d44ceff3416a678b7d7946303389d022aca"
   },
-  "checkouts": {}
+  "checkouts": {
+    "botan": "e95a6878514b3c7675075ea6247c5f4117c12936",
+    "fuzzer_corpus": "103c8e63517bb0603d312a6ee12e49d5f49fcc66"
+  }
 }

@@ -6,6 +6,19 @@
     "address",
     "undefined"
   ],
-  "harnesses": {},
+  "harnesses": {
+    "address": [
+      "fuzz_test_kem",
+      "fuzz_test_sig",
+      "fuzz_test_sig_stfl_lms",
+      "fuzz_test_sig_stfl_xmss"
+    ],
+    "undefined": [
+      "fuzz_test_kem",
+      "fuzz_test_sig",
+      "fuzz_test_sig_stfl_lms",
+      "fuzz_test_sig_stfl_xmss"
+    ]
+  },
   "deviations": []
 }

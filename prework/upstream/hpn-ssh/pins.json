@@ -3,5 +3,8 @@
   "bases": {
     "gcr.io/oss-fuzz-base/base-builder": "gcr.io/oss-fuzz-base/base-builder@sha256:8b4a73d83374b298a0a771eeec9a1d44ceff3416a678b7d7946303389d022aca"
   },
-  "checkouts": {}
+  "checkouts": {
+    "hpn-ssh": "81efae0837575e1ae8e7022237f8bf4f985ec8d9",
+    "openssh-fuzz-cases": "c7c7f482de25d51e6a9b1f98719677bcc7067c61"
+  }
 }

@@ -6,6 +6,36 @@
     "address",
     "undefined"
   ],
-  "harnesses": {},
-  "deviations": []
+  "harnesses": {
+    "address": [
+      "fuzz_base64",
+      "fuzz_buffer",
+      "fuzz_dhcp",
+      "fuzz_misc",
+      "fuzz_mroute",
+      "fuzz_packet_id",
+      "fuzz_proxy",
+      "fuzz_route",
+      "fuzz_verify_cert"
+    ],
+    "undefined": [
+      "fuzz_base64",
+      "fuzz_buffer",
+      "fuzz_dhcp",
+      "fuzz_misc",
+      "fuzz_mroute",
+      "fuzz_packet_id",
+      "fuzz_proxy",
+      "fuzz_route",
+      "fuzz_verify_cert"
+    ]
+  },
+  "deviations": [
+    {
+      "what": "ossfuzz/build.sh: removed 'list' from the harness loop (`for fuzzname in dhcp misc base64 proxy buffer route packet_id mroute list verify_cert`); fuzz_list.c is not compiled or linked. Harness file untouched; the other nine harnesses are built with identical commands.",
+      "why": "fuzz_list.c does not compile against openvpn HEAD: hash_init() now takes 3 arguments (harness passes 4, error at fuzz_list.c:51) and hash_func is no longer declared (fuzz_list.c:23).",
+      "affects_measurement": true,
+      "rationale": "Policy A5 (ruling R1). Lost: the fuzz_list target (openvpn list.c hash-table code) is not fuzzed in this campaign; the unmodified OSS-Fuzz config (f3af0cb37) fails the same way at openvpn HEAD 41889e72. Editing the harness would be F2."
+    }
+  ]
 }

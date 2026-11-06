@@ -57,6 +57,7 @@ export CXXFLAGS="$CXXFLAGS -I$XMLSEC_DEPS_PATH/include"
 ./configure \
   --enable-static-linking \
   --enable-development \
+  --disable-hardening \
   --with-libxml="$XMLSEC_DEPS_PATH" \
   --with-libxslt="$XMLSEC_DEPS_PATH"
 make -j$(nproc) clean
@@ -74,7 +75,7 @@ for file in $SRC/xmlsec/apps/oss-fuzz/*_target.c; do
     -lz -llzma -lcrypto -lssl -o $OUT/${b}_fuzzer
 done
 cp $SRC/xmlsec/apps/oss-fuzz/config/*.options $OUT/
-wget -O $OUT/xml.dict https://raw.githubusercontent.com/mirrorer/afl/master/dictionaries/xml.dict
+cp $SRC/xml.dict $OUT/xml.dict
 
 # Seed corpus for the DSig verification fuzzer
 zip -j $OUT/xmlsec_dsig_verify_fuzzer_seed_corpus.zip \

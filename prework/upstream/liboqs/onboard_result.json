@@ -1,0 +1,39 @@
+{
+  "project": "liboqs",
+  "image": "bench-upstream/liboqs",
+  "sanitizers": {
+    "address": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz_test_kem",
+        "fuzz_test_sig",
+        "fuzz_test_sig_stfl_lms",
+        "fuzz_test_sig_stfl_xmss"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/liboqs/address/compile.log",
+      "returncode": 0,
+      "secs": 641,
+      "timeout": 21600
+    },
+    "undefined": {
+      "status": "compiled",
+      "harnesses": [
+        "fuzz_test_kem",
+        "fuzz_test_sig",
+        "fuzz_test_sig_stfl_lms",
+        "fuzz_test_sig_stfl_xmss"
+      ],
+      "srcdir_verified": true,
+      "log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/liboqs/undefined/compile.log",
+      "returncode": 0,
+      "secs": 462,
+      "timeout": 21600
+    }
+  },
+  "build_log": "/home/sefcom/asu/project/test/benchmark/analysis/fuzz-opt/results/upstream-onboarding-20261105/liboqs/build.log",
+  "definition_hash": "b1ab7955d2fa9c27ed82b639801712e8b3db249e664fc14730697e0f13cbf0c0",
+  "status": "compiled",
+  "updated": "2026-11-05T19:40:02-0700",
+  "compile_timeout": 21600
+}
