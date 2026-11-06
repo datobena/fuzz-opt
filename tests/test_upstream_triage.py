@@ -98,113 +98,220 @@ def test_msan_warning_is_classified():
 
 
 # --------------------------------------------------------------------------- #
+# classify_run / combine_runs
+# --------------------------------------------------------------------------- #
+def test_classify_run_statuses():
+    rep = asan("heap-buffer-overflow", FR)
+    assert tu.classify_run(rep, 1)["status"] == "crash"
+    assert tu.classify_run("", 0)["status"] == "clean"
+    assert tu.classify_run(rep, 0)["status"] == "clean"          # exited 0: not a crash
+    assert tu.classify_run("loader: libfoo.so: not found", 127)["status"] == "infra"
+    assert tu.classify_run("", 126)["status"] == "infra"
+    assert tu.classify_run("", 124)["status"] == "infra"
+    assert tu.classify_run("", None)["status"] == "infra"
+    assert tu.classify_run("Segmentation fault", 139)["status"] == "unparsed"
+
+
+def test_combine_runs_needs_every_try_clean_for_clean():
+    crash = {"status": "crash", "report": asan("SEGV", FR)}
+    clean, infra = {"status": "clean"}, {"status": "infra", "error": "exit 127"}
+    assert tu.combine_runs([clean, crash])["verdict"] == "reproduces"
+    assert tu.combine_runs([clean, clean, clean]) == {"tries": 3, "hits": 0, "verdict": "clean"}
+    v = tu.combine_runs([clean, infra, clean])
+    assert v["verdict"] == "unverified" and v["reason"] == "infra"
+    v = tu.combine_runs([clean, {"status": "unparsed", "error": "exit 139 ..."}])
+    assert v["verdict"] == "unverified" and v["reason"] == "unclassified"
+
+
+# --------------------------------------------------------------------------- #
 # summarize
 # --------------------------------------------------------------------------- #
 A = asan("heap-buffer-overflow", FR)
 A2 = asan("heap-buffer-overflow", FR, addr="0x6030000000f4")
 B = asan("heap-buffer-overflow", ["parse_header", "read_chunk", "decode_text"])
 C = asan("SEGV", ["fold_x", "walk_tree", "visit"])
-D = asan("stack-buffer-overflow", ["copy_name", "visit"])
 
 
-def rec(arm, trial, t, path, report):
-    return {"arm": arm, "trial": trial, "time_s": t, "path": path, "report": report}
+def rec(arm, trial, t, path, it=None):
+    return {"arm": arm, "trial": trial, "time_s": t, "path": path, "iter": it}
 
+
+def crash(report):
+    return {"status": "crash", "report": report}
+
+
+CLEAN = {"status": "clean"}
+CLEAN3 = [CLEAN, CLEAN, CLEAN]
 
 RECORDS = [
-    rec("baseline", "trial_00", 300.0, "/r/base/t0/a1", A),
-    rec("optimized", "trial_01", 120.0, "/r/opt/t1/a1", A2),
-    rec("optimized", "trial_02", 500.0, "/r/opt/t2/a1", A),
-    rec("optimized", "trial_01", 900.0, "/r/opt/t1/b1", B),       # only optimized, reproduces
-    rec("optimized", "trial_00", 50.0, "/r/opt/t0/c1", C),        # does not reproduce
-    rec("optimized", "trial_02", 70.0, "/r/opt/t2/d1", D),        # infra failure
-    rec("baseline", "trial_01", 10.0, "/r/base/t1/u1", "timeout: no report\n"),
+    rec("baseline", "trial_00", 300.0, "/r/base/t0/a1"),
+    rec("optimized", "trial_01", 120.0, "/r/opt/t1/a1", "iter_02"),
+    rec("optimized", "trial_02", 500.0, "/r/opt/t2/a1", "iter_01"),
+    rec("optimized", "trial_01", 900.0, "/r/opt/t1/b1", "iter_03"),   # only optimized, reproduces
+    rec("optimized", "trial_00", 50.0, "/r/opt/t0/c1", "iter_01"),    # induced (control crashes)
+    rec("optimized", "trial_02", 70.0, "/r/opt/t2/d1", "iter_01"),    # pristine infra
+    rec("baseline", "trial_01", 10.0, "/r/base/t1/u1"),               # nonzero, no report
+    rec("baseline", "trial_02", 20.0, "/r/base/t2/n1"),               # baseline, clean: never induced
+    rec("optimized", "trial_03", 30.0, "/r/opt/t3/n2", "iter_01"),    # clean on both binaries
 ]
+
+PRISTINE = {
+    "/r/base/t0/a1": [crash(A)],
+    "/r/opt/t1/a1": [CLEAN, crash(A2)],
+    "/r/opt/t2/a1": [crash(A)],
+    "/r/opt/t1/b1": [crash(B)],
+    "/r/opt/t0/c1": CLEAN3,
+    "/r/base/t1/u1": [{"status": "unparsed", "error": "exit 139 without a parsable sanitizer report"}] * 3,
+    "/r/base/t2/n1": CLEAN3,
+    "/r/opt/t3/n2": CLEAN3,
+}
+CONTROL = {"/r/opt/t0/c1": [crash(C)], "/r/opt/t3/n2": CLEAN3}
 
 
 def fake_replay(path):
-    return {"/r/opt/t1/a1": True, "/r/opt/t1/b1": True, "/r/opt/t0/c1": False}[path] \
-        if path != "/r/opt/t2/d1" else (_ for _ in ()).throw(RuntimeError("docker: exit 125"))
+    if path == "/r/opt/t2/d1":
+        raise RuntimeError("docker: exit 125")
+    return PRISTINE[path]
+
+
+def fake_control(r):
+    return CONTROL[r["path"]]
 
 
 def by_sig(items):
     return {d["signature"]: d for d in items}
 
 
-def test_summarize_splits_distinct_induced_unverified_unclassified():
-    r = tu.summarize(RECORDS, replay=fake_replay)
-    d = by_sig(r["distinct"])
-    assert set(d) == {"heap-buffer-overflow:parse_header<-read_chunk<-decode_image",
-                      "heap-buffer-overflow:parse_header<-read_chunk<-decode_text"}
+def run():
+    return tu.summarize(RECORDS, replay=fake_replay, control=fake_control)
+
+
+def test_summarize_splits_every_outcome():
+    r = run()
+    assert set(by_sig(r["distinct"])) == {
+        "heap-buffer-overflow:parse_header<-read_chunk<-decode_image",
+        "heap-buffer-overflow:parse_header<-read_chunk<-decode_text"}
     assert [x["signature"] for x in r["optimizer_induced"]] == ["SEGV:walk_tree<-visit"]
-    (u,) = r["unverified"]
-    assert u["signature"] == "stack-buffer-overflow:copy_name<-visit"
-    assert "exit 125" in u["pristine_error"] and u["reproduces_on_pristine"] is None
+    assert r["optimizer_induced"][0]["reproduces_on_pristine"] is False
+    assert {u["path"]: u["reason"] for u in r["unverified"]} == {
+        "/r/opt/t2/d1": "infra", "/r/base/t1/u1": "unclassified"}
+    assert "exit 125" in by_path(r["unverified"])["/r/opt/t2/d1"]["error"]
     assert [x["path"] for x in r["unclassified"]] == ["/r/base/t1/u1"]
+    assert sorted(x["path"] for x in r["non_reproducing"]) == ["/r/base/t2/n1", "/r/opt/t3/n2"]
 
 
-def test_summarize_reports_first_seen_trials_and_earliest_path_per_key():
-    r = tu.summarize(RECORDS, replay=fake_replay)
-    a = by_sig(r["distinct"])["heap-buffer-overflow:parse_header<-read_chunk<-decode_image"]
+def by_path(items):
+    return {d["path"]: d for d in items}
+
+
+def test_summarize_reports_first_seen_trials_tries_and_earliest_path_per_key():
+    a = by_sig(run()["distinct"])["heap-buffer-overflow:parse_header<-read_chunk<-decode_image"]
     assert a["kind"] == "heap-buffer-overflow"
     assert a["key"] == ["heap-buffer-overflow", ["parse_header", "read_chunk", "decode_image"]]
     assert a["first_seen_s"] == {"baseline": 300.0, "optimized": 120.0}
     assert a["trials"] == {"baseline": ["trial_00"], "optimized": ["trial_01", "trial_02"]}
-    assert a["earliest_path"] == "/r/opt/t1/a1"
+    assert a["earliest_path"] == "/r/opt/t1/a1" and a["earliest_iter"] == "iter_02"
     assert a["reproduces_on_pristine"] is True
+    assert (a["pristine_tries"], a["pristine_hits"]) == (4, 3)
     assert a["stack"][:4] == ["__asan_memcpy", "parse_header", "read_chunk", "decode_image"]
     assert len(a["stack"]) <= 10
 
 
-def test_summarize_counts_per_arm_exclude_induced_and_unverified():
-    r = tu.summarize(RECORDS, replay=fake_replay)
-    assert r["counts"]["distinct"] == 2
-    assert r["counts"]["per_arm"]["baseline"] == {"distinct": 1, "artifacts": 1}
-    assert r["counts"]["per_arm"]["optimized"] == {"distinct": 2, "artifacts": 3}
-    assert r["counts"]["optimizer_induced"] == 1
-    assert r["counts"]["unverified"] == 1
-    assert r["counts"]["unclassified"] == 1
+def test_summarize_counts_per_arm_exclude_everything_not_distinct():
+    c = run()["counts"]
+    assert c["distinct"] == 2
+    assert c["per_arm"]["baseline"] == {"distinct": 1, "artifacts": 1}
+    assert c["per_arm"]["optimized"] == {"distinct": 2, "artifacts": 3}
+    assert (c["optimizer_induced"], c["non_reproducing"], c["unverified"], c["unclassified"]) == (1, 2, 2, 1)
 
 
 def test_only_optimized_found_is_reproducing_keys_the_baseline_never_found():
-    r = tu.summarize(RECORDS, replay=fake_replay)
-    assert [x["signature"] for x in r["only_optimized_found"]] == [
+    assert [x["signature"] for x in run()["only_optimized_found"]] == [
         "heap-buffer-overflow:parse_header<-read_chunk<-decode_text"]
 
 
-def test_summarize_replays_only_the_earliest_artifact_of_each_key():
-    seen = []
+def test_every_artifact_is_replayed_on_pristine_and_control_only_when_clean():
+    seen, ctl = [], []
 
     def replay(path):
         seen.append(path)
-        return True
-    tu.summarize(RECORDS, replay=replay)
-    assert sorted(seen) == sorted(["/r/opt/t1/a1", "/r/opt/t1/b1", "/r/opt/t0/c1", "/r/opt/t2/d1"])
+        return fake_replay(path)
+
+    def control(r):
+        ctl.append(r["path"])
+        return fake_control(r)
+    tu.summarize(RECORDS, replay=replay, control=control)
+    assert sorted(seen) == sorted(r["path"] for r in RECORDS)
+    assert sorted(ctl) == ["/r/opt/t0/c1", "/r/opt/t3/n2"]      # never a baseline artifact
 
 
-def test_replay_returning_none_is_unverified_not_a_verdict():
-    r = tu.summarize([rec("optimized", "trial_00", 1.0, "/p", A)], replay=lambda p: None)
-    assert r["distinct"] == [] and r["optimizer_induced"] == []
-    assert len(r["unverified"]) == 1
+def test_probe_A_inlining_on_the_folded_binary_cannot_make_a_headline():
+    # Baseline stack [f1,f2,f3,f4]; on the folded binary the same bug reads
+    # [fold_fast,f1,f3,f4] (f2 inlined). Identity is the pristine replay, so the
+    # optimized artifact keys with the baseline's crash.
+    base = asan("heap-buffer-overflow", ["f1", "f2", "f3", "f4"])
+    recs = [rec("baseline", "trial_00", 10.0, "/b"), rec("optimized", "trial_00", 5.0, "/o", "iter_01")]
+    r = tu.summarize(recs, replay=lambda p: [crash(base)],
+                     control=lambda x: [crash(asan("heap-buffer-overflow", ["fold_fast", "f1", "f3", "f4"]))])
+    assert r["counts"]["distinct"] == 1 and r["counts"]["only_optimized_found"] == 0
+    assert r["distinct"][0]["trials"] == {"baseline": ["trial_00"], "optimized": ["trial_00"]}
 
 
-def test_replay_may_report_the_pristine_key():
-    r = tu.summarize([rec("optimized", "trial_00", 1.0, "/p", A)],
-                     replay=lambda p: {"reproduces": True, "pristine_key": tu.dedupe_key(B)})
-    (d,) = r["distinct"]
-    assert d["pristine_key"] == ["heap-buffer-overflow", ["parse_header", "read_chunk", "decode_text"]]
-    assert d["pristine_key_differs"] is True
+def test_probe_B_missing_library_on_pristine_is_unverified():
+    r = tu.summarize([rec("optimized", "trial_00", 1.0, "/o")],
+                     replay=lambda p: [tu.classify_run("error while loading shared libraries", 127)] * 3,
+                     control=lambda x: [crash(A)])
+    assert r["counts"]["unverified"] == 1 and r["optimizer_induced"] == [] and r["distinct"] == []
+
+
+def test_probe_C_nonzero_exit_without_report_is_unverified():
+    r = tu.summarize([rec("optimized", "trial_00", 1.0, "/o")],
+                     replay=lambda p: [tu.classify_run("Killed", 137)] * 3,
+                     control=lambda x: [crash(A)])
+    assert r["counts"]["unverified"] == 1 and r["counts"]["unclassified"] == 1
+    assert r["optimizer_induced"] == []
+
+
+def test_probe_D_induced_needs_a_control_crash_and_a_key_unseen_on_pristine():
+    recs = [rec("baseline", "trial_00", 1.0, "/b"),
+            rec("optimized", "trial_00", 2.0, "/o1", "iter_01"),     # control crashes with A's key
+            rec("optimized", "trial_01", 3.0, "/o2", "iter_01"),     # control crashes, new key
+            rec("optimized", "trial_02", 4.0, "/o3", "iter_01"),     # control clean
+            rec("optimized", "trial_03", 5.0, "/o4", "iter_01")]     # control infra
+    pristine = {"/b": [crash(A)], "/o1": CLEAN3, "/o2": CLEAN3, "/o3": CLEAN3, "/o4": CLEAN3}
+    ctl = {"/o1": [crash(A2)], "/o2": [crash(C)], "/o3": CLEAN3,
+           "/o4": [{"status": "infra", "error": "docker exit 125"}]}
+    r = tu.summarize(recs, replay=lambda p: pristine[p], control=lambda x: ctl[x["path"]])
+    assert [d["signature"] for d in r["optimizer_induced"]] == ["SEGV:walk_tree<-visit"]
+    assert sorted(x["path"] for x in r["non_reproducing"]) == ["/o1", "/o3"]
+    assert [x["path"] for x in r["unverified"]] == ["/o4"]
+    assert by_path(r["unverified"])["/o4"]["stage"] == "control"
+    assert r["counts"]["distinct"] == 1
+
+
+def test_a_baseline_artifact_is_never_optimizer_induced():
+    r = tu.summarize([rec("baseline", "trial_00", 1.0, "/b")], replay=lambda p: CLEAN3,
+                     control=lambda x: (_ for _ in ()).throw(AssertionError("control on baseline")))
+    assert r["optimizer_induced"] == [] and [x["path"] for x in r["non_reproducing"]] == ["/b"]
+
+
+def test_found_key_is_kept_as_provenance():
+    arts = by_path(run()["artifacts"])
+    assert arts["/r/opt/t0/c1"]["found_key"] == ["SEGV", ["walk_tree", "visit"]]
+    assert arts["/r/opt/t0/c1"]["verdict"] == "optimizer_induced"
+    assert arts["/r/opt/t1/a1"]["pristine_key"][0] == "heap-buffer-overflow"
+    assert arts["/r/opt/t1/a1"]["iter"] == "iter_02"
 
 
 def test_summarize_output_is_json_serializable():
-    json.dumps(tu.summarize(RECORDS, replay=fake_replay))
+    json.dumps(run())
 
 
 # --------------------------------------------------------------------------- #
 # markdown
 # --------------------------------------------------------------------------- #
 def test_markdown_lists_reproducer_paths_and_the_only_optimized_section():
-    r = tu.summarize(RECORDS, replay=fake_replay)
+    r = run()
     r.update({"experiment": "E1", "entry": {"project": "libssh", "cve": "upstream-970001",
                                              "fuzz_target": "ssh_fuzzer"},
               "pins": {"ossfuzz_commit": "f3af0cb37", "checkouts": {"libssh": "abc123"}}})
@@ -215,13 +322,15 @@ def test_markdown_lists_reproducer_paths_and_the_only_optimized_section():
     assert "## Only found by the optimized arm" in md
     only = md.split("## Only found by the optimized arm", 1)[1].split("\n## ", 1)[0]
     assert "decode_text" in only and "decode_image" not in only
-    for section in ("## Optimizer-induced", "## Unverified", "## Unclassified"):
+    assert "time:" in md and "hot-swap downtime" in md
+    for section in ("## Optimizer-induced", "## Non-reproducing", "## Unverified", "## Unclassified"):
         assert section in md
-    assert "/r/opt/t0/c1" in md and "/r/opt/t2/d1" in md and "/r/base/t1/u1" in md
+    for p in ("/r/opt/t0/c1", "/r/opt/t2/d1", "/r/base/t1/u1", "/r/base/t2/n1"):
+        assert p in md
 
 
 def test_markdown_without_pins_says_so():
-    r = tu.summarize([], replay=lambda p: True)
+    r = tu.summarize([], replay=lambda p: CLEAN3)
     r.update({"experiment": "E1", "entry": {"project": "p", "cve": "c"}, "pins": None})
     assert "not recorded" in tu.render_markdown(r)
 
@@ -246,6 +355,7 @@ def test_campaign_artifacts_reads_both_arms_and_archived_crash_dirs(tmp_path):
         ("baseline", "trial_00", 4.5), ("optimized", "trial_01", 120.0)]
     assert all(Path(a["path"]).is_file() for a in arts)
     assert Path(arts[1]["own_bin"]) == cve / "baseline" / "bin"   # no swap timeline: iter_00
+    assert arts[1]["iter"] == "iter_00" and arts[0]["iter"] is None
 
 
 def test_campaign_pins_prefers_the_trial_record(tmp_path):
@@ -274,3 +384,19 @@ def test_cli_parses_the_documented_flags():
     a = tu.parse_args(["--experiment-id", "E", "--project", "libssh", "--local-id", "970001",
                        "--cpu", "7", "--timeout", "60"])
     assert (a.experiment_id, a.project, a.local_id, a.cpu, a.timeout) == ("E", "libssh", 970001, 7, 60)
+
+
+def test_replay_once_maps_inner_exit_status(tmp_path, monkeypatch):
+    art = tmp_path / "id:000000,sig:06"
+    art.write_bytes(b"x")
+    outs = iter([(0, "error while loading shared libraries\n__RC=127\n"),
+                 (0, "__RC=0\n"),
+                 (0, asan("SEGV", FR) + "__RC=1\n"),
+                 (125, "docker: invalid spec"),
+                 (None, "docker run exceeded 90s")])
+    monkeypatch.setattr(tu, "_run_docker", lambda cmd, timeout: next(outs))
+    got = [tu.replay_once("img", tmp_path, "t", art, {}, cpu=None, timeout=90)["status"]
+           for _ in range(5)]
+    assert got == ["infra", "clean", "crash", "infra", "infra"]
+    assert tu.replay_once("img", tmp_path, "t", tmp_path / "missing", {}, cpu=None,
+                          timeout=90)["status"] == "infra"
