@@ -211,7 +211,13 @@ vendored copy of the project's OSS-Fuzz Dockerfile and build.sh:
 - forbidden: adding, removing or changing sanitizer, optimization or instrumentation
   flags; selecting, modifying or removing harnesses; patching the target's source
   (a project whose source does not compile at HEAD in the pinned image is dropped with
-  the log, unless the user overrides per project);
+  the log, unless the user overrides per project).
+  Exception made during onboarding (ruling R1, 2026-11-05, recorded as policy A5 in
+  the ledger's `fix-policy.md`): when build.sh builds several harnesses and ONE no
+  longer compiles against HEAD, that harness may be excluded from the loop as a
+  recorded, measurement-affecting deviation (the harness file is not edited; every
+  other harness builds exactly as before). Applied once: openvpn's `fuzz_list`. The
+  user may veto it, in which case openvpn is dropped;
 - every edit is a recorded deviation in `meta.json`; the auditor checks each against
   this list; at most three fix rounds per project, then it is dropped with its log.
 
