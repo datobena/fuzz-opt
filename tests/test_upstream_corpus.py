@@ -30,13 +30,32 @@ def test_with_zip_merged_gets_zip_plus_input(tmp_path):
         z.writestr("huge", big)
     merged, build = tmp_path / "merged", tmp_path / "build"
     st = corpus_util.stage_upstream_seed_corpus(str(b), "t", str(merged), str(build))
-    assert _names(merged) == ["huge", "input", "one", "two"]
-    assert _names(build) == ["huge", "one", "two"]
+    assert _names(merged) == ["dir__one", "huge", "input", "two"]
+    assert _names(build) == ["dir__one", "huge", "two"]
     assert all(p.is_file() for p in merged.iterdir()), "flattened, no subdirs"
     assert (merged / "input").read_bytes() == b"input\n"
-    assert (merged / "one").read_bytes() == b"one"
+    assert (merged / "dir__one").read_bytes() == b"one"
     assert (build / "huge").read_bytes() == big
     assert st == {"staged": 4, "zip": True, "input_file": True}
+
+
+def test_same_basename_in_different_dirs_never_collides(tmp_path):
+    b = tmp_path / "bin"
+    b.mkdir()
+    with zipfile.ZipFile(b / "t_seed_corpus.zip", "w") as z:
+        z.writestr("a/x", b"from-a")
+        z.writestr("b/x", b"from-b")
+        z.writestr("./c/y", b"from-c")
+    merged, build = tmp_path / "merged", tmp_path / "build"
+    st = corpus_util.stage_upstream_seed_corpus(str(b), "t", str(merged), str(build))
+    assert _names(merged) == ["a__x", "b__x", "c__y", "input"]
+    assert _names(build) == ["a__x", "b__x", "c__y"]
+    assert (merged / "a__x").read_bytes() == b"from-a"
+    assert (merged / "b__x").read_bytes() == b"from-b"
+    assert (build / "a__x").read_bytes() == b"from-a"
+    assert (build / "b__x").read_bytes() == b"from-b"
+    assert (merged / "input").read_bytes() == b"input\n"
+    assert st["staged"] == 4
 
 
 def test_without_zip_merged_and_build_hold_only_input(tmp_path):
@@ -86,8 +105,8 @@ def test_online_staging_routes_upstream_to_run_fuzzer_rules(tmp_path, monkeypatc
     merged = exp / "seed_corpus" / "merged"
     build = exp / "seed_corpus" / "build"
     assert n == 2
-    assert _names(merged) == ["a", "input"]
-    assert _names(build) == ["a"]
+    assert _names(merged) == ["input", "x__a"]
+    assert _names(build) == ["x__a"]
 
 
 def test_online_staging_fuzzbench_still_uses_fuzzbench_helper(tmp_path, monkeypatch):

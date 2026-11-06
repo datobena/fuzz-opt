@@ -259,6 +259,14 @@ UPSTREAM_INPUT_NAME = "input"
 UPSTREAM_INPUT_CONTENT = b"input\n"
 
 
+def _flat_member_name(filename: str) -> str:
+    """Zip member path -> one flat, collision-free file name."""
+    name = filename
+    while name.startswith("./") or name.startswith("/"):
+        name = name[2:] if name.startswith("./") else name[1:]
+    return name.replace("/", "__")
+
+
 def stage_upstream_seed_corpus(bin_dir: str, fuzz_target: str, merged_dir: str,
                                build_dir: str) -> dict:
     """Build the seed corpus the way OSS-Fuzz's run_fuzzer does.
@@ -268,7 +276,9 @@ def stage_upstream_seed_corpus(bin_dir: str, fuzz_target: str, merged_dir: str,
          into $CORPUS_DIR -- no size limit, no renaming;
       2. always `echo input > ${CORPUS_DIR}/input` (bytes b"input\\n"; written
          after the unzip, so it wins over a zip member of the same name).
-    Zip members are flattened to their basenames (directory entries skipped).
+    Zip members are flattened to their full in-zip path with every "/" replaced
+    by "__" (a/1 -> a__1, b/1 -> b__1), so no two members collide and nothing
+    can be written outside the corpus dir; directory entries are skipped.
 
     merged_dir (what the trials fuzz) gets zip members + `input`; build_dir
     (what the optimizer profiles) gets the zip members only, or only `input`
@@ -287,8 +297,8 @@ def stage_upstream_seed_corpus(bin_dir: str, fuzz_target: str, merged_dir: str,
                 for member in zf.infolist():
                     if member.filename.endswith("/"):
                         continue
-                    name = os.path.basename(member.filename)
-                    if not name:
+                    name = _flat_member_name(member.filename)
+                    if name in ("", ".", ".."):
                         continue
                     with zf.open(member) as src, \
                             open(os.path.join(build_dir, name), "wb") as dst:
