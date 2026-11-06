@@ -39,20 +39,25 @@ Three flavours, keyed on the manifest entry (lib/target_kind.kind_of):
   afl branch (read 2026-11-05), with its env and its cwd $OUT = /out:
 
       cwd /out, PATH=/out:$PATH
-      /out/afl-fuzz [-c /out/<t>] [-x /out/afl++.dict] -t <T>
+      /out/afl-fuzz -m none [-c /out/<t>] [-x /out/afl++.dict] -t <T>
                     -i <in> -o <out> [-x <options dict>]
                     [-s <seed>] [-V <secs>] -- /out/<t>
 
-  ``-c`` only if /out/afl_cmplog.txt exists, ``-x /out/afl++.dict`` only if
+  ``-m none`` is base-runner's image AFL_FUZZER_ARGS, which run_fuzzer appends
+  to. ``-c`` only if /out/afl_cmplog.txt exists, ``-x /out/afl++.dict`` only if
   that file exists; the options dict is run_fuzzer's get_dictionary (the last
   ``dict = X`` line of <t>.options in any section, else <t>.dict), relative X
   taken under /out, a missing file left for afl-fuzz to report. ``-s``/``-V``
   sit where run_fuzzer puts ``$*``. Env: run_fuzzer's eight AFL_* variables in
   its order (UPSTREAM_AFL_ENV) and ASAN/UBSAN/MSAN_OPTIONS built as run_fuzzer
-  builds them (image value + the <t>.options section + run_fuzzer's suffix;
-  upstream_sanitizer_env). Deviations, both user decisions:
+  builds them (base-runner image value UPSTREAM_RUNNER_*_OPTIONS + the
+  <t>.options section + run_fuzzer's suffix; upstream_sanitizer_env). The
+  trial runs in the project's builder image, not base-runner, so base-runner's
+  run-time environment (AFL_FUZZER_ARGS and the *SAN_OPTIONS) is reproduced
+  here explicitly. Deviations, both user decisions:
     -t config.AFL_TIMEOUT_FLAG (fixed "1000"), not run_fuzzer's "5000+";
-    detect_leaks=0 appended last to ASAN_OPTIONS;
+    detect_leaks=0 appended last to ASAN_OPTIONS (overriding the image's
+       detect_leaks=1, which stays in the string; the later value wins);
     plus, as for the other kinds, AFL_AUTORESUME=1 for hot-swap relaunches.
 """
 from __future__ import annotations
@@ -166,6 +171,22 @@ UPSTREAM_AFL_ENV: list[tuple[str, str]] = [
     ("AFL_IGNORE_UNKNOWN_ENVS", "1"),
 ]
 
+# base-runner's image ENV (gcr.io/oss-fuzz-base/base-runner, image of
+# 2026-07-09): the value each *SAN_OPTIONS has before run_fuzzer appends to it.
+UPSTREAM_RUNNER_ASAN_OPTIONS = (
+    "alloc_dealloc_mismatch=0:allocator_may_return_null=1:"
+    "allocator_release_to_os_interval_ms=500:check_malloc_usable_size=0:"
+    "detect_container_overflow=1:detect_odr_violation=0:detect_leaks=1:"
+    "detect_stack_use_after_return=1:fast_unwind_on_fatal=0:handle_abort=1:"
+    "handle_segv=1:handle_sigill=1:max_uar_stack_size_log=16:print_scariness=1:"
+    "quarantine_size_mb=10:strict_memcmp=1:strip_path_prefix=/workspace/:"
+    "symbolize=1:use_sigaltstack=1:dedup_token_length=3")
+UPSTREAM_RUNNER_MSAN_OPTIONS = (
+    "print_stats=1:strip_path_prefix=/workspace/:symbolize=1:dedup_token_length=3")
+UPSTREAM_RUNNER_UBSAN_OPTIONS = (
+    "print_stacktrace=1:print_summary=1:silence_unsigned_overflow=1:"
+    "strip_path_prefix=/workspace/:symbolize=1:dedup_token_length=3")
+
 _OPTIONS_DICT_RE = re.compile(r"^\s*dict\s*=\s*(.*)")
 
 
@@ -209,7 +230,7 @@ def upstream_options_dict(host_bin_dir: str | None, fuzz_target: str) -> str | N
 def upstream_sanitizer_env(host_bin_dir: str | None, fuzz_target: str,
                            sanitizer: str) -> list[tuple[str, str]]:
     """ASAN/MSAN/UBSAN_OPTIONS as run_fuzzer exports them: the base-runner
-    image value (ASAN empty, UBSAN ``silence_unsigned_overflow=1``), then the
+    image value (UPSTREAM_RUNNER_*_OPTIONS), then the
     <t>.options section, then run_fuzzer's suffix. ``detect_leaks=0`` closes
     ASAN_OPTIONS (deviation, user decision). run_fuzzer sets all three whatever
     the build's sanitizer, so ``sanitizer`` selects nothing here."""
@@ -219,10 +240,12 @@ def upstream_sanitizer_env(host_bin_dir: str | None, fuzz_target: str,
     def join(parts):
         return ":".join(p for p in parts if p)
 
-    asan = join([parse_options_section(opts, "asan"), "abort_on_error=1",
+    asan = join([UPSTREAM_RUNNER_ASAN_OPTIONS, parse_options_section(opts, "asan"),
+                 "abort_on_error=1",
                  "symbolize=0", "detect_odr_violation=0", "detect_leaks=0"])
-    msan = join([parse_options_section(opts, "msan"), "exit_code=86", "symbolize=0"])
-    ubsan = join(["silence_unsigned_overflow=1", parse_options_section(opts, "ubsan"),
+    msan = join([UPSTREAM_RUNNER_MSAN_OPTIONS, parse_options_section(opts, "msan"),
+                 "exit_code=86", "symbolize=0"])
+    ubsan = join([UPSTREAM_RUNNER_UBSAN_OPTIONS, parse_options_section(opts, "ubsan"),
                   "symbolize=0"])
     return [("ASAN_OPTIONS", asan), ("MSAN_OPTIONS", msan), ("UBSAN_OPTIONS", ubsan)]
 
@@ -233,8 +256,8 @@ def _upstream_launch(entry, host_bin_dir, fuzz_target, input_dir, output_dir,
     target = f"{OUT}/{fuzz_target}"
     has_cmplog = bool(bin_dir) and os.path.isfile(os.path.join(bin_dir, "afl_cmplog.txt"))
     has_dict = bool(bin_dir) and os.path.isfile(os.path.join(bin_dir, "afl++.dict"))
-    argv = [f"{OUT}/afl-fuzz"]
-    # AFL_FUZZER_ARGS: -c, -x afl++.dict, -t.
+    # AFL_FUZZER_ARGS: base-runner's "-m none", then -c, -x afl++.dict, -t.
+    argv = [f"{OUT}/afl-fuzz", "-m", "none"]
     if has_cmplog:
         argv += ["-c", target]
     if has_dict:
@@ -258,6 +281,7 @@ def _upstream_launch(entry, host_bin_dir, fuzz_target, input_dir, output_dir,
         sanitizer_env=upstream_sanitizer_env(bin_dir, fuzz_target, sanitizer),
         extra_env=[], workdir=OUT,
         flags={
+            "-m": "none",
             "-t": config.AFL_TIMEOUT_FLAG,
             "cmplog": target if has_cmplog else None,
             "aflpp_dict": f"{OUT}/afl++.dict" if has_dict else None,

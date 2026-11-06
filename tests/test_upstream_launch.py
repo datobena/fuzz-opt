@@ -16,6 +16,17 @@ BUG = {"project": "mruby", "cve": "fuzzbench-900025", "local_id": 900025,
        "fuzzbench_dir": "mruby_mruby_fuzzer_8c8bbd"}
 ARVO = {"project": "libxml2", "cve": "arvo-1", "local_id": 1, "fuzz_target": "xml"}
 
+# base-runner image ENV (image of 2026-07-09), literal so a constant edit shows here.
+RUNNER_ASAN = (
+    "alloc_dealloc_mismatch=0:allocator_may_return_null=1:allocator_release_to_os_interval_ms=500:"
+    "check_malloc_usable_size=0:detect_container_overflow=1:detect_odr_violation=0:detect_leaks=1:"
+    "detect_stack_use_after_return=1:fast_unwind_on_fatal=0:handle_abort=1:handle_segv=1:"
+    "handle_sigill=1:max_uar_stack_size_log=16:print_scariness=1:quarantine_size_mb=10:"
+    "strict_memcmp=1:strip_path_prefix=/workspace/:symbolize=1:use_sigaltstack=1:dedup_token_length=3")
+RUNNER_MSAN = "print_stats=1:strip_path_prefix=/workspace/:symbolize=1:dedup_token_length=3"
+RUNNER_UBSAN = ("print_stacktrace=1:print_summary=1:silence_unsigned_overflow=1:"
+                "strip_path_prefix=/workspace/:symbolize=1:dedup_token_length=3")
+
 
 def _bin(tmp_path, target, *, cmplog_marker=False, aflpp_dict=False, options=None,
          target_dict=False):
@@ -42,13 +53,15 @@ def test_upstream_argv_matches_run_fuzzer_with_the_two_deviations(tmp_path):
     (b / "ssh.dict").write_text('"x"\n')
     L = afl_launch.build_afl_launch(entry=UP, host_bin_dir=str(b), fuzz_target="ssh_server_fuzzer",
                                     input_dir="/corpus", output_dir="/afl_out", duration=600, seed=7)
-    assert L.argv == ["/out/afl-fuzz", "-c", "/out/ssh_server_fuzzer", "-x", "/out/afl++.dict",
+    assert L.argv == ["/out/afl-fuzz", "-m", "none", "-c", "/out/ssh_server_fuzzer", "-x", "/out/afl++.dict",
                       "-t", config.AFL_TIMEOUT_FLAG, "-i", "/corpus", "-o", "/afl_out",
                       "-x", "/out/ssh.dict", "-s", "7", "-V", "600", "--", "/out/ssh_server_fuzzer"]
     env = dict(L.env)
-    assert env["ASAN_OPTIONS"] == "max_malloc_fill_size=100:abort_on_error=1:symbolize=0:detect_odr_violation=0:detect_leaks=0"
-    assert env["UBSAN_OPTIONS"] == "silence_unsigned_overflow=1:symbolize=0"
-    assert env["MSAN_OPTIONS"] == "exit_code=86:symbolize=0"
+    assert env["ASAN_OPTIONS"] == (RUNNER_ASAN + ":max_malloc_fill_size=100:abort_on_error=1:"
+                                   "symbolize=0:detect_odr_violation=0:detect_leaks=0")
+    assert env["UBSAN_OPTIONS"] == RUNNER_UBSAN + ":symbolize=0"
+    assert env["MSAN_OPTIONS"] == RUNNER_MSAN + ":exit_code=86:symbolize=0"
+    assert L.flags["-m"] == "none"
     assert [k for k, _ in L.afl_env] == ["AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "AFL_SKIP_CPUFREQ",
         "AFL_TRY_AFFINITY", "AFL_FAST_CAL", "AFL_CMPLOG_ONLY_NEW", "AFL_FORKSRV_INIT_TMOUT",
         "AFL_IGNORE_PROBLEMS", "AFL_IGNORE_UNKNOWN_ENVS", "AFL_AUTORESUME"]
@@ -62,7 +75,7 @@ def test_optional_flags_appear_only_when_their_files_exist(tmp_path):
     b = _bin(tmp_path, "t", target_dict=True)
     L = afl_launch.build_afl_launch(entry=UP, host_bin_dir=str(b), fuzz_target="t",
                                     input_dir="/corpus", output_dir="/afl_out", duration=600, seed=7)
-    assert L.argv == ["/out/afl-fuzz", "-t", config.AFL_TIMEOUT_FLAG, "-i", "/corpus", "-o", "/afl_out",
+    assert L.argv == ["/out/afl-fuzz", "-m", "none", "-t", config.AFL_TIMEOUT_FLAG, "-i", "/corpus", "-o", "/afl_out",
                       "-x", "/out/t.dict", "-s", "7", "-V", "600", "--", "/out/t"]
     assert L.flags["cmplog"] is None and L.flags["aflpp_dict"] is None
     assert L.flags["options_dict"] == "/out/t.dict"
@@ -79,10 +92,10 @@ def test_options_sections_join_like_parse_options(tmp_path):
     assert afl_launch.parse_options_section(p, "ubsan") is None
     assert afl_launch.parse_options_section(str(b / "missing.options"), "asan") is None
     env = dict(afl_launch.upstream_sanitizer_env(str(b), "t", "memory"))
-    assert env["ASAN_OPTIONS"] == ("allocator_may_return_null=1:strip_path_prefix=/a=b c:"
+    assert env["ASAN_OPTIONS"] == (RUNNER_ASAN + ":allocator_may_return_null=1:strip_path_prefix=/a=b c:"
                                    "abort_on_error=1:symbolize=0:detect_odr_violation=0:detect_leaks=0")
-    assert env["MSAN_OPTIONS"] == "poison_in_dtor=1:exit_code=86:symbolize=0"
-    assert env["UBSAN_OPTIONS"] == "silence_unsigned_overflow=1:symbolize=0"
+    assert env["MSAN_OPTIONS"] == RUNNER_MSAN + ":poison_in_dtor=1:exit_code=86:symbolize=0"
+    assert env["UBSAN_OPTIONS"] == RUNNER_UBSAN + ":symbolize=0"
 
 
 def test_arvo_and_fuzzbench_launches_are_unchanged(tmp_path):
