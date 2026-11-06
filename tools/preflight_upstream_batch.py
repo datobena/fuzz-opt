@@ -26,26 +26,8 @@ def _csv(s: str | None) -> list[str] | None:
     return [x.strip() for x in s.split(",") if x.strip()] if s else None
 
 
-def order_entries(entries: list[dict]) -> list[dict]:
-    """Pass 1: first address entry per ossfuzz_project; 2: other address;
-    3: undefined; 4: memory. Manifest order within a pass."""
-    seen: set[str] = set()
-    p1, p2 = [], []
-    for e in entries:
-        if e.get("sanitizer") != "address":
-            continue
-        if e["ossfuzz_project"] not in seen:
-            seen.add(e["ossfuzz_project"])
-            p1.append(e)
-        else:
-            p2.append(e)
-    p3 = [e for e in entries if e.get("sanitizer") == "undefined"]
-    p4 = [e for e in entries if e.get("sanitizer") == "memory"]
-    return p1 + p2 + p3 + p4
-
-
 def first_pass(entries: list[dict]) -> list[dict]:
-    """Pass 1 of order_entries only."""
+    """Pass 1: the first address entry per ossfuzz_project, manifest order."""
     seen: set[str] = set()
     out = []
     for e in entries:
@@ -53,6 +35,17 @@ def first_pass(entries: list[dict]) -> list[dict]:
             seen.add(e["ossfuzz_project"])
             out.append(e)
     return out
+
+
+def order_entries(entries: list[dict]) -> list[dict]:
+    """Pass 1: first address entry per ossfuzz_project; 2: other address;
+    3: undefined; 4: memory. Manifest order within a pass."""
+    p1 = first_pass(entries)
+    ids = {id(e) for e in p1}
+    p2 = [e for e in entries if e.get("sanitizer") == "address" and id(e) not in ids]
+    p3 = [e for e in entries if e.get("sanitizer") == "undefined"]
+    p4 = [e for e in entries if e.get("sanitizer") == "memory"]
+    return p1 + p2 + p3 + p4
 
 
 def result_path_for(out_dir: Path | str, entry: dict) -> Path:
@@ -72,6 +65,20 @@ def pending(entries: list[dict], out_dir: Path | str, rerun: bool) -> list[dict]
     return [e for e in entries if rerun or not result_path_for(out_dir, e).exists()]
 
 
+def cleanup_containers(project: str, lid) -> None:
+    """Force-remove smoke containers a timed-out preflight left behind."""
+    try:
+        ps = subprocess.run(["docker", "ps", "-q", "--filter",
+                             f"name=^preflight_{project}_{lid}_"],
+                            capture_output=True, text=True, timeout=60)
+        ids = (ps.stdout or "").split()
+        if ids:
+            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True,
+                           timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def run_one(entry: dict, core: int, a) -> dict:
     """Preflight one entry on smoke core ``core``; return its verdict dict."""
     res_path = result_path_for(a.out_dir, entry)
@@ -82,6 +89,8 @@ def run_one(entry: dict, core: int, a) -> dict:
            "--project", project, "--local-id", str(lid), "--cpu", str(core),
            "--build-cpus", a.build_cpus, "--smoke-secs", str(a.smoke_secs)]
     env = dict(os.environ, BENCHMARK_MANIFEST_PATH=str(Path(a.manifest).resolve()))
+    src = ROOT / "results" / f"preflight-{project}" / f"preflight_{project}_{lid}.json"
+    src.unlink(missing_ok=True)  # a stale verdict must not pass for this run's
     t0 = time.time()
     verdict = None
     with open(log_path, "w") as log:
@@ -91,9 +100,9 @@ def run_one(entry: dict, core: int, a) -> dict:
             rc = r.returncode
         except subprocess.TimeoutExpired:
             rc = None
+            cleanup_containers(project, lid)
             verdict = {"ok": False, "stages": {"driver": {"ok": False, "error": "timeout"}}}
     if verdict is None:
-        src = ROOT / "results" / f"preflight-{project}" / f"preflight_{project}_{lid}.json"
         if src.exists():
             verdict = json.loads(src.read_text())
         else:
@@ -118,6 +127,40 @@ def summarize(done: list[tuple[dict, bool]]) -> str:
     return "\n".join(lines)
 
 
+def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple[dict, bool]]:
+    """Run ``todo`` in parallel; return (entry, ok) for every entry of ``ordered``,
+    reading the stored verdict of those skipped because a result already existed."""
+    runner = runner or run_one
+    cores: queue.Queue = queue.Queue()
+    for c in _csv(a.smoke_cpus) or []:
+        cores.put(int(c))
+    done: list[tuple[dict, bool]] = []
+
+    def work(entry: dict) -> None:
+        core = cores.get()
+        t0 = time.time()
+        try:
+            ok = bool(runner(entry, core, a)["ok"])
+        finally:
+            cores.put(core)
+        done.append((entry, ok))
+        print(f"{'READY' if ok else 'NOT READY'}  {entry['ossfuzz_project']}  "
+              f"{entry['sanitizer']}  {entry['fuzz_target']}  {round(time.time() - t0)}s",
+              flush=True)
+
+    with ThreadPoolExecutor(max(1, cores.qsize())) as ex:
+        list(ex.map(work, todo))
+    ran = {id(e) for e in todo}
+    for e in ordered:
+        if id(e) not in ran:
+            try:
+                ok = bool(json.loads(result_path_for(a.out_dir, e).read_text()).get("ok"))
+            except (OSError, ValueError):
+                ok = False
+            done.append((e, ok))
+    return done
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", default="data/manifests/manifest_upstream.json")
@@ -134,33 +177,15 @@ def main() -> int:
 
     entries = select(json.loads(Path(a.manifest).read_text()),
                      _csv(a.projects), _csv(a.sanitizers))
-    todo = first_pass(entries) if a.first_pass_only else order_entries(entries)
-    todo = pending(todo, a.out_dir, a.rerun)
+    ordered = first_pass(entries) if a.first_pass_only else order_entries(entries)
+    todo = pending(ordered, a.out_dir, a.rerun)
     if a.dry_run:
         for e in todo:
             print(f"{e['ossfuzz_project']}\t{e['sanitizer']}\t{e['fuzz_target']}"
                   f"\t{e['local_id']}")
         return 0
 
-    cores: queue.Queue = queue.Queue()
-    for c in _csv(a.smoke_cpus) or []:
-        cores.put(int(c))
-    done: list[tuple[dict, bool]] = []
-
-    def work(entry: dict) -> None:
-        core = cores.get()
-        t0 = time.time()
-        try:
-            ok = bool(run_one(entry, core, a)["ok"])
-        finally:
-            cores.put(core)
-        done.append((entry, ok))
-        print(f"{'READY' if ok else 'NOT READY'}  {entry['ossfuzz_project']}  "
-              f"{entry['sanitizer']}  {entry['fuzz_target']}  {round(time.time() - t0)}s",
-              flush=True)
-
-    with ThreadPoolExecutor(max(1, cores.qsize())) as ex:
-        list(ex.map(work, todo))
+    done = collect(ordered, todo, a)
     print(summarize(done))
     return 0
 

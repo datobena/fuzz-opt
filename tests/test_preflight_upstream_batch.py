@@ -64,3 +64,66 @@ def test_summarize():
     s = pub.summarize([(_e("a", "address", "x"), True), (_e("a", "address", "y"), False),
                        (_e("b", "address", "z"), False), (_e("b", "memory", "w"), True)])
     assert "a: 1" in s and "b: 0" in s and s.endswith(": 1")
+
+
+class _A:
+    def __init__(self, tmp, **kw):
+        self.out_dir = str(tmp / "out")
+        self.manifest = str(tmp / "m.json")
+        self.build_cpus, self.smoke_secs, self.smoke_cpus = "1", 1, "0,1"
+        self.__dict__.update(kw)
+
+
+def test_stale_verdict_not_reused(tmp_path, monkeypatch):
+    monkeypatch.setattr(pub, "ROOT", tmp_path)
+    e = _e("a", "address", "a1", 5)
+    stale = tmp_path / "results" / "preflight-a" / "preflight_a_5.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text('{"ok": true}')
+    monkeypatch.setattr(pub.subprocess, "run",
+                        lambda cmd, **k: pub.subprocess.CompletedProcess(cmd, 3))
+    v = pub.run_one(e, 0, _A(tmp_path))
+    assert v["ok"] is False and v["stages"]["driver"]["exit_code"] == 3
+
+
+def test_cleanup_containers_filter(monkeypatch):
+    calls = []
+
+    def fake(cmd, **k):
+        calls.append(cmd)
+        return pub.subprocess.CompletedProcess(cmd, 0, "abc\ndef\n", "")
+    monkeypatch.setattr(pub.subprocess, "run", fake)
+    pub.cleanup_containers("a", 5)
+    assert calls[0] == ["docker", "ps", "-q", "--filter", "name=^preflight_a_5_"]
+    assert calls[1] == ["docker", "rm", "-f", "abc", "def"]
+
+
+def test_cleanup_containers_no_docker(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError("docker")
+    monkeypatch.setattr(pub.subprocess, "run", boom)
+    pub.cleanup_containers("a", 5)
+
+
+def test_timeout_cleans_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(pub, "ROOT", tmp_path)
+    seen = []
+    monkeypatch.setattr(pub, "cleanup_containers", lambda p, l: seen.append((p, l)))
+
+    def fake(cmd, **k):
+        raise pub.subprocess.TimeoutExpired(cmd, 1)
+    monkeypatch.setattr(pub.subprocess, "run", fake)
+    v = pub.run_one(_e("a", "address", "a1", 5), 0, _A(tmp_path))
+    assert v["stages"]["driver"]["error"] == "timeout" and seen == [("a", 5)]
+
+
+def test_summary_counts_skipped(tmp_path):
+    a = _A(tmp_path)
+    old, new = _e("a", "address", "a1", 1), _e("b", "address", "b1", 2)
+    p = pub.result_path_for(a.out_dir, old)
+    p.parent.mkdir(parents=True)
+    p.write_text('{"ok": true}')
+    done = pub.collect([old, new], pub.pending([old, new], a.out_dir, False), a,
+                       runner=lambda e, c, a: {"ok": True})
+    s = pub.summarize(done)
+    assert "a: 1" in s and "b: 1" in s and s.endswith(": 2")
