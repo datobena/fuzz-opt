@@ -194,3 +194,14 @@ def test_arvo_and_fuzzbench_commands_are_unchanged():
     # ARVO provenance keeps its own source tag.
     assert pb.prework_image_for({"project": "libxml2", "local_id": 1972}) == \
         "bench-aflpp/libxml2-arvo-1972"
+
+
+def test_build_command_uses_the_vendored_tree_as_context(tmp_path):
+    """OSS-Fuzz Dockerfiles COPY relative to their own directory, so the context
+    is ossfuzz/ while the pinned Dockerfile next to it is passed with -f."""
+    (tmp_path / "Dockerfile").write_text("FROM a@sha256:1\n")
+    (tmp_path / "ossfuzz").mkdir()
+    (tmp_path / "ossfuzz" / "build.sh").write_text("make\n")
+    cmd = ui.build_command(tmp_path, "bench-upstream/libssh")
+    assert cmd[-3:] == ["-f", f"{tmp_path}/Dockerfile", str(tmp_path / "ossfuzz")]
+    assert f"bench-upstream.definition-sha256={ui.definition_hash(tmp_path)}" in cmd

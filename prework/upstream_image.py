@@ -92,13 +92,20 @@ def pinned_dockerfile(text: str, bases: dict) -> str:
 
 
 def build_command(project_dir: str | Path, tag: str) -> list[str]:
+    """The context is the vendored ossfuzz/ tree when there is one: OSS-Fuzz
+    Dockerfiles ``COPY build.sh $SRC/`` relative to their own directory, and the
+    pinned Dockerfile next to that tree is passed with -f. The label still
+    hashes all of ``project_dir``, Dockerfile and meta included."""
     project_dir = Path(project_dir)
+    context = project_dir / "ossfuzz"
+    if not context.is_dir():
+        context = project_dir
     return [
         "docker", "build",
         "--label", f"{DEFINITION_LABEL}={definition_hash(project_dir)}",
         "-t", tag,
         "-f", f"{project_dir}/Dockerfile",
-        str(project_dir),
+        str(context),
     ]
 
 
