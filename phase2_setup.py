@@ -1625,6 +1625,11 @@ def run_baseline_profile(*, replay_profile, out_dir, corpus_dir, profile_dir,
         cmd += ["--source-tree", env["PHASE2_PROFILE_SOURCE_TREE"]]
     if env.get("PHASE2_PROFILE_HARNESS"):
         cmd += ["--harness", env["PHASE2_PROFILE_HARNESS"]]
+    if env.get("PHASE2_SANITIZER_ENV"):
+        # Upstream targets: profile under the trials' sanitizer options, the
+        # same ones the broker gate exports, so hotspots and gate agree.
+        for name, value in sorted(json.loads(env["PHASE2_SANITIZER_ENV"]).items()):
+            cmd += ["--sanitizer-env", f"{name}={value}"]
     rp = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
                         env=proc_env if proc_env is not None else dict(os.environ),
                         timeout=int(min_sample_seconds) + 1800)
@@ -2922,6 +2927,13 @@ def _invoke_agent_sandboxed(
         smoke_corpus_dir=env.get("FUZZ_SOURCE_FOLDS_SMOKE_CORPUS_DIR", ""),
         agent_cpus=agent_cpus,
         source_guard=source_scope.current_guard(),
+        # Upstream targets (phase3_online.upstream_round_env): the build's
+        # sanitizer/language and the trials' run-time sanitizer options.
+        # Absent -> the broker's defaults, every command unchanged.
+        sanitizer=env.get("PHASE2_SANITIZER", "address"),
+        language=env.get("PHASE2_FUZZING_LANGUAGE", "c++"),
+        sanitizer_env=(json.loads(env["PHASE2_SANITIZER_ENV"])
+                       if env.get("PHASE2_SANITIZER_ENV") else None),
     )
 
 

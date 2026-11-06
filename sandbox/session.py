@@ -503,6 +503,8 @@ def run_sandboxed_optimizer(
     base_env: dict | None = None, harness: str = "", model: str = "",
     effort: str = "", ccache_dir: str = "", smoke_corpus_dir: str = "",
     agent_cpus: str | None = None, source_guard=None,
+    sanitizer: str = "address", language: str = "c++",
+    sanitizer_env: dict | None = None,
 ) -> dict:
     """Run one optimizer session confined to a container.
 
@@ -526,6 +528,10 @@ def run_sandboxed_optimizer(
     in ``agent_container`` -- and the caller must not touch the tree.
     ``agent_removed`` is True for a container that is gone or stopped for good
     (remove_container): only a live one can still write.
+
+    ``sanitizer``/``language`` (an upstream image's build) and ``sanitizer_env``
+    (its run-time ASAN/UBSAN/MSAN_OPTIONS) are host-side only, like the ccache
+    dir; None/defaults leave every broker command as it was.
     """
     if launch.SHUTTING_DOWN.is_set():
         raise RuntimeError("the launcher is shutting down; not starting an "
@@ -580,6 +586,10 @@ def run_sandboxed_optimizer(
         ledger_trial_id=_tags["trial_id"], ledger_iter=_tags["iter"],
         labels=session_labels,
         source_guard=source_guard,
+        # Upstream targets: the kind's build sanitizer/language and run-time
+        # options, so the gate and smoke run what the trials run.
+        sanitizer=sanitizer, language=language,
+        sanitizer_env=dict(sanitizer_env or {}),
     )
 
     def _serve():

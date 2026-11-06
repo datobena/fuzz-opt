@@ -183,6 +183,7 @@ def build_replay_profile_docker_command(
     malloc_limit_mb: int = 1536,
     container_name: str | None = None,
     target_libs: dict | None = None,
+    sanitizer_env: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     """Build a ``docker run`` that perf-records the binary replaying the corpus.
 
@@ -196,6 +197,11 @@ def build_replay_profile_docker_command(
     mounted read-only at target_libs.TARGET_LIBS_MOUNT and its
     ``ld_library_path`` exported inside the replay loop, so only the target (and
     afl-showmap) sees it -- never perf.
+
+    ``sanitizer_env`` ((NAME, VALUE) pairs, ``--sanitizer-env``): an upstream
+    target's own run-time options. Each NAME replaces the default ``-e NAME=...``
+    in place; a NAME not among the defaults is added after them. None/empty ->
+    the defaults, the command unchanged.
     """
     # Inner replay loop. Single-quoted in the final script so the OUTER bash
     # passes it verbatim to the perf-launched bash; the $(date +%s) clock and the
@@ -250,6 +256,37 @@ def build_replay_profile_docker_command(
         if target_libs.get("host_dir"):
             lib_mounts = ["-v", f"{Path(target_libs['host_dir']).resolve()}:"
                                 f"{tlibs.TARGET_LIBS_MOUNT}:ro"]
+    # Keep the profile on the TARGET, not on its sanitizer tooling.
+    # Sanitizer reports are symbolized by a separate llvm-symbolizer
+    # process, and its DWARF parsing lands in the SAME perf session: on one
+    # assimp campaign libLLVM was 46.2% of samples against 6.4% for the
+    # target binary itself, so the ranked hotspot list was mostly symbolizer
+    # internals. Everything else is the fuzzer's own sanitizer set
+    # (FuzzBench's fuzz-run options, but detect_leaks=0), so the profile
+    # executes what the fuzzer executes -- e.g. alloc_dealloc_mismatch=0 lets
+    # an input that throws a C++ exception run on instead of aborting. MUST equal
+    # fuzz-opt's config.REPLAY_ASAN_OPTIONS / REPLAY_UBSAN_OPTIONS, which the
+    # replay-timing gate uses, so profile and gate execute the same work.
+    # An upstream target passes its kind's options (sanitizer_env), which the
+    # gate exports too.
+    san_env = {
+        "ASAN_OPTIONS": "abort_on_error=1:alloc_dealloc_mismatch=0:"
+              "allocator_may_return_null=1:allocator_release_to_os_interval_ms=500:"
+              "allow_user_segv_handler=0:check_malloc_usable_size=0:detect_leaks=0:"
+              "detect_odr_violation=0:detect_stack_use_after_return=1:"
+              "fast_unwind_on_fatal=0:handle_abort=2:handle_segv=2:handle_sigbus=2:"
+              "handle_sigfpe=2:handle_sigill=2:max_uar_stack_size_log=16:"
+              "quarantine_size_mb=64:strict_memcmp=1:symbolize=0:"
+              "symbolize_inline_frames=0",
+        "UBSAN_OPTIONS": "abort_on_error=1:allocator_release_to_os_interval_ms=500:"
+              "handle_abort=2:handle_segv=2:handle_sigbus=2:handle_sigfpe=2:"
+              "handle_sigill=2:print_stacktrace=0:symbolize=0:"
+              "symbolize_inline_frames=0",
+        "MSAN_OPTIONS": "symbolize=0",
+    }
+    for name, value in sanitizer_env or ():
+        san_env[name] = value
+    san_args = [a for name, value in san_env.items() for a in ("-e", f"{name}={value}")]
     cmd = ["docker", "run", "--rm"]
     if container_name:
         cmd += ["--name", container_name]
@@ -258,30 +295,8 @@ def build_replay_profile_docker_command(
         "--memory", memory,
         "--shm-size", shm_size,
         "--privileged",
-        # Keep the profile on the TARGET, not on its sanitizer tooling.
-        # Sanitizer reports are symbolized by a separate llvm-symbolizer
-        # process, and its DWARF parsing lands in the SAME perf session: on one
-        # assimp campaign libLLVM was 46.2% of samples against 6.4% for the
-        # target binary itself, so the ranked hotspot list was mostly symbolizer
-        # internals. Everything else is the fuzzer's own sanitizer set
-        # (FuzzBench's fuzz-run options, but detect_leaks=0), so the profile
-        # executes what the fuzzer executes -- e.g. alloc_dealloc_mismatch=0 lets
-        # an input that throws a C++ exception run on instead of aborting. MUST equal
-        # fuzz-opt's config.REPLAY_ASAN_OPTIONS / REPLAY_UBSAN_OPTIONS, which the
-        # replay-timing gate uses, so profile and gate execute the same work.
-        "-e", "ASAN_OPTIONS=abort_on_error=1:alloc_dealloc_mismatch=0:"
-              "allocator_may_return_null=1:allocator_release_to_os_interval_ms=500:"
-              "allow_user_segv_handler=0:check_malloc_usable_size=0:detect_leaks=0:"
-              "detect_odr_violation=0:detect_stack_use_after_return=1:"
-              "fast_unwind_on_fatal=0:handle_abort=2:handle_segv=2:handle_sigbus=2:"
-              "handle_sigfpe=2:handle_sigill=2:max_uar_stack_size_log=16:"
-              "quarantine_size_mb=64:strict_memcmp=1:symbolize=0:"
-              "symbolize_inline_frames=0",
-        "-e", "UBSAN_OPTIONS=abort_on_error=1:allocator_release_to_os_interval_ms=500:"
-              "handle_abort=2:handle_segv=2:handle_sigbus=2:handle_sigfpe=2:"
-              "handle_sigill=2:print_stacktrace=0:symbolize=0:"
-              "symbolize_inline_frames=0",
-        "-e", "MSAN_OPTIONS=symbolize=0",
+        # Sanitizer options: see san_env above.
+        *san_args,
         # The target was built against the 20.04 base-runner runtime; when the
         # profiler image differs (the kernel-matched 24.04 one), its own
         # libc++/unwind/python live here. Harmless with RUNNER_IMAGE (dir absent).
@@ -459,6 +474,7 @@ def run_replay_profile(args: argparse.Namespace) -> int:
             shm_size=args.shm_size,
             container_name=f"poff-replay-{attempt}-{os.getpid()}-{uuid.uuid4().hex[:8]}",
             target_libs=libs,
+            sanitizer_env=parse_sanitizer_env(getattr(args, "sanitizer_env", None)),
         )
         docker_result = _run(docker_cmd, timeout=timeout)
         docker_rc = docker_result.returncode
@@ -653,6 +669,17 @@ def target_dso_share(dso_path, fuzz_target: str) -> float | None:
     return total
 
 
+def parse_sanitizer_env(items) -> list[tuple[str, str]]:
+    """``["NAME=VALUE", ...]`` (``--sanitizer-env``) -> [(NAME, VALUE), ...]."""
+    out = []
+    for item in items or ():
+        name, sep, value = item.partition("=")
+        if not sep or not name:
+            raise SystemExit(f"--sanitizer-env expects NAME=VALUE, got {item!r}")
+        out.append((name, value))
+    return out
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Profile a fuzz target with perf while it replays a fixed corpus."
@@ -687,6 +714,11 @@ def parse_args() -> argparse.Namespace:
                         help="in-image harness source path(s), excluded from "
                              "hotspots.txt (the LLVMFuzzerTestOneInput file is "
                              "always excluded)")
+    parser.add_argument("--sanitizer-env", action="append", default=[],
+                        metavar="NAME=VALUE",
+                        help="replace the default -e NAME=... sanitizer option "
+                             "(ASAN/UBSAN/MSAN_OPTIONS) of the replay container; "
+                             "an upstream target's own run-time options")
     return parser.parse_args()
 
 

@@ -41,7 +41,9 @@ import config
 from lib import cpu_ledger
 from lib.core_lock import core_lock
 from prework.fuzzbench_image import fuzzbench_build_command, is_fuzzbench_image
-from prework.prework_build import arvo_compile_args, ownership_command
+from lib.target_kind import is_upstream_image
+from prework.prework_build import (arvo_compile_args, ownership_command,
+                                   upstream_compile_args)
 from sandbox import launch
 from sandbox.launch import LABEL_ROLE, label_args, launcher_labels
 
@@ -127,6 +129,14 @@ class BrokerContext:
     # build starts, cleared by a chown that succeeded; finish_ownership() runs
     # the chown at session end for a build the stop cut short.
     ownership_pending: bool = field(default=False, repr=False)
+    # Upstream targets (bench-upstream/...): the build's SANITIZER and
+    # FUZZING_LANGUAGE, and the run-time ASAN/UBSAN/MSAN_OPTIONS the trials
+    # run under (afl_launch.upstream_sanitizer_env), so the gate, smoke and
+    # crash scan execute what the fuzzer executes. Empty sanitizer_env -> the
+    # FuzzBench set (config.REPLAY_*), every command byte-identical to before.
+    sanitizer: str = "address"
+    language: str = "c++"
+    sanitizer_env: dict = field(default_factory=dict)
 
 
 def _audit(ctx: BrokerContext, op: str, blob: str) -> None:
@@ -227,6 +237,38 @@ def stop_session(ctx: BrokerContext, *, wait_s: float = 120.0) -> list[str]:
         time.sleep(1.0)
 
 
+_SANITIZER_ENV_ORDER = ("ASAN_OPTIONS", "UBSAN_OPTIONS", "MSAN_OPTIONS")
+
+
+def _sanitizer_env_items(env: dict) -> list[tuple[str, str]]:
+    """``env`` in the order today's exports name them (ASAN, UBSAN, MSAN), any
+    other name after, sorted."""
+    known = [(k, env[k]) for k in _SANITIZER_ENV_ORDER if k in env]
+    return known + sorted((k, v) for k, v in env.items() if k not in _SANITIZER_ENV_ORDER)
+
+
+def _sanitizer_assignments(ctx: BrokerContext, *, msan: bool = True) -> str:
+    """``NAME=value ...; `` -- the tail of an ``export`` statement.
+
+    ``ctx.sanitizer_env`` (an upstream target's run-time options) when set,
+    every name it holds; otherwise EXACTLY the text the commands carried
+    before: FuzzBench's set, with ``MSAN_OPTIONS=symbolize=0`` unless
+    ``msan`` is False (the legacy smoke never exported it)."""
+    if ctx.sanitizer_env:
+        return " ".join(f"{k}={shlex.quote(v)}"
+                        for k, v in _sanitizer_env_items(ctx.sanitizer_env)) + "; "
+    if not msan:
+        return (f"ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
+                f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS}; ")
+    return (f"ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
+            f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS} MSAN_OPTIONS=symbolize=0; ")
+
+
+def _sanitizer_exports(ctx: BrokerContext, *, msan: bool = True) -> str:
+    """``export ASAN_OPTIONS=... UBSAN_OPTIONS=... MSAN_OPTIONS=...; ``."""
+    return "export " + _sanitizer_assignments(ctx, msan=msan)
+
+
 def _build_command(ctx: BrokerContext) -> list[str]:
     """OSS-Fuzz `compile` with the agent's current source bind-mounted over $SRC.
 
@@ -242,6 +284,19 @@ def _build_command(ctx: BrokerContext) -> list[str]:
             extra_docker_args=["--ulimit", "core=0"],
             ccache_dir=ctx.ccache_dir or None,
         )
+    if is_upstream_image(ctx.image):
+        # Same docker flags as the ARVO branch below; only the compile args
+        # differ (OSS-Fuzz's own afl compile env, --network none, the kind's
+        # SANITIZER / FUZZING_LANGUAGE).
+        return [
+            "docker", "run", "--rm", "--privileged",
+            "--cpuset-cpus", str(ctx.cpu),
+            "--ulimit", "core=0",
+            *upstream_compile_args(image=ctx.image,
+                                   source_dir=(ctx.build_source_dir or ctx.source_dir),
+                                   out_dir=ctx.out_dir, project=ctx.project,
+                                   sanitizer=ctx.sanitizer, language=ctx.language),
+        ]
     return [
         "docker", "run", "--rm", "--privileged",
         "--cpuset-cpus", str(ctx.cpu),
@@ -292,9 +347,9 @@ def _replay_command(ctx: BrokerContext, out_dir: str | None = None) -> list[str]
         # (config.REPLAY_ASAN_OPTIONS), so the gate executes what the fuzzer
         # executes. Must stay identical to the profiler's env
         # (replay_fuzzer_profile.py) or the hotspot ranking and this gate
-        # describe different workloads.
-        f"ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
-        f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS} MSAN_OPTIONS=symbolize=0; "
+        # describe different workloads. An upstream target exports its own
+        # kind's options instead (ctx.sanitizer_env), the trials' set.
+        f"{_sanitizer_assignments(ctx)}"
         # -C (collect-coverage) is REQUIRED with -i <dir>. Without it afl-showmap
         # treats -o as a DIRECTORY to write one bitmap per input into, so
         # `-o /dev/null` aborts instantly with
@@ -311,15 +366,17 @@ def _replay_command(ctx: BrokerContext, out_dir: str | None = None) -> list[str]
 
 
 def _map_size_prefix(ctx: BrokerContext) -> str:
-    """Export the target's own map size before afl-showmap, FuzzBench images only.
+    """Export the target's own map size before afl-showmap, FuzzBench and
+    upstream images only.
 
     AFL++ 4.21a's afl-showmap aborts with "AFL_MAP_SIZE is not set and fuzzing
     target reports that the required size is very large" when the target's map
     exceeds the default (bloaty, curl, systemd, proj4, php: 70k-161k edges), so
     every gate replay on those targets failed. afl-fuzz sizes the map itself.
-    ARVO images (AFL++ v5.02c) keep their command unchanged.
+    ARVO images (AFL++ v5.02c) keep their command unchanged. Upstream images
+    run base-runner's current AFL++, whose afl-showmap aborts the same way.
     """
-    if not is_fuzzbench_image(ctx.image):
+    if not (is_fuzzbench_image(ctx.image) or is_upstream_image(ctx.image)):
         return ""
     return (f"m=$(AFL_DUMP_MAP_SIZE=1 /out/{ctx.fuzz_target} 2>/dev/null); "
             f'case "$m" in ""|*[!0-9]*) ;; *) export AFL_MAP_SIZE=$m;; esac; ')
@@ -451,8 +508,7 @@ def _crash_scan_command(ctx: BrokerContext, out_dir: str, corpus_dir: str) -> li
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
         "export AFL_NO_AFFINITY=1 AFL_SKIP_CPUFREQ=1 "
         "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 AFL_CMIN_CRASHES_ONLY=1 "
-        f"ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
-        f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS} MSAN_OPTIONS=symbolize=0; "
+        f"{_sanitizer_assignments(ctx)}"
         f"{_map_size_prefix(ctx)}"
         f"/out/afl-showmap -q -Z -i /corpus -o /maps -t 5000+ -m none -- "
         f"/out/{ctx.fuzz_target} >/dev/null 2>/tmp/showmap.err; rc=$?; "
@@ -466,9 +522,20 @@ def _crash_report_command(ctx: BrokerContext, out_dir: str, corpus_dir: str,
                           names: list[str]) -> list[str]:
     """Re-run each crashing input directly for a SYMBOLIZED sanitizer report,
     plus a hexdump of its first 256 bytes, so the agent can see what broke."""
-    asan = config.REPLAY_ASAN_OPTIONS.replace("symbolize=0", "symbolize=1")
-    ubsan = (config.REPLAY_UBSAN_OPTIONS.replace("symbolize=0", "symbolize=1")
-             .replace("print_stacktrace=0", "print_stacktrace=1"))
+    if ctx.sanitizer_env:
+        # The kind's own options, each symbolized the same way.
+        sym = {k: v.replace("symbolize=0", "symbolize=1")
+               for k, v in ctx.sanitizer_env.items()}
+        if "UBSAN_OPTIONS" in sym:
+            sym["UBSAN_OPTIONS"] = sym["UBSAN_OPTIONS"].replace(
+                "print_stacktrace=0", "print_stacktrace=1")
+        exports = "export " + " ".join(
+            f"{k}={shlex.quote(v)}" for k, v in _sanitizer_env_items(sym)) + "; "
+    else:
+        asan = config.REPLAY_ASAN_OPTIONS.replace("symbolize=0", "symbolize=1")
+        ubsan = (config.REPLAY_UBSAN_OPTIONS.replace("symbolize=0", "symbolize=1")
+                 .replace("print_stacktrace=0", "print_stacktrace=1"))
+        exports = f"export ASAN_OPTIONS={asan} UBSAN_OPTIONS={ubsan}; "
     steps = []
     for n in names:
         q = shlex.quote(f"/corpus/{n}")
@@ -485,7 +552,7 @@ def _crash_report_command(ctx: BrokerContext, out_dir: str, corpus_dir: str,
         "-v", f"{Path(out_dir).absolute()}:/out:ro",
         "-v", f"{Path(corpus_dir).absolute()}:/corpus:ro",
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
-        f"export ASAN_OPTIONS={asan} UBSAN_OPTIONS={ubsan}; "
+        exports +
         "[ -x /out/llvm-symbolizer ] && export ASAN_SYMBOLIZER_PATH=/out/llvm-symbolizer; "
         + "; ".join(steps),
     ]
@@ -577,8 +644,7 @@ def _run_smoke(ctx: BrokerContext) -> tuple[bool, str]:
         "--ulimit", "core=0",
         "-v", f"{Path(ctx.out_dir).absolute()}:/out:ro",
         "--entrypoint", "/bin/bash", ctx.image, "-lc",
-        f"export ASAN_OPTIONS={config.REPLAY_ASAN_OPTIONS} "
-        f"UBSAN_OPTIONS={config.REPLAY_UBSAN_OPTIONS}; printf '' > /tmp/e; "
+        f"{_sanitizer_exports(ctx, msan=False)}printf '' > /tmp/e; "
         f"timeout 120 /out/{ctx.fuzz_target} /tmp/e",
     ]
     with core_lock(ctx.cpu):

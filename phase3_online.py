@@ -930,6 +930,28 @@ def _is_n132_entry(entry: dict) -> bool:
     return "n132/arvo" in str(entry.get("image") or "")
 
 
+def upstream_round_env(entry: dict, fuzz_target: str, bin_dir: str | None) -> dict:
+    """The wrapper env keys an upstream round adds; ``{}`` for any other kind.
+
+    PHASE2_SANITIZER / PHASE2_FUZZING_LANGUAGE select the broker build's
+    compile env (upstream_compile_args); PHASE2_SANITIZER_ENV (JSON) is the
+    run-time ASAN/UBSAN/MSAN_OPTIONS the trials launch with
+    (afl_launch.upstream_sanitizer_env, read from ``bin_dir``'s
+    <fuzz_target>.options), which the broker gate, smoke and the profiler
+    export so all of them execute the fuzzer's workload. Host-side only: none
+    of these is on the agent env allowlist.
+    """
+    if not target_kind.is_upstream(entry):
+        return {}
+    sanitizer = target_kind.sanitizer_of(entry)
+    return {
+        "PHASE2_SANITIZER": sanitizer,
+        "PHASE2_FUZZING_LANGUAGE": target_kind.language_of(entry),
+        "PHASE2_SANITIZER_ENV": json.dumps(dict(
+            afl_launch.upstream_sanitizer_env(bin_dir, fuzz_target, sanitizer))),
+    }
+
+
 def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = None,
                             profile_cpu: int | None = None,
                             ccache_dir: str | None = None):
@@ -1635,6 +1657,11 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
         corpus_dir=corpus_dir, entry=ctx.entry,
         previous_best_bin=ctx.previous_best_bin, profile_cpu=ctx.profile_cpu)
     env.update(ctx.wrapper_env_fn(ctx.source_root, os.path.join(iter_dir, "validation")))
+    # Upstream targets: sanitizer/language and the trials' run-time options, from
+    # the round's baseline binary dir (its <target>.options) -- set beside the
+    # wrapper's PHASE2_FB_CCACHE_DIR, which the closure cannot do: it is never
+    # handed the round's bin dir. Nothing for ARVO/FuzzBench.
+    env.update(upstream_round_env(ctx.entry, ctx.fuzz_target, ctx.previous_best_bin))
     if live_mutations:
         # Hand phase 2 the already-captured mutations; its own capture step sees
         # this and skips the re-fuzz.
@@ -2662,6 +2689,8 @@ def _preflight_profile(*, entry: dict, baseline_bin_dir: str, experiment_dir: st
         return False, f"profiler script missing: {script}"
     prof_dir = os.path.join(online_dir, "preflight_profile", "profile_once")
     env = phase2_setup.profile_layout_env(project_src_dir, fuzz_target)
+    # Upstream: profile under the trials' sanitizer options, as the rounds do.
+    env.update(upstream_round_env(entry, fuzz_target, baseline_bin_dir))
     proc_env = dict(os.environ)
     proc_env["FUZZ_SOURCE_FOLDS_RUNNER_IMAGE"] = prework_image_for(entry)
     warn_below = int(getattr(config, "ONLINE_PREFLIGHT_WARN_TARGET_SAMPLES", 100))
