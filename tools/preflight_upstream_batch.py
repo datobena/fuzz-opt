@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -27,7 +28,15 @@ import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TIMEOUT_SECS = 4 * 3600
+sys.path.insert(0, str(ROOT / "tools"))
+from onboard_upstream import COMPILE_TIMEOUT  # noqa: E402
+
+# One entry may compile its baseline (onboarding's compile limit) and then
+# profile and smoke it: an hour on top of the compile.
+TIMEOUT_SECS = COMPILE_TIMEOUT + 3600
+# After SIGTERM to a timed-out entry's process group, how long to wait before
+# SIGKILL.
+KILL_GRACE_SECS = 30
 PASSES = ("address", "undefined", "memory")
 GROUP_FAILED = "group baseline build failed"
 
@@ -136,8 +145,41 @@ def build_ok(verdict: dict) -> bool:
     return bool(ex.get("reused_from")) or bool((st.get("aflbuild") or {}).get("ok"))
 
 
-def cleanup_containers(project: str, lid) -> None:
-    """Force-remove smoke containers a timed-out preflight left behind."""
+def _under(src: str, roots: tuple[str, ...]) -> bool:
+    return any(src == r or src.startswith(r + "/") for r in roots)
+
+
+def containers_under(exp_dir: Path | str) -> list[str]:
+    """Running containers with a mount whose host source lies under ``exp_dir``.
+
+    ``docker ps --filter volume=<path>`` matches a bind mount's source only
+    exactly (checked on this box, docker 29.4.2: the entry's
+    ``.../baseline/bin`` matches its smoke container, the experiment dir
+    itself matches nothing), so the mounts are read with ``docker inspect``
+    and matched by prefix instead. Catches the unnamed compile container and
+    the profiler's ``poff-replay-*`` container, which mount dirs of the
+    entry's experiment dir."""
+    roots = tuple(dict.fromkeys(str(x) for x in (Path(exp_dir).absolute(),
+                                                 Path(exp_dir).resolve())))
+    ps = subprocess.run(["docker", "ps", "-q"], capture_output=True, text=True,
+                        timeout=60)
+    ids = (ps.stdout or "").split()
+    if not ids:
+        return []
+    ins = subprocess.run(["docker", "inspect", *ids], capture_output=True,
+                         text=True, timeout=120)
+    try:
+        info = json.loads(ins.stdout or "[]")
+    except ValueError:
+        return []
+    return [c["Id"] for c in info
+            if any(_under(m.get("Source") or "", roots) for m in c.get("Mounts") or [])]
+
+
+def cleanup_containers(project: str, lid, exp_dir: Path | str | None = None) -> None:
+    """Force-remove containers a timed-out preflight left behind: its smoke
+    containers (by name) and, given ``exp_dir``, any container mounting a
+    path under the entry's experiment dir."""
     try:
         ps = subprocess.run(["docker", "ps", "-q", "--filter",
                              f"name=^preflight_{project}_{lid}_"],
@@ -148,6 +190,50 @@ def cleanup_containers(project: str, lid) -> None:
                            timeout=120)
     except (OSError, subprocess.SubprocessError):
         pass
+    if exp_dir is None:
+        return
+    try:
+        ids = containers_under(exp_dir)
+        if ids:
+            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True,
+                           timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def kill_group(proc: subprocess.Popen, grace: float | None = None) -> None:
+    """SIGTERM ``proc``'s process group (``docker run`` forwards it to the
+    container it is attached to), wait ``grace`` seconds, then SIGKILL it."""
+    grace = KILL_GRACE_SECS if grace is None else grace
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+
+
+def run_child(cmd: list[str], env: dict, log, timeout: float) -> int | None:
+    """Run ``cmd`` in its own session (so its process group holds every
+    ``docker run`` it starts); return its exit code, or None after a timeout
+    (the whole group killed)."""
+    p = subprocess.Popen(cmd, env=env, cwd=ROOT, stdout=log,
+                         stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        return p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_group(p)
+        return None
+    except BaseException:
+        kill_group(p, grace=0)
+        raise
 
 
 def _write(entry: dict, a, verdict: dict) -> dict:
@@ -169,6 +255,14 @@ def failure_reason(verdict: dict) -> str:
             why = v.get("reason") or v.get("error")
             return f"{name}: {why}" if why else name
     return "no stage recorded"
+
+
+def driver_failed(verdict: dict) -> bool:
+    """Whether a failed verdict failed in the driver (``stages.driver``: a
+    timeout, no preflight result, a worker exception) rather than in a
+    pipeline stage."""
+    drv = (verdict.get("stages") or {}).get("driver") or {}
+    return not verdict.get("ok") and bool(drv) and not drv.get("ok")
 
 
 def write_group_failed(entry: dict, a, builder: str = "?",
@@ -216,13 +310,9 @@ def run_one(entry: dict, core: int, a, build_cpus: str | None = None,
     t0 = time.time()
     verdict = None
     with open(log_path, "w") as log:
-        try:
-            r = subprocess.run(cmd, env=env, cwd=ROOT, stdout=log,
-                               stderr=subprocess.STDOUT, timeout=TIMEOUT_SECS)
-            rc = r.returncode
-        except subprocess.TimeoutExpired:
-            rc = None
-            cleanup_containers(project, lid)
+        rc = run_child(cmd, env, log, getattr(a, "entry_timeout", None) or TIMEOUT_SECS)
+        if rc is None:
+            cleanup_containers(project, lid, exp_dir_for(entry, results))
             verdict = {"ok": False, "stages": {"driver": {"ok": False, "error": "timeout"}}}
     if verdict is None:
         if src.exists():
@@ -294,8 +384,20 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
     running = [0]
     cv = threading.Condition()
 
-    def resolve(k: tuple, b: dict, verdict: dict) -> None:
-        """The group's builder ``b`` has finished with ``verdict`` (lock held)."""
+    def promote(k: tuple) -> None:
+        """The group's next pending entry becomes its builder (lock held)."""
+        nxt = [e for e in remaining if group_key(e) == k]
+        if nxt:
+            builder[k] = nxt[0]
+
+    def resolve(k: tuple, b: dict, verdict: dict, stored: bool = False) -> None:
+        """The group's builder ``b`` has finished with ``verdict`` (lock held).
+        ``stored``: the verdict is from an earlier run (``b`` was skipped)."""
+        if stored and driver_failed(verdict):
+            # An earlier run's driver failed (timeout, worker died, ...), not
+            # the build: the group's next pending entry builds instead.
+            promote(k)
+            return
         if not build_ok(verdict):
             status[k] = "failed"
             failed_by[k] = (b["fuzz_target"], failure_reason(verdict))
@@ -306,13 +408,11 @@ def collect(ordered: list[dict], todo: list[dict], a, runner=None) -> list[tuple
             return
         # Built, but its experiment dir is gone (deleted by an earlier run):
         # the next pending entry of the group builds again.
-        nxt = [e for e in remaining if group_key(e) == k]
-        if nxt:
-            builder[k] = nxt[0]
+        promote(k)
 
     for k, b in builder.items():
         if id(b) not in queued:
-            resolve(k, b, _stored_verdict(a, b))
+            resolve(k, b, _stored_verdict(a, b), stored=True)
             if status.get(k) == "ok":
                 kept.append(b)
 
@@ -415,6 +515,10 @@ def main() -> int:
                          "a cpuset string, so distinct elements let builders build in "
                          "parallel; one element = every build on the same cpuset")
     ap.add_argument("--smoke-secs", type=int, default=120)
+    ap.add_argument("--entry-timeout", type=int, default=TIMEOUT_SECS,
+                    help="seconds one entry's preflight_online.py may run before its "
+                         "process group is killed (default: onboarding's "
+                         "COMPILE_TIMEOUT + 1 h)")
     ap.add_argument("--projects", default=None)
     ap.add_argument("--sanitizers", default=None)
     ap.add_argument("--first-pass-only", action="store_true")

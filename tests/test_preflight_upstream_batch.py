@@ -96,8 +96,7 @@ def test_stale_verdict_not_reused(tmp_path, monkeypatch):
     stale = tmp_path / "results" / "preflight-a" / "preflight_a_5.json"
     stale.parent.mkdir(parents=True)
     stale.write_text('{"ok": true}')
-    monkeypatch.setattr(pub.subprocess, "run",
-                        lambda cmd, **k: pub.subprocess.CompletedProcess(cmd, 3))
+    monkeypatch.setattr(pub, "run_child", lambda cmd, env, log, timeout: 3)
     v = pub.run_one(e, 0, _A(tmp_path))
     assert v["ok"] is False and v["stages"]["driver"]["exit_code"] == 3
 
@@ -114,6 +113,80 @@ def test_cleanup_containers_filter(monkeypatch):
     assert calls[1] == ["docker", "rm", "-f", "abc", "def"]
 
 
+def test_default_entry_timeout_covers_a_compile():
+    from onboard_upstream import COMPILE_TIMEOUT
+    assert COMPILE_TIMEOUT == 21600
+    assert pub.TIMEOUT_SECS == COMPILE_TIMEOUT + 3600
+
+
+def test_cleanup_containers_by_exp_dir_mounts(tmp_path, monkeypatch):
+    exp = tmp_path / "results" / "preflight-a" / "a-upstream-5"
+    info = [{"Id": "c1", "Mounts": [{"Source": str(exp / "baseline" / "bin")}]},
+            {"Id": "c2", "Mounts": [{"Source": str(exp) + "-other/out"}]},
+            {"Id": "c3", "Mounts": [{"Source": "/elsewhere"}]},
+            {"Id": "c4", "Mounts": [{"Source": str(exp)}]}]
+    calls = []
+
+    def fake(cmd, **k):
+        calls.append(cmd)
+        if cmd[:2] == ["docker", "inspect"]:
+            return pub.subprocess.CompletedProcess(cmd, 0, pub.json.dumps(info), "")
+        if cmd == ["docker", "ps", "-q"]:
+            return pub.subprocess.CompletedProcess(cmd, 0, "c1\nc2\nc3\nc4\n", "")
+        return pub.subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(pub.subprocess, "run", fake)
+    pub.cleanup_containers("a", 5, exp)
+    assert calls[0] == ["docker", "ps", "-q", "--filter", "name=^preflight_a_5_"]
+    assert ["docker", "inspect", "c1", "c2", "c3", "c4"] in calls
+    assert calls[-1] == ["docker", "rm", "-f", "c1", "c4"]
+
+
+def test_timeout_kills_the_process_group(tmp_path, monkeypatch):
+    """A child that ignores SIGTERM: the group gets SIGTERM, then SIGKILL."""
+    import os
+    import signal
+    import time
+    monkeypatch.setattr(pub, "ROOT", tmp_path)
+    monkeypatch.setattr(pub, "KILL_GRACE_SECS", 1)
+    script = tmp_path / "stubborn.py"
+    script.write_text("import signal, time\n"
+                      "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                      "print('up', flush=True)\n"
+                      "time.sleep(60)\n")
+    sent, real = [], os.killpg
+    procs = []
+    real_popen = pub.subprocess.Popen
+
+    def popen(*a, **k):
+        p = real_popen(*a, **k)
+        procs.append(p)
+        return p
+
+    def killpg(pgid, sig):
+        sent.append((pgid, sig))
+        real(pgid, sig)
+    monkeypatch.setattr(pub.subprocess, "Popen", popen)
+    monkeypatch.setattr(pub.os, "killpg", killpg)
+    log = open(tmp_path / "log", "w")
+    t0 = time.time()
+    # Long enough for the child to install its SIGTERM handler.
+    rc = pub.run_child([pub.sys.executable, str(script)], dict(os.environ), log, 2)
+    log.close()
+    assert rc is None and time.time() - t0 < 20
+    p = procs[0]
+    assert os.getpgid(os.getpid()) != p.pid    # the child led its own group
+    assert sent == [(p.pid, signal.SIGTERM), (p.pid, signal.SIGKILL)]
+    assert p.returncode == -signal.SIGKILL
+
+
+def test_run_child_exit_code(tmp_path, monkeypatch):
+    monkeypatch.setattr(pub, "ROOT", tmp_path)
+    with open(tmp_path / "log", "w") as log:
+        rc = pub.run_child([pub.sys.executable, "-c", "import sys; sys.exit(3)"],
+                           {}, log, 30)
+    assert rc == 3
+
+
 def test_cleanup_containers_no_docker(monkeypatch):
     def boom(*a, **k):
         raise FileNotFoundError("docker")
@@ -124,13 +197,17 @@ def test_cleanup_containers_no_docker(monkeypatch):
 def test_timeout_cleans_up(tmp_path, monkeypatch):
     monkeypatch.setattr(pub, "ROOT", tmp_path)
     seen = []
-    monkeypatch.setattr(pub, "cleanup_containers", lambda p, l: seen.append((p, l)))
-
-    def fake(cmd, **k):
-        raise pub.subprocess.TimeoutExpired(cmd, 1)
-    monkeypatch.setattr(pub.subprocess, "run", fake)
-    v = pub.run_one(_e("a", "address", "a1", 5), 0, _A(tmp_path))
-    assert v["stages"]["driver"]["error"] == "timeout" and seen == [("a", 5)]
+    monkeypatch.setattr(pub, "cleanup_containers",
+                        lambda p, l, d=None: seen.append((p, l, d)))
+    monkeypatch.setattr(pub, "run_child",
+                        lambda cmd, env, log, timeout: seen.append(timeout))
+    e = _e("a", "address", "a1", 5)
+    v = pub.run_one(e, 0, _A(tmp_path, entry_timeout=77))
+    assert v["stages"]["driver"]["error"] == "timeout"
+    assert seen == [77, ("a", 5, pub.exp_dir_for(e, tmp_path / "results"))]
+    seen.clear()
+    pub.run_one(e, 0, _A(tmp_path))          # no --entry-timeout: the default
+    assert seen[0] == pub.TIMEOUT_SECS
 
 
 def test_summary_counts_skipped(tmp_path, monkeypatch):
@@ -211,10 +288,10 @@ def test_run_one_starts_clean_and_passes_reuse_and_build_cpus(tmp_path, monkeypa
     (d / "optimized" / "online" / "source_tree").mkdir(parents=True)
     seen = {}
 
-    def fake(cmd, **k):
+    def fake(cmd, env, log, timeout):
         seen["cmd"], seen["stale"] = cmd, d.exists()
-        return pub.subprocess.CompletedProcess(cmd, 1)
-    monkeypatch.setattr(pub.subprocess, "run", fake)
+        return 1
+    monkeypatch.setattr(pub, "run_child", fake)
     pub.run_one(e, 4, _A(tmp_path), build_cpus="20-29", baseline_from="/x/builder")
     assert seen["stale"] is False             # wiped before the launch
     cmd = seen["cmd"]
@@ -229,7 +306,7 @@ def test_run_one_wipe_failure_is_a_verdict(tmp_path, monkeypatch):
     monkeypatch.setattr(pub, "ROOT", tmp_path)
     monkeypatch.setattr(pub, "wipe_entry_dirs",
                         lambda e, r: (_ for _ in ()).throw(PermissionError(13, "x")))
-    monkeypatch.setattr(pub.subprocess, "run",
+    monkeypatch.setattr(pub, "run_child",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("launched")))
     v = pub.run_one(_e("a", "address", "a1", 5), 0, _A(tmp_path))
     assert v["ok"] is False and "could not wipe" in v["stages"]["driver"]["error"]
@@ -386,6 +463,30 @@ def test_skipped_builder_failed_dependents_not_run(tmp_path, monkeypatch):
     r, done, _ = _run(tmp_path, G[:3], monkeypatch, a=a)
     assert r.events == []
     assert [ok for _, ok in done] == [False, False, False]
+
+
+def test_skipped_builder_driver_error_next_entry_builds(tmp_path, monkeypatch):
+    """A stored builder verdict that failed in the driver (timeout) does not
+    condemn the group: the next pending entry builds."""
+    a = _A(tmp_path, smoke_cpus="0,1")
+    p = pub.result_path_for(a.out_dir, G[0])
+    p.parent.mkdir(parents=True)
+    p.write_text('{"ok": false, "stages": {"driver": {"ok": false, "error": "timeout"}}}')
+    r, done, _ = _run(tmp_path, G[:3], monkeypatch, a=a)
+    assert r.args["a2"][2] is None             # a2 is the builder now
+    assert r.args["a3"][2] == pub.exp_dir_for(G[1], tmp_path / "results")
+    assert r.events.index(("end", "a2")) < r.events.index(("start", "a3"))
+    for e in G[1:3]:
+        v = pub.json.loads(pub.result_path_for(a.out_dir, e).read_text())
+        assert v["ok"] is True and "driver" not in v["stages"]
+    assert [ok for _, ok in done if _["fuzz_target"] != "a1"] == [True, True]
+
+
+def test_driver_failed():
+    assert pub.driver_failed({"ok": False, "stages": {"driver": {"ok": False,
+                                                                  "error": "timeout"}}})
+    assert not pub.driver_failed({"ok": False, "stages": {"extract": {"ok": False}}})
+    assert not pub.driver_failed({})
 
 
 def test_build_cpus_round_robin_per_worker(tmp_path, monkeypatch):
