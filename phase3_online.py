@@ -2253,9 +2253,12 @@ def _extract_online_target(entry, source_tree_root, baseline_bin_dir, poc_dir,
         image = prework_image_for(entry)
         src_root = Path(source_tree_root)
         src_root.mkdir(parents=True, exist_ok=True)
+        # A failed extract or baseline build returns source_root=None: the tree
+        # root exists either way, so returning it made callers (the preflight's
+        # extract stage) report a failure as a pass.
         if not phase2_setup.extract_source_from_image(image, str(src_root)):
             logger.error("online: %s source extract failed for %s", kind, project)
-            return False, None, None, source_tree_root
+            return False, None, None, None
         proj_src = phase2_setup._find_project_source(src_root, project)
         # Strip the shipped repositories BEFORE this build, not after it: this
         # build is the campaign's baseline (run_online does not rebuild a
@@ -2280,8 +2283,9 @@ def _extract_online_target(entry, source_tree_root, baseline_bin_dir, poc_dir,
                                 profile_cpu=cpu, stage="baseline_afl_build",
                                 counts=False)
         if not ok:
-            logger.error("online: %s baseline build failed for %s", kind, project)
-            return False, None, None, source_tree_root
+            logger.error("online: %s baseline build failed for %s; build log tail:\n%s",
+                         kind, project, "\n".join((_log or "").splitlines()[-30:]))
+            return False, None, None, None
         # No injected bug: no crash, no PoC, no ARVO issue. Downstream gates treat a
         # missing poc_path as bug_survived == "no-poc" (throughput-only).
         logger.info("online: %s baseline built for %s (throughput-only, no PoC)",
@@ -2868,7 +2872,8 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
     crashed, poc_path, issue, source_root = _extract_online_target(
         entry, source_tree_root, baseline_bin_dir, poc_dir, fuzz_target, project,
         cpu=profile_cpu, setup_cpus=setup_cpus)
-    if not os.path.isfile(os.path.join(baseline_bin_dir, fuzz_target)):
+    if source_root is None or not os.path.isfile(os.path.join(baseline_bin_dir,
+                                                              fuzz_target)):
         logger.error("online: extract did not yield baseline /out/%s for %s",
                      fuzz_target, entry["cve"])
         return False

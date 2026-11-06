@@ -85,6 +85,42 @@ def test_extract_fuzzbench_keeps_the_plain_strip(monkeypatch, tmp_path):
     assert seen == [(root, {})]
 
 
+def _extract_stubs(monkeypatch, *, extracted=True, built=(True, "")):
+    import phase2_setup
+    monkeypatch.setattr(phase3_online, "prework_image_for", lambda e: "bench-upstream/x")
+    monkeypatch.setattr(phase2_setup, "extract_source_from_image",
+                        lambda img, dst: extracted)
+    monkeypatch.setattr(phase2_setup, "_find_project_source",
+                        lambda root, p: Path(root) / p)
+    monkeypatch.setattr(phase3_online.tracked_git, "strip_vcs_metadata",
+                        lambda r, **kw: None)
+    monkeypatch.setattr(phase3_online, "_setup_build", lambda **k: built)
+
+
+@pytest.mark.parametrize("entry", [UP, FB], ids=["upstream", "fuzzbench"])
+def test_extract_failure_returns_no_source_root(monkeypatch, tmp_path, entry):
+    _extract_stubs(monkeypatch, extracted=False)
+    got = phase3_online._extract_online_target(
+        entry, str(tmp_path / "src"), str(tmp_path / "bin"), str(tmp_path / "poc"),
+        entry["fuzz_target"], entry["project"], cpu=3, setup_cpus="2-39")
+    assert got == (False, None, None, None)
+
+
+@pytest.mark.parametrize("entry", [UP, FB], ids=["upstream", "fuzzbench"])
+def test_baseline_build_failure_returns_no_source_root(monkeypatch, tmp_path, caplog,
+                                                       entry):
+    log = "\n".join(f"line{i}" for i in range(100))
+    _extract_stubs(monkeypatch, built=(False, log))
+    caplog.set_level(logging.ERROR)
+    got = phase3_online._extract_online_target(
+        entry, str(tmp_path / "src"), str(tmp_path / "bin"), str(tmp_path / "poc"),
+        entry["fuzz_target"], entry["project"], cpu=3, setup_cpus="2-39")
+    assert got == (False, None, None, None)
+    # The last 30 lines of the build log, at ERROR.
+    assert "line99" in caplog.text and "line70" in caplog.text
+    assert "line69" not in caplog.text
+
+
 def test_run_online_skips_poc_gate_and_afl_rebuild(monkeypatch, tmp_path, caplog):
     import phase2_setup
     monkeypatch.setattr(config, "RESULTS_DIR", str(tmp_path))
@@ -294,6 +330,34 @@ def test_preflight_upstream_skips_poc_and_rebuild(monkeypatch, tmp_path):
     assert out["local_id"] == 970002 and out["kind"] == "upstream"
     assert out["sanitizer"] == "address" and out["fuzz_target"] == "ssh_client_fuzzer"
     assert out["cve"] == "upstream-970002"
+
+
+def _preflight_stubs(monkeypatch, exp, entry=UP2):
+    monkeypatch.setattr(preflight_online, "_entry", lambda p, i=None: entry)
+    monkeypatch.setattr(preflight_online.phase2_setup, "get_experiment_dir",
+                        lambda i, e: str(exp))
+    monkeypatch.setattr(preflight_online, "prework_image_for",
+                        lambda e: "bench-upstream/libssh")
+    monkeypatch.setattr(preflight_online.subprocess, "run",
+                        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
+
+
+def test_preflight_extract_fails_when_the_baseline_build_fails(monkeypatch, tmp_path):
+    exp = tmp_path / "results" / "preflight-libssh" / "libssh-upstream-970002"
+    _preflight_stubs(monkeypatch, exp)
+    _extract_stubs(monkeypatch, built=(False, "boom"))
+    reached = []
+    monkeypatch.setattr(preflight_online.phase3_online, "_stage_online_seed_corpus",
+                        lambda *a, **k: reached.append("seeds") or 0)
+    res = preflight_online.preflight("libssh", 3, 5, False, local_id=970002)
+    ex = res["stages"]["extract"]
+    assert ex["ok"] is False
+    assert ex["reason"] == "extract failed or baseline build failed; see log"
+    # The run stops at extract.
+    assert list(res["stages"]) == ["image", "extract"] and reached == []
+    assert res["ok"] is False
+    assert json.loads((exp.parent / "preflight_libssh_970002.json").read_text()
+                      )["stages"]["extract"]["ok"] is False
 
 
 # --------------------------------------------------------------------------- #

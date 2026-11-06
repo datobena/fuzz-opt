@@ -179,7 +179,9 @@ def preflight(project: str, cpu: int, smoke_secs: int, keep: bool,
         crashed, poc_path, issue, source_root = phase3_online._extract_online_target(
             entry, src_root, bin_dir, poc_dir, fuzz_target, project, cpu=cpu,
             setup_cpus=build_cpus or cpu)
-        if not stage("extract", bool(source_root), secs=round(time.time() - t)):
+        if not stage("extract", bool(source_root), secs=round(time.time() - t),
+                     **({} if source_root else
+                        {"reason": "extract failed or baseline build failed; see log"})):
             return res
         if not target_kind.has_poc(entry):
             # FuzzBench benchmarks and upstream targets ship no PoC: the fuzzer
