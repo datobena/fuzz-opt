@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
+from prework import fb_ccache, upstream_ccache
 from prework.prework_build import prework_image_for, rebuild_with_prework_image
 from lib import tracked_git, source_scope
 from lib import corpus as corpus_util
@@ -2932,7 +2933,10 @@ def _invoke_agent_sandboxed(
         model=model, effort=effort,
         # FuzzBench per-trial ccache (phase3_online); host-side only, it is
         # not on the agent env allowlist (sandbox/launch.ENV_ALLOWLIST).
-        ccache_dir=env.get("PHASE2_FB_CCACHE_DIR", ""),
+        # An upstream trial carries its own key (prework.upstream_ccache); phase3
+        # sets only the one matching the target's kind.
+        ccache_dir=(env.get(fb_ccache.BROKER_ENV_KEY, "")
+                    or env.get(upstream_ccache.BROKER_ENV_KEY, "")),
         # Online rounds: the crash-filtered mutation sample `smoke` runs on.
         # Host-side only, like the ccache dir.
         smoke_corpus_dir=env.get("FUZZ_SOURCE_FOLDS_SMOKE_CORPUS_DIR", ""),

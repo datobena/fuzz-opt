@@ -302,7 +302,10 @@ def _build_command(ctx: BrokerContext) -> list[str]:
                                    sanitizer=ctx.sanitizer, language=ctx.language,
                                    # From the LIVE tree: the snapshot is a bare
                                    # copy of the project dir, without vcs/ beside it.
-                                   vcs_dir=vcs_dir_for(ctx.source_dir)),
+                                   vcs_dir=vcs_dir_for(ctx.source_dir),
+                                   # Verified upstream trial: its own cache; empty ->
+                                   # None -> CCACHE_DISABLE=1 (uncached, as before).
+                                   ccache_dir=ctx.ccache_dir or None),
         ]
     return [
         "docker", "run", "--rm", "--privileged",
@@ -405,7 +408,7 @@ def _run_build(ctx: BrokerContext) -> tuple[bool, str]:
 def _run_build_snapshot(ctx: BrokerContext) -> tuple[bool, str]:
     # Serialize against any replay/smoke on this optimizer's core (incl. the
     # harness-side rebuild in another process): never measure a core mid-build.
-    if ctx.ccache_dir and is_fuzzbench_image(ctx.image):
+    if ctx.ccache_dir and (is_fuzzbench_image(ctx.image) or is_upstream_image(ctx.image)):
         # Created here, not by docker (which would create it root-owned).
         os.makedirs(ctx.ccache_dir, exist_ok=True)
     # Root-owned output appears the moment `compile` starts.
