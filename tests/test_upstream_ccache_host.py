@@ -19,7 +19,17 @@ def test_verified_list_modes(tmp_path):
     assert uc.read_verified_modes(p) == {"foo": "pass", "bar": "pass_noise_masked",
                                          "baz": "pass"}
     assert uc.read_verified_modes(tmp_path / "missing") == {}
-    assert uc.read_verified_modes() == {}   # shipped list is header-only
+    empty = tmp_path / "empty.txt"
+    empty.write_text("")
+    assert uc.read_verified_modes(empty) == {}
+    hdr = tmp_path / "hdr.txt"
+    hdr.write_text("# header only\n\n   \n# more\n")
+    assert uc.read_verified_modes(hdr) == {}
+    lt = tmp_path / "lt.txt"
+    lt.write_text("# h\nlibtpms\nfoo pass_noise_masked\n")
+    assert uc.read_verified_modes(lt) == {"libtpms": "pass", "foo": "pass_noise_masked"}
+    # shipped list tracks the file as it grows
+    assert uc.read_verified_modes().get("libtpms") == "pass"
 
 
 def test_parse_stats_absent_means_unused(tmp_path):
