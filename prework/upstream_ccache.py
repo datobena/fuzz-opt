@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from prework.fb_ccache import (  # general single-file ELF noise helpers, reused as-is
@@ -26,6 +27,12 @@ CONTAINER_WRAPPER_DIR = "/opt/upstream_ccache_wrap"
 # Deliberately not the image's baked /ccache/cache.
 CONTAINER_CACHE_DIR = "/upstream_ccache"
 CONTAINER_DENYLIST = "/src/aflpp_fold_denylist.txt"
+# Upstream-specific broker env key (distinct from fb_ccache.BROKER_ENV_KEY): the
+# per-trial cache dir the broker mounts into that optimizer's agent builds.
+BROKER_ENV_KEY = "PHASE2_UPSTREAM_CCACHE_DIR"
+TEMPLATE_DIRNAME = "upstream_ccache_template"
+TRIAL_DIRNAME = "upstream_ccache"
+STATSLOG_NAME = "statslog"   # basename of prework_build.UPSTREAM_CCACHE_STATSLOG
 VERIFIED_LIST = PREWORK_DIR / "upstream_ccache_verified.txt"
 _HIT_RESULTS = frozenset({"direct_cache_hit", "preprocessed_cache_hit"})
 _MISS_RESULTS = frozenset({"cache_miss"})
@@ -128,3 +135,114 @@ def upstream_masked_compare(x_path, y_path, model: dict | None) -> dict:
     """Plain vs cached /out/<target>: identical | masked | differs
     (fb_ccache.masked_compare)."""
     return masked_compare(x_path, y_path, model)
+
+
+# ------------------------------------------------------- campaign (phase3) side
+
+def template_dir(online_dir) -> str:
+    return str(Path(online_dir) / TEMPLATE_DIRNAME)
+
+
+def trial_cache_dir(trial_online_dir) -> str:
+    return str(Path(trial_online_dir) / TRIAL_DIRNAME)
+
+
+def seed_cache(template, dest) -> str:
+    """Fresh copy of the template at ``dest`` (each optimized trial owns one)."""
+    dest = Path(dest)
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(template, dest, symlinks=False,
+                    ignore=shutil.ignore_patterns("tmp", "*.lock", "*.tmp.*"))
+    return str(dest)
+
+
+def read_trial_stats(cache_dir) -> dict:
+    """parse_stats of the statslog under ``cache_dir`` (host side). A build that
+    produced no statslog (or an unreadable one) yields used=False, never raises."""
+    try:
+        p = Path(cache_dir) / STATSLOG_NAME
+        text = p.read_text(errors="replace") if p.is_file() else ""
+    except (OSError, ValueError, TypeError):
+        text = ""
+    return parse_stats(text if text.strip() else None)
+
+
+def prepare_upstream_ccache_template(*, entry: dict, online_dir, baseline_bin_dir,
+                                     fuzz_target: str, build_fn,
+                                     verified: dict | None = None,
+                                     work_dir=None) -> dict:
+    """Fill the target-level template with ONE extra pristine CACHED build.
+
+    ``build_fn(out_dir, cache_dir_or_None, stage) -> (ok, log)`` runs one upstream
+    build (cache_dir=None means uncached). Only an upstream target on the verified
+    list is attempted. The cached /out/<fuzz_target> must equal the uncached
+    baseline's (byte-identical; for pass_noise_masked, equal outside the noise one
+    extra UNCACHED build reveals). Any failure, including an exception, returns
+    OFF: {"enabled": False, "template": None, "reason": ...}. Never raises.
+    """
+    rec: dict = {"enabled": False, "template": None}
+    template = None
+    outs: list[str] = []
+    try:
+        from lib import target_kind
+        if not target_kind.is_upstream(entry):
+            return rec
+        if verified is None:
+            verified = read_verified_modes()
+        mode = verified.get(entry.get("project"))
+        if mode is None:
+            rec["reason"] = "not-verified"
+            return rec
+        rec["verified_mode"] = mode
+        import tempfile
+        template = template_dir(online_dir)
+        shutil.rmtree(template, ignore_errors=True)
+        os.makedirs(template, exist_ok=True)
+        wd = str(work_dir or online_dir)
+        out = tempfile.mkdtemp(prefix="upstream-ccache-template-out-", dir=wd)
+        outs.append(out)
+        ok, log = build_fn(out, template, "upstream_ccache_template_build")
+        st = read_trial_stats(template)
+        rec["stats"] = slim_stats(st)
+        if not ok:
+            rec["reason"] = "template-build-failed"
+            logger.error("upstream ccache template build failed for %s; trials run uncached: %s",
+                         entry.get("project"), (log or "")[-400:])
+            return rec
+        if not st["used"]:
+            rec["reason"] = "cache-not-used"
+            return rec
+        base = Path(baseline_bin_dir) / fuzz_target
+        cached = Path(out) / fuzz_target
+        if mode == MODE_NOISE:
+            noise_out = tempfile.mkdtemp(prefix="upstream-ccache-noise-", dir=wd)
+            outs.append(noise_out)
+            ok2, _l2 = build_fn(noise_out, None, "upstream_ccache_template_noise_build")
+            if not ok2:
+                rec["reason"] = "noise-build-failed"
+                return rec
+            model = upstream_noise_model(base, Path(noise_out) / fuzz_target)
+        else:
+            model = None
+        cmp = upstream_masked_compare(base, cached, model)
+        rec["matches_uncached_baseline"] = cmp
+        if cmp.get("status") not in ("identical", "masked") or (
+                cmp["status"] == "masked" and mode != MODE_NOISE):
+            rec["reason"] = "cold-cache-build-differs-from-uncached-baseline"
+            logger.error("upstream ccache template build differs from the uncached "
+                         "baseline for %s; trials run uncached", entry.get("project"))
+            return rec
+        rec.update(enabled=True, template=template)
+        return rec
+    except Exception as e:  # noqa: BLE001 - ccache is an optimization; never block a campaign
+        logger.error("upstream ccache template failed (%s); trials run uncached", e)
+        rec.update(enabled=False, template=None, reason=f"error:{type(e).__name__}")
+        return rec
+    finally:
+        for o in outs:
+            shutil.rmtree(o, ignore_errors=True)
+        if template and not rec.get("enabled"):
+            shutil.rmtree(template, ignore_errors=True)
+        if not rec.get("enabled"):
+            rec["template"] = None

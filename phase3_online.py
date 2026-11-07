@@ -34,7 +34,7 @@ import phase2_setup
 from lib import swap_signal, provenance
 import phase3_runner
 from prework.prework_build import build_opt_provenance, prework_image_for
-from prework import fb_ccache
+from prework import fb_ccache, upstream_ccache
 from lib import afl
 from lib import afl_launch
 from lib import target_kind
@@ -1026,12 +1026,18 @@ def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = 
             # instead of the optimizer's edits. The legacy branches below take the
             # root by design; only this one remounts. phase 2 resolves it the same
             # way (setup_cve_arvo_image's build_fn).
-            return rebuild_with_prework_image(
+            built = rebuild_with_prework_image(
                 entry=entry,
                 source_dir=str(phase2_setup._find_project_source(
                     Path(source_root), entry["project"])),
                 out_dir=out_bin_dir, capture_log=True, cpu=profile_cpu,
                 **({"ccache_dir": ccache_dir} if ccache_dir else {}))
+            if ccache_dir and target_kind.is_upstream(entry):
+                # Host-side read of this build's statslog (root-owned files were
+                # chown'd back by the rebuild); a missing log -> used=False.
+                rebuild_fn.ccache_stats = upstream_ccache.slim_stats(
+                    upstream_ccache.read_trial_stats(ccache_dir))
+            return built
 
         def wrapper_env_fn(source_root, state_dir):
             from prework.prework_build import prework_image_for
@@ -1039,7 +1045,10 @@ def _online_target_strategy(entry: dict, fuzz_target: str, issue: dict | None = 
             env["PHASE2_PREWORK_IMAGE"] = prework_image_for(entry)
             env["FUZZ_TARGET"] = fuzz_target
             if ccache_dir:
-                env[fb_ccache.BROKER_ENV_KEY] = ccache_dir
+                # Per-kind key; ccache_dir is only ever set for a verified target.
+                env[upstream_ccache.BROKER_ENV_KEY
+                    if target_kind.is_upstream(entry)
+                    else fb_ccache.BROKER_ENV_KEY] = ccache_dir
             return env
 
         return rebuild_fn, wrapper_env_fn
@@ -1744,7 +1753,15 @@ def run_round(ctx: RoundContext, state: OnlineState, iter_n: int):
             # Whether this round's binaries came from the trial's ccache (FuzzBench
             # only; main and cmplog are reported separately; None for a build log
             # without an FB_CCACHE_STATS line).
-            if isinstance(r, tuple):
+            if target_kind.is_upstream(ctx.entry):
+                # Upstream: stats come from the trial cache's statslog (set by the
+                # strategy's rebuild_fn only when this trial has a cache).
+                st = getattr(ctx.rebuild_fn, "ccache_stats", None)
+                last_build["ccache"] = st
+                if st:
+                    info["ccache_hits"] = st.get("hits")
+                    info["ccache_misses"] = st.get("misses")
+            elif isinstance(r, tuple):
                 st = fb_ccache.parse_stats(r[1])
                 last_build["ccache"] = fb_ccache.slim_stats(st)
                 if st:
@@ -2639,6 +2656,30 @@ def _prepare_fb_ccache_template(*, entry: dict, project_src_dir: str, online_dir
             shutil.rmtree(template, ignore_errors=True)
 
 
+def _prepare_upstream_ccache_template(*, entry: dict, project_src_dir: str,
+                                      online_dir: str, baseline_bin_dir: str,
+                                      fuzz_target: str, profile_cpu: int | None,
+                                      setup_cpus: int | str | None = None) -> dict:
+    """Upstream analogue of _prepare_fb_ccache_template: ONE extra pristine cached
+    build (+ one uncached noise build for pass_noise_masked) fill the template.
+    Upstream targets on the verified list only; any failure -> ccache off for the
+    campaign (record["template"] is None). Never raises. The baseline arm and the
+    noise build stay uncached (no cache dir -> CCACHE_DISABLE=1)."""
+    if not target_kind.is_upstream(entry):
+        return {"enabled": False, "template": None}
+    if setup_cpus is None:
+        setup_cpus = profile_cpu
+
+    def build_fn(out_dir, cache_dir, stage):
+        return _setup_build(entry=entry, source_dir=project_src_dir, out_dir=out_dir,
+                            setup_cpus=setup_cpus, profile_cpu=profile_cpu,
+                            stage=stage, ccache_dir=cache_dir)
+
+    return upstream_ccache.prepare_upstream_ccache_template(
+        entry=entry, online_dir=online_dir, baseline_bin_dir=baseline_bin_dir,
+        fuzz_target=fuzz_target, build_fn=build_fn)
+
+
 def _seed_corpus_provenance(experiment_dir: str) -> dict:
     """What seeds the campaign actually started from.
 
@@ -2998,7 +3039,18 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
         entry=entry, project_src_dir=project_src_dir, online_dir=online_dir,
         baseline_bin_dir=baseline_bin_dir, fuzz_target=fuzz_target,
         profile_cpu=profile_cpu, setup_cpus=setup_cpus)
+    if target_kind.is_upstream(entry):
+        # Upstream kind: separate template/trial dirs and broker key. For any
+        # other kind the helper is not called, so FuzzBench/ARVO are untouched.
+        _ccache_rec = _prepare_upstream_ccache_template(
+            entry=entry, project_src_dir=project_src_dir, online_dir=online_dir,
+            baseline_bin_dir=baseline_bin_dir, fuzz_target=fuzz_target,
+            profile_cpu=profile_cpu, setup_cpus=setup_cpus)
     _ccache_template = _ccache_rec.get("template")
+    _seed = (upstream_ccache.seed_cache if target_kind.is_upstream(entry)
+             else fb_ccache.seed_cache)
+    _trial_dir = (upstream_ccache.trial_cache_dir if target_kind.is_upstream(entry)
+                  else fb_ccache.trial_cache_dir)
 
     # 2. build the two arms first -- per-trial mode needs each trial's identity
     #    (and its own bin dir) before any context can be constructed.
@@ -3039,7 +3091,7 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
             t_cpu = opt_cores[t.trial_id % len(opt_cores)]
             # Own ccache per optimizer, copied from the template (never the
             # template itself): its builds compile this trial's agent-edited code.
-            t_cache = (fb_ccache.seed_cache(_ccache_template, fb_ccache.trial_cache_dir(tdir))
+            t_cache = (_seed(_ccache_template, _trial_dir(tdir))
                        if _ccache_template else None)
             t_rebuild, t_wrapper = _online_target_strategy(
                 entry, fuzz_target, issue=issue, profile_cpu=t_cpu, ccache_dir=t_cache)
@@ -3066,8 +3118,7 @@ def run_online(entry: dict, experiment_id: str, duration: int | None = None) -> 
         shutil.copytree(baseline_bin_dir, iter0_bin, dirs_exist_ok=True)
         _git_init_baseline(project_src_dir)
         _commit_and_tag(project_src_dir, "iter_00")
-        _cache = (fb_ccache.seed_cache(_ccache_template,
-                                       fb_ccache.trial_cache_dir(online_dir))
+        _cache = (_seed(_ccache_template, _trial_dir(online_dir))
                   if _ccache_template else None)
         rebuild_fn, wrapper_env_fn = _online_target_strategy(
             entry, fuzz_target, issue=issue, profile_cpu=profile_cpu, ccache_dir=_cache)

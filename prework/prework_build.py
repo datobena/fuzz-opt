@@ -541,6 +541,8 @@ def rebuild_with_prework_image(
         ccache_dir=ccache_dir,
     )
     logger.info("Rebuilding %s in %s", project, image)
+    # An upstream ccache dir is written by root-in-container too (cache + statslog).
+    owned = [source_dir, out_dir] + ([ccache_dir] if ccache_dir else [])
     try:
         # Serialize against any replay/smoke timing on the same optimizer core (the
         # agent's broker runs those in another process); a build overlapping a
@@ -554,13 +556,13 @@ def rebuild_with_prework_image(
         logger.error("%s for %s", log, project)
         # A build killed mid-flight leaves the MOST root-owned debris, so this
         # path needs the restore more than the success path does.
-        restore_ownership(image, [source_dir, out_dir])
+        restore_ownership(image, owned)
         return (False, log) if capture_log else False
     log = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0:
         logger.error("prework rebuild failed for %s (exit %d)", project, r.returncode)
     ok = r.returncode == 0
-    restore_ownership(image, [source_dir, out_dir])
+    restore_ownership(image, owned)
     return (ok, log) if capture_log else ok
 
 
