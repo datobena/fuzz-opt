@@ -139,6 +139,7 @@ def test_upstream_compile_args_are_oss_fuzz_compile_without_network(tmp_path):
         "-v", DENYLIST,
         "-v", f"{tmp_path / 's'}:/staging/libssh:ro",
         "-v", f"{tmp_path / 'o'}:/out",
+        "-e", "CCACHE_DISABLE=1",
         "bench-upstream/libssh", "bash", "-c", pb._staged_compile_command("libssh")]
     # Nothing under /src/libssh is a mount: the host tree is never written.
     assert not any(":/src/libssh" in a for a in args)
@@ -192,8 +193,8 @@ def test_prework_image_for_upstream_and_rebuild_dispatch(monkeypatch):
                                              source_dir="/s/libssh", out_dir="/o",
                                              project="libssh", sanitizer="undefined",
                                              language="c")]
-    with pytest.raises(ValueError):
-        pb.build_prework_rebuild_command(image="bench-upstream/libssh", source_dir="/s",
+    with pytest.raises(ValueError):  # ccache stays rejected for ARVO images
+        pb.build_prework_rebuild_command(image="n132/arvo:1-vul", source_dir="/s",
                                          out_dir="/o", project="libssh", ccache_dir="/c")
 
     seen = {}

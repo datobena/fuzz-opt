@@ -28,6 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 from lib.core_lock import cpuset_lock
 from lib.target_kind import is_upstream, is_upstream_image, language_of, sanitizer_of
+from prework.upstream_ccache import CONTAINER_CACHE_DIR, ccache_docker_args
+
+# The cached upstream build's stats log: under the cache mount so the host reads it.
+UPSTREAM_CCACHE_STATSLOG = f"{CONTAINER_CACHE_DIR}/statslog"
 from prework.build_image import image_tag
 from prework.fuzzbench_image import (
     fuzzbench_build_command, fuzzbench_image_tag, is_fuzzbench_image,
@@ -352,7 +356,8 @@ def _vcs_mount_args(vcs_dir: str | Path, project: str) -> list[str]:
 
 def _staged_compile_command(project: str, git_rels: list[str] | tuple[str, ...] = (), *,
                             src_root: str = "/src", staging: str = _STAGING,
-                            vcs_staging: str = _VCS_STAGING) -> str:
+                            vcs_staging: str = _VCS_STAGING,
+                            ccache_statslog: str | None = None) -> str:
     """The bash command of a staged upstream compile: a fresh copy of the
     read-only tree (and of each preserved .git, ``git_rels`` relative to the
     project root) at $SRC/<project>, then OSS-Fuzz's `compile`.
@@ -364,6 +369,13 @@ def _staged_compile_command(project: str, git_rels: list[str] | tuple[str, ...] 
     Each .git destination is removed first: a tree that already holds a (maybe
     empty) .git there would otherwise get the copy nested as .git/.git.
     The three roots are parameters for tests only.
+
+    ``ccache_statslog`` (cached builds only): the container path of the
+    CCACHE_STATSLOG file. The compile is then preceded by a stats reset (the
+    log is deleted and `ccache -z`) and followed by `ccache --show-stats`, so
+    stats are per build and land in the build log; the compile's exit status
+    is the command's (`exec compile` cannot have a tail). Without it the
+    command ends in `exec compile`, as before.
     """
     q = shlex.quote
     src = f"{q(src_root)}/{q(project)}"
@@ -374,13 +386,19 @@ def _staged_compile_command(project: str, git_rels: list[str] | tuple[str, ...] 
             parts.append(f"mkdir -p {src}/{q(parent)}")
         dst = f"{src}/{q(rel)}"
         parts += [f"rm -rf {dst}", f"cp -a {q(vcs_staging)}/{q(project)}/{q(rel)} {dst}"]
-    parts += ['cd "$wd"', "exec compile"]
+    parts.append('cd "$wd"')
+    if ccache_statslog is None:
+        parts.append("exec compile")
+    else:
+        parts += [f"{{ rm -f {q(ccache_statslog)}; ccache -z || true; }}",
+                  "compile", "{ ccache --show-stats || true; }"]
     return " && ".join(parts)
 
 
 def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
                           project: str, sanitizer: str, language: str,
-                          vcs_dir: str | Path | None = None) -> list[str]:
+                          vcs_dir: str | Path | None = None,
+                          ccache_dir: str | None = None) -> list[str]:
     """Everything of an upstream `docker run ... compile` after the resource flags.
 
     OSS-Fuzz's own compile env for the afl engine, nothing more: no FUZZER_LIB /
@@ -399,6 +417,13 @@ def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
     stripped from the tree, mounted read-only at /staging-vcs/<project> and
     copied back where they were; OSS-Fuzz's build sees its clone's .git too
     (tpm2-tss's bootstrap runs `git describe`). /out is the only writable mount.
+
+    A staged build (``source_dir`` set) always carries ccache args: with
+    ``ccache_dir=None`` CCACHE_DISABLE=1; with a host ``ccache_dir`` the cache
+    (the second writable mount), the backend-clang wrappers and the stats log
+    at CONTAINER_CACHE_DIR/statslog (on the cache mount, so the host can read
+    it), and the command resets stats before `compile`. The onboarding form
+    (``source_dir=None``) is unaffected by either.
     """
     args = [
         "--network", "none",
@@ -414,11 +439,16 @@ def upstream_compile_args(*, image: str, source_dir: str | None, out_dir: str,
         return args + ["-v", f"{Path(out_dir).absolute()}:/out", image, "compile"]
     args += ["-v", f"{Path(source_dir).absolute()}:{_STAGING}/{project}:ro",
              "-v", f"{Path(out_dir).absolute()}:/out"]
+    statslog = None if ccache_dir is None else UPSTREAM_CCACHE_STATSLOG
+    args += ccache_docker_args(
+        cache_dir=None if ccache_dir is None else str(Path(ccache_dir).absolute()),
+        statslog=statslog)
     git_rels: list[str] = []
     if vcs_dir is not None:
         args += _vcs_mount_args(vcs_dir, project)
         git_rels = [rel for _, rel in _vcs_git_dirs(vcs_dir, project)]
-    args += [image, "bash", "-c", _staged_compile_command(project, git_rels)]
+    args += [image, "bash", "-c", _staged_compile_command(
+        project, git_rels, ccache_statslog=statslog)]
     return args
 
 
@@ -437,7 +467,8 @@ def build_prework_rebuild_command(
     copy-in of the tree and FuzzBench's own fuzzer.build() via /fold/fb_build.sh,
     and no -O override (FuzzBench fixes -O1 for bug, -O3 for coverage).
     ``ccache_dir`` applies to those images only (main + cmplog build cache, see
-    prework/fb_ccache.py); ARVO commands never take one.
+    prework/fb_ccache.py) and to upstream images (see upstream_compile_args);
+    ARVO commands never take one.
 
     Upstream images (bench-upstream/...) compile with upstream_compile_args: the
     source is mounted read-only and copied over $SRC/<project> inside the
@@ -448,8 +479,9 @@ def build_prework_rebuild_command(
         return fuzzbench_build_command(
             image=image, source_dir=source_dir, out_dir=out_dir, cpu=cpu,
             ccache_dir=ccache_dir)
-    if ccache_dir:
-        raise ValueError("ccache_dir is only supported for FuzzBench-parity images")
+    if ccache_dir and not is_upstream_image(image):
+        raise ValueError(
+            "ccache_dir is only supported for FuzzBench-parity and upstream images")
     cmd = ["docker", "run", "--rm", "--privileged"]
     if cpu is not None:
         cmd += ["--cpuset-cpus", str(cpu)]
@@ -457,7 +489,8 @@ def build_prework_rebuild_command(
         cmd += upstream_compile_args(image=image, source_dir=source_dir,
                                      out_dir=out_dir, project=project,
                                      sanitizer=sanitizer, language=language,
-                                     vcs_dir=vcs_dir_for(source_dir))
+                                     vcs_dir=vcs_dir_for(source_dir),
+                                     ccache_dir=ccache_dir)
         return cmd
     # Env (incl. the -O override), denylist and mounts are arvo_compile_args, the
     # SAME list the broker builds the agent's candidates with.
@@ -473,8 +506,9 @@ def rebuild_with_prework_image(
 ) -> bool | tuple[bool, str]:
     """Rebuild the target from a modified tree. Mirrors the old n132 signature.
 
-    ``ccache_dir``: FuzzBench targets only -- a per-trial cache for the main and cmplog
-    builds (prework/fb_ccache.py). Never pass one for a baseline/reference build.
+    ``ccache_dir``: FuzzBench targets (a per-trial cache for the main and cmplog
+    builds, prework/fb_ccache.py) and upstream targets (see upstream_compile_args).
+    Never pass one for a baseline/reference build. ARVO rejects it.
     """
     image = prework_image_for(entry)
     project = entry["project"]
@@ -483,8 +517,10 @@ def rebuild_with_prework_image(
         return _rebuild_fuzzbench(image=image, project=project, source_dir=source_dir,
                                   out_dir=out_dir, cpu=cpu, capture_log=capture_log,
                                   timeout=timeout, ccache_dir=ccache_dir)
+    if ccache_dir and not is_upstream_image(image):
+        raise ValueError("ccache_dir is only supported for FuzzBench and upstream targets")
     if ccache_dir:
-        raise ValueError("ccache_dir is only supported for FuzzBench targets")
+        Path(ccache_dir).mkdir(parents=True, exist_ok=True)
     # Clear stale build output from the source tree before compiling. The online
     # flow runs the SAME build.sh on the SAME tree repeatedly (extract -> baseline
     # -> noise-floor x2 -> every optimizer round); a script that does an
@@ -502,6 +538,7 @@ def rebuild_with_prework_image(
         image=image, source_dir=source_dir, out_dir=out_dir,
         project=project, cpu=cpu,
         sanitizer=sanitizer_of(entry), language=language_of(entry),
+        ccache_dir=ccache_dir,
     )
     logger.info("Rebuilding %s in %s", project, image)
     try:
