@@ -1,0 +1,8 @@
+# Upstream-build projects whose rebuilds may use ccache: one project per line,
+# optionally followed by its equivalence verdict: `pass` (default) or `pass_noise_masked`.
+# Add a project ONLY after its cached /out/<target> was shown equal to an uncached build
+# (pass_noise_masked: equal only after masking the build's own noise, i.e. strings and
+# non-loaded sections; a difference in loaded code is never noise).
+# Read by prework/upstream_ccache.py (read_verified_modes).
+#
+# No targets verified yet.
