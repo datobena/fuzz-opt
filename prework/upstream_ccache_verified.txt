@@ -5,4 +5,7 @@
 # non-loaded sections; a difference in loaded code is never noise).
 # Read by prework/upstream_ccache.py (read_verified_modes).
 #
-# No targets verified yet.
+# Verified 2026-11-07 by tools/upstream_ccache_equivalence.py (target fuzz): P0==C0==W0
+# and PC==WC, PH==WH all byte-identical, warm builds used ccache. See the design doc's
+# validation and .superpowers/sdd/2026-11-07-upstream-ccache/validation.md.
+libtpms
